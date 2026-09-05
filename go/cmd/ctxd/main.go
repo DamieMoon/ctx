@@ -86,9 +86,19 @@ func bootLoadBackendPool(ctx context.Context, p *backends.Pool, reload, reconcil
 // at the dying seed path (`deprecation=env_backend_seed`): one attribute names
 // WHICH deprecated surface a line is about, so an operator can grep the whole
 // deprecation window out of a JSON boot log with a single key.
+//
+// The _v2 pair belongs to the SECOND retirement vintage (config/retired.go,
+// retiredKeysWithoutSuccessor). Own values rather than a reuse of the first
+// pair, because the attribute exists to name WHICH surface a line is about and
+// the two vintages are two surfaces: different release, no successor to point
+// at, and a different delete migration. An operator asking "how many rows of
+// the vintage my upgrade is about are still there" gets an answer from the
+// label; with one shared value he would get the sum of two windows.
 const (
-	deprecationRetiredEnv = "retired_env"
-	deprecationRetiredRow = "retired_settings_row"
+	deprecationRetiredEnv   = "retired_env"
+	deprecationRetiredRow   = "retired_settings_row"
+	deprecationRetiredEnvV2 = "retired_env_v2"
+	deprecationRetiredRowV2 = "retired_settings_row_v2"
 )
 
 // retiredEnvTripwireSuffixes selects the VALUE-BEARING half of the 29 retired
@@ -203,6 +213,67 @@ func warnRetiredEnvVarsBoot() {
 // that does not exist.
 const retiredMajor = "v5.0.0"
 
+// retiredV2Release is the release the SECOND retirement vintage's keys
+// disappear in. Deliberately not retiredMajor: v5.0.0 is the anchor of the
+// backend-tuple runbook, and a line of this vintage naming it would send an
+// operator to a section about a pool, a tuple and Migration 133 that have
+// nothing to do with his key. Spelled once, for the same reason its sibling is.
+const retiredV2Release = "v5.16.0"
+
+// retiredV2EnvScaffoldDefaults is the value-scoped silence list of the V2 env
+// sweep, in the shape of retiredEnvScaffoldDefaults and for the same reason: a
+// var that arrives set and non-empty from an unmodified compose scaffold is a
+// guaranteed false positive on the whole cohort the sweep exists for, while a
+// DIFFERENT value on the same name is a real operator choice and still warns.
+//
+// Empty today. The one key of this vintage was never declared in the tracked
+// docker-compose.yml, so no installation receives it from a scaffold. It is
+// built WITH the sweep rather than added to it later because the next key of
+// the vintage does arrive that way (CTX_ROOT_MAP_LABEL_BUDGET, declared with
+// the value 0), and a sweep whose exemption channel is added after the fact is
+// a sweep that warns falsely once, on every boot of that cohort.
+var retiredV2EnvScaffoldDefaults = map[string]string{}
+
+// warnRetiredV2EnvVarsBoot is the ENV half of the SECOND retirement vintage's
+// boot sweep — the same gap as its V1 sibling closes, for a list whose keys
+// left the registry without a successor: the loader is registry-driven, so a
+// deployment that still exports the var boots in perfect silence, and the boot
+// log is the one channel that reaches a concrete deployment without anybody
+// reading anything first.
+//
+// Three differences from warnRetiredEnvVarsBoot, each a property of this
+// vintage rather than a preference:
+//
+//   - NO SUFFIX FILTER. V1's _HOST/_API_KEY/_MODEL partition selects the
+//     value-bearing half of a topology tuple whose other twelve names arrive
+//     scaffolded non-empty on a whole cohort. That is a statement about the
+//     backend tuple and says nothing here: every name of this vintage carries
+//     an operator's value, so a suffix rule would only be able to hide one.
+//   - OWN RELEASE (retiredV2Release) and own wording. There is no pool to
+//     inspect and nothing to move the value to — the honest line says the key
+//     is gone and the variable can go with it.
+//   - OWN SCAFFOLD LIST, value-scoped like V1's.
+//
+// The VALUE FILTER stays byte for byte: empty env is unset for FromEnv
+// (load.go), so a compose file that materialises the name as `${VAR:-}` must
+// not produce a line here either. NAME-ONLY, like the whole sweep — the line
+// carries the var name and the way out, never what was in it.
+func warnRetiredV2EnvVarsBoot() {
+	for _, name := range config.RetiredV2EnvNames() {
+		val, set := os.LookupEnv(name)
+		if !set || val == "" {
+			continue
+		}
+		if def, exempt := retiredV2EnvScaffoldDefaults[name]; exempt && val == def {
+			continue
+		}
+		slog.Warn("settings: retired env var "+name+" is set — ignored since "+retiredV2Release+
+			"; the key was retired WITHOUT a successor, so there is nothing to move the value to and"+
+			" the variable can be dropped from .env and from the compose file (docs/operations.md)",
+			"deprecation", deprecationRetiredEnvV2, "env", name)
+	}
+}
+
 // warnRetiredSettingRowsBoot names every context_settings row that still sits
 // on one of the 29 retired keys, in EVERY scope (A06-A1, design/06 §3.4 #2).
 //
@@ -253,6 +324,53 @@ func warnRetiredSettingRowsBoot(ctx context.Context, pool *pgxpool.Pool) {
 			"(docs/operations.md, Migration 133)"
 		slog.Warn(msg,
 			"deprecation", deprecationRetiredRow,
+			"key", ref.Key, "scope", ref.Scope)
+	}
+}
+
+// warnRetiredV2SettingRowsBoot is the ROW half of the second vintage: every
+// context_settings row still sitting on one of its keys, in EVERY scope. It is
+// the only channel through which a FOREIGN installation learns that such a row
+// is there, because nothing else makes it visible — after the registry cut the
+// row is neither served by the registry-driven GET /api/settings nor admitted
+// by the settings build (it becomes an "unknown settings key" Issue on the
+// override, config/build.go), and a tenant-scoped one is not even read at boot.
+// The delete migration of the vintage sweeps what existed at upgrade time; a
+// row this sweep still finds was written around the API afterwards.
+//
+// Two references of the V1 text are FALSE for this vintage and are therefore
+// absent: v5.0.0 and Migration 133. So is the third, quietly — there is no
+// "the pool owns this value now", because nothing owns it.
+//
+// The length guard is not defensive dressing. store.SettingRowsForKeys refuses
+// an EMPTY key list with an error rather than an empty result (settings.go),
+// because `key = ANY('{}')` would report a clean installation for a reason
+// that has nothing to do with the data. As long as the vintage carries a key
+// the call is made; on a vintage with none the sweep is silent by construction
+// instead of logging a sweep failure every boot.
+//
+// Never fatal, like every boot advisory: a failed sweep degrades to one line
+// saying the sweep failed.
+func warnRetiredV2SettingRowsBoot(ctx context.Context, pool *pgxpool.Pool) {
+	keys := config.RetiredV2KeyNames()
+	if len(keys) == 0 {
+		return
+	}
+	refs, err := store.SettingRowsForKeys(ctx, pool, keys)
+	if err != nil {
+		slog.Warn("settings: retired-key row sweep (second vintage) failed — retired settings rows cannot be reported this boot",
+			"deprecation", deprecationRetiredRowV2, "error", err)
+		return
+	}
+	for _, ref := range refs {
+		// name-only, like its sibling: key and scope are what the operator
+		// needs to act, the row's VALUE never appears in a boot log.
+		msg := "settings: a settings row still holds retired key " + ref.Key + " — retired in " + retiredV2Release +
+			" with no successor; the settings API answers 404 for it in every scope, so remove the row in the " +
+			"database: DELETE FROM context_settings WHERE key = '" + ref.Key + "' AND scope = '" + ref.Scope + "' " +
+			"(docs/operations.md)"
+		slog.Warn(msg,
+			"deprecation", deprecationRetiredRowV2,
 			"key", ref.Key, "scope", ref.Scope)
 	}
 }
@@ -441,8 +559,16 @@ func main() {
 	//
 	// Both halves are advisory only: nothing here changes a value, and a boot
 	// with every retired source set behaves exactly as one with none.
+	//
+	// The second vintage's two halves run in the same block and for the same
+	// reason — one `deprecation=` grep, one place in the log. They carry their
+	// own labels because they are a different window with a different remedy
+	// (config/retired.go, retiredKeysWithoutSuccessor), not because they are a
+	// different kind of message.
 	warnRetiredEnvVarsBoot()
 	warnRetiredSettingRowsBoot(ctx, pool)
+	warnRetiredV2EnvVarsBoot()
+	warnRetiredV2SettingRowsBoot(ctx, pool)
 
 	// Evokoa-Clean-Room Achse 03 (design/03 §4.5, wave W03-3): the
 	// schema-contract check. AFTER settings.Bootstrap — the effective

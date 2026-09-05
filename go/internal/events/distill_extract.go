@@ -1237,12 +1237,22 @@ func distillCoverage(claim, chunk string) float64 {
 //     fold would yield rank 1, at which the live `openrouter` row (external,
 //     no-credentials, roles include digest) is eligible. Raw session prose of a
 //     private infrastructure would leave the house.
-//  2. LocalOnly is FIXED true, INDEPENDENT of Required and of
-//     distill.local_only. credentials alone does not exclude `lonius-embed`
-//     (external, full-trust, maxRank 3, live enabled); LocalOnly is a call
-//     parameter that drops external rows after the trust gate
-//     (llm/chain.go:664-672). The precedent is llm/classify.go:177, which sets
-//     it fixed for the same reason. The key may not LOWER this value.
+//  2. LocalOnly is FIXED true, INDEPENDENT of Required and of any settings
+//     key. credentials alone does not exclude `lonius-embed` (external,
+//     full-trust, maxRank 3, live enabled); LocalOnly is a call parameter that
+//     drops external rows after the trust gate (llm/chain.go:664-672). The
+//     precedent is llm/classify.go:177, which sets it fixed for the same
+//     reason. WHY it must not be lowered — the argument distill.local_only's
+//     doc block used to carry, before that key was retired without a successor
+//     for never having been able to lower it (config/retired.go, second
+//     vintage): raw tool output is the most hostile foreign text in the
+//     system, verbatim what a terminal read from the internet plus the
+//     hostnames, paths and usernames of a private infrastructure, so the call
+//     has to hold even against a full-trust external row (bruch path B5). It
+//     covers the CALL only; the block's life after the write (embed backfill,
+//     dream, digest, synthesis) has no per-block locality switch in ctx —
+//     that chain is sensitivity x trust, and distill.block_sensitivity is
+//     that half's lever.
 //  3. BlockIDs carries the parts of this call. It is not optional: at
 //     required_sensitivity = credentials, llmlog.Entry.Slimmed drops
 //     request_system, request_user and response_content before the insert

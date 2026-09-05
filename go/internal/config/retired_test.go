@@ -242,3 +242,107 @@ func TestGamingKeysStayOutOfTheRetiredList(t *testing.T) {
 		}
 	}
 }
+
+// TestRetirementVintagesStaySeparate is the same statement one vintage later,
+// and it is the pin the second list was given its own file section for.
+//
+// The two maps make two different claims. retiredSettingKeys says "the value
+// lives HERE now" and its 29 are wired into a suffix-filtered env sweep, a
+// row sweep that names v5.0.0 and Migration 133, and the 29er pattern of
+// retireddocs_test.go. retiredKeysWithoutSuccessor says "the value stopped
+// existing, and here is why nothing changes" and is wired into its own env
+// sweep without a suffix filter, its own row sweep and its own delete
+// migration. A name in both lists would be swept twice with two different
+// releases in the text and deleted by two migrations — the operator would read
+// two unrelated problems about one row.
+//
+// Three assertions, three ways the separation can rot:
+//
+//  1. No name in both maps, and no derived env name in both lists.
+//  2. RetiredEnvNames() stays at 29. It is the first vintage's pin, quoted
+//     verbatim by retireddocs_test.go, and the only reason a second list
+//     exists instead of a longer first one.
+//  3. Every V2 value is a non-empty Ist statement. The map's VALUE is the
+//     whole difference to the first vintage, it reaches no wire (E13: the key
+//     answers a plain 404), and nothing else would catch rot in it.
+func TestRetirementVintagesStaySeparate(t *testing.T) {
+	for key := range retiredKeysWithoutSuccessor {
+		if _, both := retiredSettingKeys[key]; both {
+			t.Errorf("%s is in BOTH retirement lists — one key, two releases in the boot text and two delete migrations", key)
+		}
+	}
+
+	v1 := map[string]bool{}
+	for _, name := range RetiredEnvNames() {
+		v1[name] = true
+	}
+	for _, name := range RetiredV2EnvNames() {
+		if v1[name] {
+			t.Errorf("%s is swept by both vintages — the env tripwire would log it twice, with two different releases", name)
+		}
+	}
+
+	if got := len(RetiredEnvNames()); got != 29 {
+		t.Errorf("RetiredEnvNames() returned %d names, want 29 — the second vintage must not grow the first "+
+			"(retireddocs_test.go pins the same number, and a key added to the wrong map moves it)", got)
+	}
+
+	if got, want := len(RetiredV2KeyNames()), len(retiredKeysWithoutSuccessor); got != want {
+		t.Errorf("RetiredV2KeyNames() returned %d keys, map has %d", got, want)
+	}
+	if got, want := len(RetiredV2EnvNames()), len(retiredKeysWithoutSuccessor); got != want {
+		t.Errorf("RetiredV2EnvNames() returned %d names, map has %d", got, want)
+	}
+	if !sort.StringsAreSorted(RetiredV2KeyNames()) || !sort.StringsAreSorted(RetiredV2EnvNames()) {
+		t.Errorf("the V2 lists are not sorted — same diffability contract as the V1 pair")
+	}
+	v2Env := map[string]bool{}
+	for _, name := range RetiredV2EnvNames() {
+		v2Env[name] = true
+	}
+	for _, key := range RetiredV2KeyNames() {
+		if derived := retiredEnvName(key); !v2Env[derived] {
+			t.Errorf("%s: derived env name %q is not in RetiredV2EnvNames() (%v) — both lists must come from the same derivation",
+				key, derived, RetiredV2EnvNames())
+		}
+	}
+
+	for key, ist := range retiredKeysWithoutSuccessor {
+		if strings.TrimSpace(ist) == "" {
+			t.Errorf("retired key %s carries no Ist statement — the VALUE is what makes this a separate vintage", key)
+		}
+	}
+}
+
+// TestRetiredV2KeysLeftTheRegistry is the second vintage's cut gate, and the
+// registry half of "GET /api/settings does not serve it any more": the list
+// (handler.HandleList) is built from config.Keys(), which walks registry(), so
+// an unregistered key cannot appear in the response, in the CLI's settings
+// list or in the web UI. A name back in the registry would revive every stale
+// row on it as effective configuration — the same failure mode the first
+// vintage's precondition test names.
+//
+// It also pins the env surface: the key's variable must be gone from
+// EnvVars(), or the cut removed the struct field and left a reader behind.
+func TestRetiredV2KeysLeftTheRegistry(t *testing.T) {
+	for _, key := range RetiredV2KeyNames() {
+		if info, registered := KeyByName(key); registered {
+			t.Errorf("%s is registered again (env %q) — a retired name back in the registry is served by "+
+				"GET /api/settings and revives every stale row on it", key, info.EnvVar)
+		}
+	}
+	live := map[string]bool{}
+	for _, name := range EnvVars() {
+		live[name] = true
+	}
+	for _, name := range RetiredV2EnvNames() {
+		if live[name] {
+			t.Errorf("%s is still in EnvVars() — the env surface must go with the key", name)
+		}
+	}
+	for _, key := range RetiredV2KeyNames() {
+		if _, described := keyDescriptions[key]; described {
+			t.Errorf("%s still carries a registry description — a description without a registered key is a dangling half of the cut", key)
+		}
+	}
+}

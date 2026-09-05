@@ -1014,15 +1014,29 @@ func TestDistillExtractRound2(t *testing.T) {
 	// MINOR #13 — §4.4.2 festlegung 3 asks for it in so many words: the key may
 	// not LOWER the fixed value, "Doc-Kommentar + Test". The doc comment stood,
 	// the test did not.
-	t.Run("minor13: distill.local_only cannot lower the fixed LocalOnly", func(t *testing.T) {
+	//
+	// T05-8a took the key away: it was retired without a successor precisely
+	// because it never lowered anything (config/retired.go, second vintage).
+	// The subject is gone, the ASSERTION is not — what stood behind "the key
+	// may not lower it" was always "the call is local-only whatever the
+	// configuration says", and that is what this pins now. It is the only
+	// place that catches a distillCall which someday reads its locality from
+	// configuration again, with or without a key by that name.
+	t.Run("minor13: LocalOnly is fixed in the call, not configurable", func(t *testing.T) {
 		cfg := a8Config()
-		cfg.Distill.LocalOnly = false // the operator tries to switch it off
 
-		// A chain of nothing but a full-trust EXTERNAL row: it survives the
-		// credentials trust gate, so only LocalOnly can stop it.
+		// A chain of nothing but a full-trust EXTERNAL row, pointed at a stub
+		// that ANSWERS. The reachable host is what makes this a pin rather
+		// than a tautology: against an unresolvable host the call fails
+		// whatever LocalOnly says, so the old fixture's assertion held with
+		// the flag either way. Here the two states are distinguishable — a
+		// dropped row makes no request, a used row makes one.
+		stub := a8NewStub(t, func(a8Request) (string, int) {
+			return `{"insights":[]}`, http.StatusOK
+		})
 		bpool := backends.NewPool(nil, nil)
 		bpool.SeedSnapshotForTest([]backends.Backend{{
-			ID: "ext", Name: "full-trust-external", Host: "https://example.invalid",
+			ID: "ext", Name: "full-trust-external", Host: stub.srv.URL,
 			Protocol: backends.ProtocolOpenAI, Model: "m",
 			Trust: backends.TrustFull, Locality: backends.LocalityExternal,
 			Enabled: true, Priority: 50, Roles: []string{backends.RoleDigest},
@@ -1035,9 +1049,17 @@ func TestDistillExtractRound2(t *testing.T) {
 		s := a8Scheduler(pool, cfg, a8Source([]string{a8Block1}), bpool)
 		_, backend, _, cerr := s.distillCall(ctx, distillCallOpts{numPredict: 8, timeout: time.Second},
 			"s", "u", []string{a8Block1})
+
+		// The decisive half: the external row must never be TOUCHED. It holds
+		// however the failure surfaces, and it is what goes red the moment
+		// LocalOnly stops being fixed true in distillCall.
+		if n := len(stub.seen()); n != 0 {
+			t.Fatalf("the external stub received %d request(s) — LocalOnly is not fixed true in distillCall, "+
+				"so a full-trust external row was handed raw session prose", n)
+		}
 		if cerr == nil || backend != "" {
-			t.Fatalf("with distill.local_only = false the call reached backend %q (err %v) — the key lowered "+
-				"a value that is fixed in code", backend, cerr)
+			t.Fatalf("the call reached backend %q (err %v) — the chain must be empty after the locality drop",
+				backend, cerr)
 		}
 	})
 }

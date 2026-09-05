@@ -96,7 +96,72 @@ func RetiredKeyNames() []string {
 // retired_test.go pins it against the live registry entry for as long as the
 // key has one, and against the ABSENCE of the name from EnvVars() once its
 // wave cut it, so a hand-written second list can never drift in from either
-// side of the cut.
+// side of the cut. Both vintages share it, so the two lists cannot end up
+// spelling the same name two ways.
 func retiredEnvName(key string) string {
 	return "CTX_" + strings.ToUpper(strings.ReplaceAll(key, ".", "_"))
+}
+
+// retiredKeysWithoutSuccessor is the SECOND retirement vintage, and it is its
+// own map for one reason: the VALUE of retiredSettingKeys is a move target
+// ("the pool location that owns the value now"), and these keys have none.
+// Their value does not move, it stops existing — the mechanism had already
+// decided them in code. The value here is therefore the Ist statement, the
+// sentence that answers the operator's "and where did it go?" with "nowhere,
+// and here is why nothing changes".
+//
+// Folding them into the first map would cost two things at once. The single
+// claim that map makes would become untrue, and the 29 in retireddocs_test.go
+// — the first vintage's pin — would move, which is exactly the vintage
+// confusion the separation exists against. Three vintages now, three
+// behaviours: the gaming keys (never env-sourced, no sweep at all), the
+// backend tuple (29 names, suffix-filtered env sweep, Migration 133) and this
+// one (env sweep without a suffix filter, own release, own delete migration).
+// retired_test.go pins that no name lies in two of them.
+//
+// Same 404 on the wire as every other retirement (E13): a retired key answers
+// through the ordinary unknownKey path, with nothing that separates it from a
+// typo. The list is DATA for the boot advisories and for the migration that
+// deletes the rows, never an API surface.
+var retiredKeysWithoutSuccessor = map[string]string{
+	"distill.local_only": "no successor — the distill call sets LocalOnly FIXED true in code " +
+		"(internal/events/distill_extract.go, distillCall), independently of this key; it never lowered it",
+}
+
+// RetiredV2EnvNames returns the env var names of the second vintage, sorted —
+// the name source of the V2 boot env sweep, with the same
+// sorted-for-diffability contract as RetiredEnvNames().
+//
+// The V2 sweep applies NO suffix filter to this list. The first vintage's
+// three suffixes (_HOST/_API_KEY/_MODEL) select the value-bearing half of a
+// topology tuple whose other half arrives scaffolded non-empty on a whole
+// cohort; that partition is a statement about the backend tuple and says
+// nothing about these keys, every one of which carries an operator's value.
+func RetiredV2EnvNames() []string {
+	out := make([]string, 0, len(retiredKeysWithoutSuccessor))
+	for key := range retiredKeysWithoutSuccessor {
+		out = append(out, retiredEnvName(key))
+	}
+	sort.Strings(out)
+	return out
+}
+
+// RetiredV2KeyNames returns the canonical settings keys of the second vintage,
+// sorted — the name source of the second boot row-shadow sweep, and the SET
+// the delete migration of this vintage binds its ARRAY[…] against (design/05
+// §3: a key missing from that array leaves its rows behind on every foreign
+// installation, invisible after the registry cut and live configuration again
+// the day someone re-registers the name).
+//
+// Separate from RetiredV2EnvNames() for the reason RetiredKeyNames() is
+// separate from RetiredEnvNames(): context_settings rows are keyed by the
+// canonical key, and deriving one from the other outside this file would plant
+// the second transcript the whole file exists to prevent.
+func RetiredV2KeyNames() []string {
+	out := make([]string, 0, len(retiredKeysWithoutSuccessor))
+	for key := range retiredKeysWithoutSuccessor {
+		out = append(out, key)
+	}
+	sort.Strings(out)
+	return out
 }

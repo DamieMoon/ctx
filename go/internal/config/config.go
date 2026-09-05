@@ -2019,19 +2019,12 @@ type DistillConfig struct {
 
 	// ── The call (§4.4) ────────────────────────────────────────────────────
 	//
-	// LocalOnly keeps the distill call on local/LAN backends regardless of
-	// trust. Default TRUE, and it is the mitigation of bruch path B5: raw tool
-	// output is the most hostile foreign text in the system — it contains
-	// verbatim what a terminal read from the internet, plus the hostnames,
-	// paths and usernames of a private infrastructure. llm.ChainCall.LocalOnly
-	// discards external backends AFTER the trust gate, so this holds even
-	// against a full-trust external row.
+	// The call's LOCALITY is deliberately not a key of this group: distillCall
+	// sets LocalOnly fixed true in code, and the whole argument for it lives
+	// at that fixed value (events/distill_extract.go). The key this group used
+	// to carry for it was retired without a successor (retired.go, second
+	// vintage) — it could not lower the fixed value, so it was never a knob.
 	//
-	// It covers the CALL only. The block's life after the write (embed
-	// backfill, dream, digest, synthesis) has no per-block locality switch in
-	// ctx — that chain is sensitivity x trust, and trust is a property of the
-	// backend row (§5.5). BlockSensitivity below is that half's lever.
-	LocalOnly bool `key:"distill.local_only" env:"CTX_DISTILL_LOCAL_ONLY" default:"true" mut:"hot" tenancy:"global-only"`
 	// CallTimeout is the default per-call wire timeout in seconds; a timeouts
 	// entry on the serving backend row takes precedence, same relation
 	// dream.temporal_timeout has.
