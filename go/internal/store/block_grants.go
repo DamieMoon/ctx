@@ -13,12 +13,58 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// maxGrantedBlockIDs bounds the row-level grant set ONE request may carry. It
+// is the validity limit of Strategy A itself, not a comfort value:
+//
+//   - design/07 §4.1 / §6.3 / UB-5 hold Strategy A defensible only "bis zu
+//     einer kleinen Grant-Kardinalitaet (Richtwert <~1000)" and name a 100k
+//     uuid[] in the RRF CTEs as the real break point. Above the threshold that
+//     design demands Strategy B (correlated semi-join) or abruf-only — and
+//     BOTH are unreachable here: the LIVE ctx_rrf takes p_granted_block_ids
+//     UUID[] (migrations/147_fts_tiebreak.sql:86 the function, :101 the param,
+//     consumed at :171/:189/:236/:282/:329/:350/:363), and its arm sister
+//     ctx_rrf_arms repeats the whole surface (:405/:422, seven more sites) —
+//     Go binds both as $15::uuid[] (rrf/search.go:272,277, rrf/arms.go:67). A
+//     second form would need a migration (this run has exactly one, T05-10) or
+//     two parallel mechanisms. The bound is therefore where the ONE mechanism
+//     stops being sound, rounded to its binary neighbour.
+//   - It also bounds retrieval strategy: the selector adds len(granted) to the
+//     probed scope cardinality before comparing against
+//     retrieval.selector.exact_max (internal/rrf/selector.go, `n += len(granted)`;
+//     the in-body cap guard repeats the arithmetic, 147:143). exact_max
+//     defaults to 4096, so a grant set at this bound spends at most a QUARTER
+//     of the exact budget; four times larger and the grant arm alone would pick
+//     the retrieval mode for every query that tenant makes.
+//   - The resolved list is bound into every read path — the ten
+//     visibility.Predicate call sites plus the fourteen SQL references in
+//     ctx_rrf and ctx_rrf_arms — and
+//     `id = ANY(uuid[])` has no selective index path in the post-filter
+//     position (design/07 §6.1), i.e. it costs per candidate row, at 1M+ blocks.
+//
+// Deliberately NOT a registry key (Achse 05): a safety bound that no deployment
+// should need to raise is mechanism, not policy — a key would invite raising it
+// instead of fixing a grant topology that wants scope-level sharing.
+const maxGrantedBlockIDs = 1024
+
+// ErrTooManyBlockGrants is the over-bound path: the grantee holds more than
+// maxGrantedBlockIDs row-level grants. It is LOUD by construction — the read is
+// refused, never served from a truncated grant set. A silent cut would be an
+// invisible and permanent loss of visibility: the caller cannot tell a block
+// that does not exist from one whose grant fell off the end of a list, so the
+// only honest answers are "all of them" or "no". design/07 §4.1/§6.3, K12.
+var ErrTooManyBlockGrants = errors.New("store: too many block grants for one request")
+
 // GrantedBlockIDs resolves the set of block IDs row-level-granted TO a tenant
 // (Strategy A, design/07 §4.1): one lookup per request, the result flows as a
 // bound uuid[] into the visibility OR-arm. An empty/whitespace tenantID or no
 // grants returns a NON-NIL empty slice, so the caller binds '{}'::uuid[] and the
 // OR-arm `id = ANY('{}')` is a deterministic FALSE — a byte-identical no-op to
 // the scope-only state. Index-backed by idx_block_grants_grantee (067).
+//
+// More than maxGrantedBlockIDs grants yields ErrTooManyBlockGrants and NO list.
+// The query fetches bound+1 rows: that one extra row is the whole detector, and
+// because an over-bound result is refused rather than served, the LIMIT never
+// truncates a delivered set — which is also why it needs no ORDER BY.
 //
 // TENANT-DECISION(block-grant-resolution): Strategy A (resolved []string bound
 // param) for the Go ID/abruf paths in T40a — Alternative B (correlated subquery
@@ -37,8 +83,8 @@ func GrantedBlockIDs(ctx context.Context, pool *pgxpool.Pool, tenantID string) (
 		return []string{}, nil
 	}
 	rows, err := pool.Query(ctx,
-		`SELECT block_id::text FROM context_block_grants WHERE grantee_tenant = $1::uuid`,
-		tenantID)
+		`SELECT block_id::text FROM context_block_grants WHERE grantee_tenant = $1::uuid LIMIT $2`,
+		tenantID, maxGrantedBlockIDs+1)
 	if err != nil {
 		return nil, fmt.Errorf("store: granted block ids: %w", err)
 	}
@@ -51,7 +97,14 @@ func GrantedBlockIDs(ctx context.Context, pool *pgxpool.Pool, tenantID string) (
 		}
 		ids = append(ids, id)
 	}
-	return ids, rows.Err()
+	if err := rows.Err(); err != nil {
+		return ids, err
+	}
+	if len(ids) > maxGrantedBlockIDs {
+		return nil, fmt.Errorf("store: grantee tenant holds more than %d row-level block grants: %w",
+			maxGrantedBlockIDs, ErrTooManyBlockGrants)
+	}
+	return ids, nil
 }
 
 // BlockGrant is a row in context_block_grants (067): one row-level READ grant —

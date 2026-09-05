@@ -161,8 +161,12 @@ func TestMCPTypeFilterSearchCutsToRequestedVisibleTypes_Integration(t *testing.T
 			t.Fatalf("search: err=%v result=%s", err, mcpTextOf(res))
 		}
 		ctx := vw6Ctx()
+		refGrants, err := resolveGrants(ctx, pool, AuthResultFromContext(ctx))
+		if err != nil { // T04-20: the reference call must resolve like the tool does
+			t.Fatalf("reference grants: %v", err)
+		}
 		want, err := store.SearchBlocks(ctx, pool, cfg.mcpTypeSnapshot(ctx), "", []string{"private"}, vw6Category, nil, 10, true,
-			nil, resolveGrants(ctx, pool, AuthResultFromContext(ctx)), nil, nil, nil)
+			nil, refGrants, nil, nil, nil)
 		if err != nil {
 			t.Fatalf("reference search: %v", err)
 		}

@@ -925,8 +925,13 @@ func (h *QueryHandler) HandleQuery(w http.ResponseWriter, r *http.Request) {
 	// it into both the RRF retrieval OR-arm and the downstream GraphExpand. Same
 	// fail-closed helper as the MCP paths (resolveGrants): a resolver error logs
 	// and yields an empty set → scope-only retrieval, never a crash and never a
-	// widen to full access.
-	grantedBlockIDs := resolveGrants(ctx, h.pool, ar)
+	// widen to full access. The ONE error it does surface is the over-bound
+	// grant set (T04-20): that one is refused rather than silently cut.
+	grantedBlockIDs, err := resolveGrants(ctx, h.pool, ar)
+	if errors.Is(err, store.ErrTooManyBlockGrants) { // T04-20: refuse, never read scope-only
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": tooManyGrantsMsg})
+		return
+	}
 
 	// Aggregate-to-parent over-fetch (Achse-02 I-E, design/02 §4.4): the fold
 	// COLLAPSES rows (N comments of one issue ⇒ one issue row), so a fixed fetch

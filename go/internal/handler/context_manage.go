@@ -852,7 +852,14 @@ func (h *ManageHandler) handleGet(w http.ResponseWriter, r *http.Request, ar *au
 	// Resolve the block-grant set for the caller's tenant (T40a, design/07 §4):
 	// a granted block becomes visible via the additive OR-arm. Fail-closed for
 	// grant visibility (resolveGrants logs + returns '{}') — never crash the read.
-	grants := resolveGrants(ctx, h.pool, ar)
+	// Exception (T04-20): an over-bound grant set is refused, not cut down.
+	grants, err := resolveGrants(ctx, h.pool, ar)
+	if errors.Is(err, store.ErrTooManyBlockGrants) { // T04-20: refuse, never read scope-only
+		writeJSON(w, http.StatusInternalServerError, map[string]any{
+			"success": false, "error": tooManyGrantsMsg,
+		})
+		return
+	}
 	resolvedID, matches, err := store.ResolveBlockID(ctx, h.pool, req.ID, ar.ReadScopes, grants)
 	if err != nil {
 		if errors.Is(err, store.ErrAmbiguousID) {

@@ -184,7 +184,13 @@ func (h *ManageHandler) handleIssueGet(w http.ResponseWriter, r *http.Request, a
 		writeIssueNotFound(w)
 		return
 	}
-	grants := resolveGrants(ctx, h.pool, ar)
+	grants, err := resolveGrants(ctx, h.pool, ar)
+	if errors.Is(err, store.ErrTooManyBlockGrants) { // T04-20: refuse, never read scope-only
+		writeJSON(w, http.StatusInternalServerError, map[string]any{
+			"success": false, "error": tooManyGrantsMsg,
+		})
+		return
+	}
 	issue, err := store.GetIssue(ctx, h.pool, req.ID, ar.ReadScopes, grants)
 	if err != nil {
 		h.writeIssueError(w, "issue-get", err, reqID)

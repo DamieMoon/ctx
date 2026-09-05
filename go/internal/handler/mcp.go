@@ -646,7 +646,10 @@ func mcpSearchHandler(cfg MCPConfig) mcp.ToolHandlerFor[searchInput, any] {
 			clusterFacet = &input.Cluster
 		}
 
-		grants := resolveGrants(ctx, cfg.Pool, ar)
+		grants, err := resolveGrants(ctx, cfg.Pool, ar)
+		if errors.Is(err, store.ErrTooManyBlockGrants) { // T04-20: refuse, never read scope-only
+			return errResult(tooManyGrantsMsg), nil, nil
+		}
 		// cut/TypesExclude ride the store layer's EXISTING type parameters (WF
 		// T10) — the same bind parameters /api/search fills. nil/nil when the
 		// caller named neither field, i.e. the pre-V-W6 call.
@@ -674,7 +677,10 @@ func mcpGetHandler(cfg MCPConfig) mcp.ToolHandlerFor[getInput, any] {
 		}
 		scopes := ar.ReadScopes
 
-		grants := resolveGrants(ctx, cfg.Pool, ar)
+		grants, err := resolveGrants(ctx, cfg.Pool, ar)
+		if errors.Is(err, store.ErrTooManyBlockGrants) { // T04-20: refuse, never read scope-only
+			return errResult(tooManyGrantsMsg), nil, nil
+		}
 		resolvedID, matches, err := store.ResolveBlockID(ctx, cfg.Pool, input.ID, scopes, grants)
 		if err != nil {
 			if errors.Is(err, store.ErrAmbiguousID) {
@@ -715,10 +721,14 @@ func mcpRecentHandler(cfg MCPConfig) mcp.ToolHandlerFor[recentInput, any] {
 		// The type registry snapshot rides along for the V-11 untrusted framing
 		// only — the type name is never rendered (registry vocabulary is not the
 		// model's decision), just resolved to the trust class per row.
+		grants, err := resolveGrants(ctx, cfg.Pool, ar)
+		if errors.Is(err, store.ErrTooManyBlockGrants) { // T04-20: refuse, never read scope-only
+			return errResult(tooManyGrantsMsg), nil, nil
+		}
 		previews, err := store.RecentBlocks(ctx, cfg.Pool, cfg.mcpTypeSnapshot(ctx), ar.ReadScopes,
 			input.Category, input.Limit, input.Types,
 			unionExcludes(input.TypesExclude, input.BlockRolesExclude), // WF T10 alias union — see recentInput
-			resolveGrants(ctx, cfg.Pool, ar))
+			grants)
 		if err != nil {
 			if errors.Is(err, store.ErrNoScopes) { // T07 fail-closed (design/01 §5.4)
 				return errResult("unauthorized: no resolved scopes"), nil, nil
@@ -749,10 +759,32 @@ func mcpRecentHandler(cfg MCPConfig) mcp.ToolHandlerFor[recentInput, any] {
 
 // Helpers.
 
+// tooManyGrantsMsg is the ONE rejection prose for an over-bound grant set
+// (store.ErrTooManyBlockGrants, T04-20/K12). Every read surface renders this
+// exact text — the three MCP tools through errResult, the three HTTP read paths
+// through their own envelopes — so a caller who hits the bound reads the same
+// sentence no matter which door they used, and the fix it names is the real one
+// (share the scope, do not collect grants). REST-search inherits it in T03-9.
+const tooManyGrantsMsg = "too many block grants for this tenant: the row-level grant set exceeds the per-request bound — revoke grants or share at scope level"
+
 // resolveGrants resolves the block-grant set for the caller's tenant (T40a,
-// design/07 §4) and is FAIL-CLOSED for grant visibility: on any resolver error
-// it logs and returns an empty set so the read proceeds scope-only — a grant
-// lookup failure must never crash a read or silently widen visibility.
+// design/07 §4). It distinguishes two failures, and the distinction is the
+// point:
+//
+//   - A resolver FAILURE (transient: pool, timeout, DB hiccup) stays
+//     fail-closed-and-quiet: log, return an empty set, let the read proceed
+//     scope-only. A grant lookup blip must never crash a read or widen
+//     visibility.
+//   - An OVER-BOUND grant set (store.ErrTooManyBlockGrants) is returned as an
+//     error and the caller REFUSES the read. It is structural, not transient —
+//     degrading to scope-only would hide every granted block silently and for
+//     as long as the condition lasts, which is exactly the invisible cut the
+//     bound exists to prevent (T04-20).
+//
+// store.ErrTooManyBlockGrants is therefore the ONLY non-nil error this returns,
+// which is why the six read sites match on that sentinel rather than on
+// err != nil: the mapping names the condition it refuses, and a second error
+// class would have to be given its own answer here before it could reach them.
 //
 // TENANT-DECISION(authresult-tenantid-shape): the design/07 briefing assumed
 // auth.AuthResult.TenantID *string (nullable). The canonical type is a plain
@@ -760,14 +792,18 @@ func mcpRecentHandler(cfg MCPConfig) mcp.ToolHandlerFor[recentInput, any] {
 // already short-circuits an empty/whitespace tenantID to []string{}, so passing
 // ar.TenantID directly preserves the intended semantics (empty tenant ⇒ '{}'
 // ⇒ no-op OR-arm) without a nil deref. design/07 §4.1.
-func resolveGrants(ctx context.Context, pool *pgxpool.Pool, ar *auth.AuthResult) []string {
+func resolveGrants(ctx context.Context, pool *pgxpool.Pool, ar *auth.AuthResult) ([]string, error) {
 	grants, err := store.GrantedBlockIDs(ctx, pool, ar.TenantID)
 	if err != nil {
+		if errors.Is(err, store.ErrTooManyBlockGrants) {
+			slog.Error("block grant set exceeds the per-request bound — read refused", "error", err)
+			return nil, err
+		}
 		// fail-closed for grant visibility: proceed scope-only, never crash the read
 		slog.Warn("mcp: resolve granted block ids failed — scope-only visibility", "error", err)
-		return []string{}
+		return []string{}, nil
 	}
-	return grants
+	return grants, nil
 }
 
 func textContent(text string) mcp.Content {
