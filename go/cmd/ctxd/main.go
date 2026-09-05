@@ -226,13 +226,22 @@ const retiredV2Release = "v5.16.0"
 // guaranteed false positive on the whole cohort the sweep exists for, while a
 // DIFFERENT value on the same name is a real operator choice and still warns.
 //
-// Empty today. The one key of this vintage was never declared in the tracked
-// docker-compose.yml, so no installation receives it from a scaffold. It is
-// built WITH the sweep rather than added to it later because the next key of
-// the vintage does arrive that way (CTX_ROOT_MAP_LABEL_BUDGET, declared with
-// the value 0), and a sweep whose exemption channel is added after the fact is
-// a sweep that warns falsely once, on every boot of that cohort.
-var retiredV2EnvScaffoldDefaults = map[string]string{}
+// CTX_ROOT_MAP_LABEL_BUDGET is the entry the channel was built for. Every
+// v5 compose file from v5.0.0 up to and including v5.14.0 declares it as
+// `${CTX_ROOT_MAP_LABEL_BUDGET:-0}`, so the whole deployed cohort exports the
+// name with the value "0" without anybody having chosen it — the exact false
+// positive this map exists against. The tracked file stopped shipping a
+// default with the `${NAME:-}` rewrite, but a file already on disk is the one
+// that boots, and it keeps delivering the 0 until its operator pulls the new
+// one. A DIFFERENT value on the same name is an operator's choice and still
+// warns, which is why the exemption is on the value and not on the name.
+//
+// The other key of this vintage (distill.local_only) has no entry: it was
+// never declared in the tracked docker-compose.yml, so no installation
+// receives it from a scaffold at all.
+var retiredV2EnvScaffoldDefaults = map[string]string{
+	"CTX_ROOT_MAP_LABEL_BUDGET": "0",
+}
 
 // warnRetiredV2EnvVarsBoot is the ENV half of the SECOND retirement vintage's
 // boot sweep — the same gap as its V1 sibling closes, for a list whose keys

@@ -94,7 +94,12 @@ func classifiedEnvNames() map[string]bool {
 	for _, name := range EnvOnlyServerNames() {
 		out[name] = true
 	}
-	for _, name := range RetiredEnvNames() {
+	// Both vintages (retiredEnvNamesAllVintages, retireddocs_test.go): a
+	// retired name is classified by its tombstone, whichever list carries it.
+	// The second vintage reaches this scan the moment one of its names appears
+	// as a LITERAL in the server runtime — which is what the V2 sweep's
+	// scaffold exemption is (main.go, retiredV2EnvScaffoldDefaults).
+	for _, name := range retiredEnvNamesAllVintages() {
 		out[name] = true
 	}
 	return out
@@ -150,7 +155,7 @@ func TestEnvOnlyServerNamesIsTheRemainder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("scan server runtime: %v", err)
 	}
-	registry, retired := nameSet(EnvVars()), nameSet(RetiredEnvNames())
+	registry, retired := nameSet(EnvVars()), nameSet(retiredEnvNamesAllVintages())
 	literals, inRegistry, inRetired := map[string]bool{}, map[string]bool{}, map[string]bool{}
 	remainder := map[string]bool{}
 	for _, ref := range refs {

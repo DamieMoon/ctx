@@ -77,7 +77,6 @@ var keyDescriptions = map[string]string{ //nolint:gosec // G101-Fehlalarm: Schl√
 	"root_map.small_cluster_max":                     "Cluster size at or below which clusters are only counted in one collector line instead of rendered as individual topics",
 	"root_map.footer_reserve_bytes":                  "Bytes the measuring loop keeps free for the map's two accounting footer lines; rendering errors rather than truncating them",
 	"root_map.count_timeout":                         "Seconds allowed for the coverage counts, the map's only corpus-sized step; on expiry the map omits the denominator instead of estimating",
-	"root_map.label_budget":                          "Cap on LLM label requests per map cycle; 0 ties it to the rendered row budget so labels are produced only for rows the map shows",
 	"root_map.super_enabled":                         "Enables the meta-cluster level: a second Louvain pass over the cluster supergraph rendered as a coarse section of the root map",
 	"root_map.super_min_resolution":                  "Lower bound of the Louvain resolution (gamma) search for meta-clusters; smaller values permit fewer, larger super-communities",
 	"root_map.super_max_nodes":                       "Per-scope cap on cluster supergraph nodes for the meta level; scopes above it skip the second Louvain and fall back to the flat list",

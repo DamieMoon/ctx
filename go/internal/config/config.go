@@ -648,16 +648,9 @@ type RootMapConfig struct {
 	// neither scope nor is_archived, and a global figure inside a scope-owned
 	// block is the BP-1 difference channel.
 	CountTimeout time.Duration `key:"root_map.count_timeout" env:"CTX_ROOT_MAP_COUNT_TIMEOUT" default:"5" mut:"hot" tenancy:"global-only"`
-	// LabelBudget caps the LLM label requests per cycle (§1.4 B4). 0 = the
-	// rendered row budget (NodeLimit), which is the only value that cannot
-	// decouple label production from what the map actually shows. Declared
-	// here, consumed once axis 01 puts labels on the read path (W7) — without
-	// the cap that seam would import 8.400–84.000 inference calls per cycle at
-	// the target scale.
-	LabelBudget int `key:"root_map.label_budget" env:"CTX_ROOT_MAP_LABEL_BUDGET" default:"0" mut:"hot" tenancy:"global-only"`
 	// The three super_* knobs are consumed: events/scheduler.go:1264, :1423-1427
 	// and handler/digest.go:125 carry them into rootmap/run.go:283 and
-	// overview/cluster.go:606-609. label_budget above has 0 non-test readers.
+	// overview/cluster.go:606-609.
 	SuperEnabled       bool    `key:"root_map.super_enabled" env:"CTX_ROOT_MAP_SUPER_ENABLED" default:"false" mut:"hot" tenancy:"global-only"`
 	SuperMinResolution float64 `key:"root_map.super_min_resolution" env:"CTX_ROOT_MAP_SUPER_MIN_RESOLUTION" default:"0.2" mut:"hot" tenancy:"global-only"`
 	SuperMaxNodes      int     `key:"root_map.super_max_nodes" env:"CTX_ROOT_MAP_SUPER_MAX_NODES" default:"20000" mut:"hot" parse:"strict" tenancy:"global-only"`

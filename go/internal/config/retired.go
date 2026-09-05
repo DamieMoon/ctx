@@ -126,6 +126,9 @@ func retiredEnvName(key string) string {
 var retiredKeysWithoutSuccessor = map[string]string{
 	"distill.local_only": "no successor — the distill call sets LocalOnly FIXED true in code " +
 		"(internal/events/distill_extract.go, distillCall), independently of this key; it never lowered it",
+	"root_map.label_budget": "no successor — the cap never had a subject: internal/rootmap imports " +
+		"no llm package and the field had no non-test reader, so label production never reached the " +
+		"read path the budget was declared for",
 }
 
 // RetiredV2EnvNames returns the env var names of the second vintage, sorted —

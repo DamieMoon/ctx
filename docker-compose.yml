@@ -199,7 +199,7 @@ services:
       CTX_GRAPH_OVERVIEW_LABEL_CREDENTIALS_FALLBACK_ONLY: ${CTX_GRAPH_OVERVIEW_LABEL_CREDENTIALS_FALLBACK_ONLY:-}
       CTX_GRAPH_OVERVIEW_LABEL_TIMEOUT: ${CTX_GRAPH_OVERVIEW_LABEL_TIMEOUT:-}
 
-      # ── root_map.* (9) ──
+      # ── root_map.* (8) ──
       # Root map (Achse 02, wave W-D): the cluster-per-line map that replaces
       # the block-per-line topic map. Written at the overview-rebuild cycle
       # under the title root-map-<scope>, category index, sensitivity internal,
@@ -207,8 +207,9 @@ services:
       # is the deckel, never the target. ENABLED ships OFF: the wave is a no-op
       # deploy until it is flipped. COUNT_TIMEOUT caps the only O(corpus) step
       # (the coverage denominator); on expiry the map drops the denominator
-      # instead of estimating it. LABEL_BUDGET (0 = the rendered row budget)
-      # caps the LLM label requests once axis 01 puts labels on the read path.
+      # instead of estimating it. The map produces no LLM labels and has no key
+      # for capping them: the one declared here was retired without a successor,
+      # for never having had a reader (v5.16.0, docs/operations.md).
       # The three SUPER_* knobs steer the meta-cluster level (W-F) and are
       # declared here without a consumer, so no later wave has to touch this
       # block again (K6). Durations are bare seconds.
@@ -217,7 +218,6 @@ services:
       CTX_ROOT_MAP_SMALL_CLUSTER_MAX: ${CTX_ROOT_MAP_SMALL_CLUSTER_MAX:-}
       CTX_ROOT_MAP_FOOTER_RESERVE_BYTES: ${CTX_ROOT_MAP_FOOTER_RESERVE_BYTES:-}
       CTX_ROOT_MAP_COUNT_TIMEOUT: ${CTX_ROOT_MAP_COUNT_TIMEOUT:-}
-      CTX_ROOT_MAP_LABEL_BUDGET: ${CTX_ROOT_MAP_LABEL_BUDGET:-}
       CTX_ROOT_MAP_SUPER_ENABLED: ${CTX_ROOT_MAP_SUPER_ENABLED:-}
       CTX_ROOT_MAP_SUPER_MIN_RESOLUTION: ${CTX_ROOT_MAP_SUPER_MIN_RESOLUTION:-}
       CTX_ROOT_MAP_SUPER_MAX_NODES: ${CTX_ROOT_MAP_SUPER_MAX_NODES:-}

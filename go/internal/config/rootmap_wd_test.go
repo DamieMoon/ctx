@@ -5,7 +5,7 @@
 // per wave, and the documented legacy failure of this very repo is a knob the
 // container cannot receive (three of five graph_overview.* env vars).
 //
-//	(i)   TestRootMapRegistryContract     — all 9 keys, key/env/default/mut/tenancy
+//	(i)   TestRootMapRegistryContract     — all 8 keys, key/env/default/mut/tenancy
 //	(ii)  TestRootMapComposeDeclaresEvery — every key reaches the container
 //	(iii) TestRootMapDefaults             — the shipped generation is OFF and sane
 package config
@@ -28,7 +28,6 @@ var rootMapKeys = []struct {
 	{"root_map.small_cluster_max", "CTX_ROOT_MAP_SMALL_CLUSTER_MAX", "2", "hot", TenancyGlobalOnly, false},
 	{"root_map.footer_reserve_bytes", "CTX_ROOT_MAP_FOOTER_RESERVE_BYTES", "512", "hot", TenancyGlobalOnly, false},
 	{"root_map.count_timeout", "CTX_ROOT_MAP_COUNT_TIMEOUT", "5", "hot", TenancyGlobalOnly, false},
-	{"root_map.label_budget", "CTX_ROOT_MAP_LABEL_BUDGET", "0", "hot", TenancyGlobalOnly, false},
 	{"root_map.super_enabled", "CTX_ROOT_MAP_SUPER_ENABLED", "false", "hot", TenancyGlobalOnly, false},
 	{"root_map.super_min_resolution", "CTX_ROOT_MAP_SUPER_MIN_RESOLUTION", "0.2", "hot", TenancyGlobalOnly, false},
 	{"root_map.super_max_nodes", "CTX_ROOT_MAP_SUPER_MAX_NODES", "20000", "hot", TenancyGlobalOnly, true},
@@ -36,7 +35,7 @@ var rootMapKeys = []struct {
 
 // TestRootMapRegistryContract is gate (i). The second half — nothing outside
 // the table carries the prefix — is what pins "W-D owns the namespace": a later
-// wave sneaking a tenth key in fails here, not in review.
+// wave sneaking a ninth key in fails here, not in review.
 func TestRootMapRegistryContract(t *testing.T) {
 	byKey := map[string]entry{}
 	for _, e := range registry() {
@@ -79,8 +78,8 @@ func TestRootMapRegistryContract(t *testing.T) {
 			t.Errorf("%s: root_map.* key outside the W-D table (K6: one declaring wave)", e.Key)
 		}
 	}
-	if got := len(rootMapKeys); got != 9 {
-		t.Errorf("root_map.* contract has %d keys, expected 9 (change it with intent)", got)
+	if got := len(rootMapKeys); got != 8 {
+		t.Errorf("root_map.* contract has %d keys, expected 8 (change it with intent)", got)
 	}
 }
 
@@ -127,8 +126,5 @@ func TestRootMapDefaults(t *testing.T) {
 	// would turn the coverage cap into an instant, always-timing-out count.
 	if got := c.RootMap.CountTimeout; got.Seconds() != 5 {
 		t.Errorf("root_map.count_timeout = %v, want 5s (bare seconds)", got)
-	}
-	if got := c.RootMap.LabelBudget; got != 0 {
-		t.Errorf("root_map.label_budget = %d, want 0 (= the rendered row budget)", got)
 	}
 }
