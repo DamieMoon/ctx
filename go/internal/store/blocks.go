@@ -1545,9 +1545,12 @@ func runSearchBlocks(ctx context.Context, pool *pgxpool.Pool, set *blocktype.Set
 // types / typesExclude (WF T10): opt-in server-side type filters as bind
 // parameters, nil/empty = no filter (see SearchBlocks).
 //
+// grantedBlockIDs (T40a) is the caller's resolved block-grant set — nil/empty
+// makes the OR-arm a no-op, so a caller without grants reads exactly as before.
+//
 // set is the caller's block-type registry snapshot; it fills
 // BlockPreview.Untrusted per row (V-11). nil ⇒ the field stays absent.
-func RecentBlocks(ctx context.Context, pool *pgxpool.Pool, set *blocktype.Set, readScopes []string, category string, limit int, types []string, typesExclude []string) ([]BlockPreview, error) {
+func RecentBlocks(ctx context.Context, pool *pgxpool.Pool, set *blocktype.Set, readScopes []string, category string, limit int, types []string, typesExclude []string, grantedBlockIDs []string) ([]BlockPreview, error) {
 	if err := RequireScopes(readScopes); err != nil { // T07 fail-closed (design/01 §5.4)
 		return nil, err
 	}
@@ -1557,10 +1560,13 @@ func RecentBlocks(ctx context.Context, pool *pgxpool.Pool, set *blocktype.Set, r
 	if limit > 50 {
 		limit = 50
 	}
+	// $1=scopes, $2=grants (block-grant OR-arm, T40a). The mandatory
+	// parentheses keep NOT is_archived OUTSIDE the scope/grant OR (a granted
+	// archived block must not leak). category, if present, shifts to $3.
 	q := `SELECT id, category, tags, title, scope, type_name, lifecycle_state, type_source, LEFT(content, 200), char_length(content), updated_at
 	      FROM context_blocks
-	      WHERE NOT is_archived AND scope = ANY($1::text[])`
-	args := []any{readScopes}
+	      WHERE NOT is_archived AND ( scope = ANY($1::text[]) OR id = ANY($2::uuid[]) )`
+	args := []any{readScopes, grantedBlockIDs}
 	if category != "" {
 		args = append(args, category)
 		q += fmt.Sprintf(` AND category = $%d`, len(args))

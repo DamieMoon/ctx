@@ -384,7 +384,7 @@ func (ex *Executor) runRecent(ctx context.Context, readScopes []string, raw json
 	if err := json.Unmarshal(raw, &a); err != nil {
 		return errOutcome("invalid arguments: " + err.Error())
 	}
-	previews, err := store.RecentBlocks(ctx, ex.pool, nil, readScopes, a.Category, a.Limit, nil, nil) // set nil: V-11 follow-up, see runSearch
+	previews, err := store.RecentBlocks(ctx, ex.pool, nil, readScopes, a.Category, a.Limit, nil, nil, nil) // set nil: V-11 follow-up, see runSearch; grants nil: chat reads scope-only
 	if err != nil {
 		return errOutcome("recent failed")
 	}

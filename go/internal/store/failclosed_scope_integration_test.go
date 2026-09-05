@@ -65,7 +65,7 @@ func TestReadPathsFailClosedOnEmptyScopes_Integration(t *testing.T) {
 		{"ResolveBlockID", func() error { _, _, e := store.ResolveBlockID(ctx, pool, "0123abcd", empty, nil); return e }},
 		{"GetBlock", func() error { _, e := store.GetBlock(ctx, pool, nil, someUUID, empty, nil); return e }},
 		{"SearchBlocks", func() error { _, e := store.SearchBlocks(ctx, pool, nil, "", empty, "", nil, 10, true, nil, nil, nil, nil, nil); return e }},
-		{"RecentBlocks", func() error { _, e := store.RecentBlocks(ctx, pool, nil, empty, "", 10, nil, nil); return e }},
+		{"RecentBlocks", func() error { _, e := store.RecentBlocks(ctx, pool, nil, empty, "", 10, nil, nil, nil); return e }},
 		{"ListCategories", func() error { _, e := store.ListCategories(ctx, pool, empty); return e }},
 		{"GetStats", func() error { _, e := store.GetStats(ctx, pool, empty); return e }},
 		{"ListMeta", func() error { _, e := store.ListMeta(ctx, pool, empty, nil, nil); return e }},

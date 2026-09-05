@@ -709,74 +709,36 @@ func mcpRecentHandler(cfg MCPConfig) mcp.ToolHandlerFor[recentInput, any] {
 		if ar == nil { // T07/L7 fail-closed (design/01 §5.4): never fall back to the default tenant
 			return errResult("unauthorized: no resolved tenant identity"), nil, nil
 		}
-		scopes := ar.ReadScopes
-
-		limit := input.Limit
-		if limit <= 0 {
-			limit = 10
-		}
-		if limit > 50 {
-			limit = 50
-		}
-
-		if err := store.RequireScopes(scopes); err != nil { // T07 fail-closed: this INLINE query bypasses the store-layer guards
-			return errResult("unauthorized: no resolved scopes"), nil, nil
-		}
-		grants := resolveGrants(ctx, cfg.Pool, ar)
-		// $1=scopes, $2=grants (block-grant OR-arm, T40a). The mandatory
-		// parentheses keep NOT is_archived OUTSIDE the scope/grant OR (a granted
-		// archived block must not leak). category, if present, shifts to $3.
-		// type_name rides along for the V-11 untrusted framing only; it is not
-		// rendered as a name (registry vocabulary is not the model's decision),
-		// just resolved to the trust class through the registry snapshot.
-		typeSet := cfg.mcpTypeSnapshot(ctx)
-		query := `SELECT id, title, category, LEFT(content, 200) AS preview, updated_at, COALESCE(type_name, '')
-			FROM context_blocks
-			WHERE NOT is_archived AND ( scope = ANY($1::text[]) OR id = ANY($2::uuid[]) )`
-		args := []any{scopes, grants}
-
-		if input.Category != "" {
-			args = append(args, input.Category)
-			query += fmt.Sprintf(` AND category = $%d`, len(args))
-		}
-		// WF T10: opt-in server-side type filters (bind parameters; alias
-		// union — see recentInput).
-		if len(input.Types) > 0 {
-			args = append(args, input.Types)
-			query += fmt.Sprintf(` AND type_name = ANY($%d::text[])`, len(args))
-		}
-		if excl := unionExcludes(input.TypesExclude, input.BlockRolesExclude); len(excl) > 0 {
-			args = append(args, excl)
-			query += fmt.Sprintf(` AND NOT (type_name = ANY($%d::text[]))`, len(args))
-		}
-		query += ` ORDER BY updated_at DESC LIMIT ` + fmt.Sprintf("%d", limit)
-
-		rows, err := cfg.Pool.Query(ctx, query, args...)
+		// The T07 scope guard, the limit clamp (<=0 → 10, >50 → 50) and the
+		// block-grant OR-arm (T40a) all live in store.RecentBlocks now; the
+		// guard's error is mapped back to the byte-identical prose below.
+		// The type registry snapshot rides along for the V-11 untrusted framing
+		// only — the type name is never rendered (registry vocabulary is not the
+		// model's decision), just resolved to the trust class per row.
+		previews, err := store.RecentBlocks(ctx, cfg.Pool, cfg.mcpTypeSnapshot(ctx), ar.ReadScopes,
+			input.Category, input.Limit, input.Types,
+			unionExcludes(input.TypesExclude, input.BlockRolesExclude), // WF T10 alias union — see recentInput
+			resolveGrants(ctx, cfg.Pool, ar))
 		if err != nil {
+			if errors.Is(err, store.ErrNoScopes) { // T07 fail-closed (design/01 §5.4)
+				return errResult("unauthorized: no resolved scopes"), nil, nil
+			}
 			return errResult(fmt.Sprintf("recent failed: %v", err)), nil, nil
 		}
-		defer rows.Close()
 
-		var sb strings.Builder
-		i := 0
-		for rows.Next() {
-			var id, title, category, preview, typeName string
-			var updatedAt time.Time
-			if err := rows.Scan(&id, &title, &category, &preview, &updatedAt, &typeName); err != nil {
-				continue
-			}
-			i++
-			trust := ""
-			if typeSet != nil && typeSet.IsUntrusted(typeName) {
-				trust = " " + untrustedMarker
-			}
-			fmt.Fprintf(&sb, "[%d] %s (%s, %s) id:%s%s\n    %s\n", i, title, category, updatedAt.Format("2006-01-02"), id, trust, preview)
-		}
-
-		if i == 0 {
+		if len(previews) == 0 {
 			return &mcp.CallToolResult{
 				Content: []mcp.Content{textContent("No blocks found.")},
 			}, nil, nil
+		}
+
+		var sb strings.Builder
+		for i, bp := range previews {
+			trust := ""
+			if bp.Untrusted { // V-11
+				trust = " " + untrustedMarker
+			}
+			fmt.Fprintf(&sb, "[%d] %s (%s, %s) id:%s%s\n    %s\n", i+1, bp.Title, bp.Category, bp.UpdatedAt.Format("2006-01-02"), bp.ID, trust, bp.ContentPreview)
 		}
 
 		return &mcp.CallToolResult{

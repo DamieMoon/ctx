@@ -142,7 +142,7 @@ func TestUntrustedV11StoreRecentBlocks_Integration(t *testing.T) {
 	v11Seed(t, pool)
 	set := v11Set(t, pool)
 
-	rows, err := store.RecentBlocks(context.Background(), pool, set, v11Scopes, v11Category, 50, nil, nil)
+	rows, err := store.RecentBlocks(context.Background(), pool, set, v11Scopes, v11Category, 50, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("RecentBlocks: %v", err)
 	}

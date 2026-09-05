@@ -122,10 +122,12 @@ func TestMCPHandlersFailClosedWithoutAuth_Integration(t *testing.T) {
 // A VALID AuthResult carrying an EMPTY ReadScopes set must also fail closed in
 // the MCP recent handler. The auth layer never produces this today (ctx_auth
 // seeds read_scopes with ARRAY[home_scope], so a valid key always has ≥1 scope),
-// but recent runs its OWN inline query rather than store.RecentBlocks — so it
-// bypasses the store-layer guards and needs its own RequireScopes check. Without
-// it a regression in the auth layer would turn this path into a
-// `scope = ANY('{}')` fail-open while every other read path is closed.
+// but the guard has to hold end to end: since T03-8 recent delegates to
+// store.RecentBlocks, which runs RequireScopes itself, and the handler maps that
+// error back to the same prose. This test pins the HANDLER's answer, not the
+// place the check lives — without the guard anywhere, a regression in the auth
+// layer would turn this path into a `scope = ANY('{}')` fail-open while every
+// other read path is closed.
 func TestMCPRecentFailClosedOnEmptyScopes_Integration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("integration test")
