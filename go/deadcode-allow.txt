@@ -1,0 +1,19 @@
+# deadcode-Allowlist — die Policy hinter ../deadcode.sh (Welle T02-7).
+#
+# Eine Zeile je Symbol, TAB-getrennt, LC_ALL=C sortiert:
+#
+#   <pfad-relativ-zu-go><TAB><symbol><TAB># <grund>
+#
+# Vergleichsschlüssel sind Feld 1 und 2. Die Grund-Spalte ist Pflicht: „behalten"
+# soll eine sichtbare Entscheidung im Diff sein, keine Frage der Disziplin. Keine
+# Zeilennummer im Schlüssel — sonst rötet jede Verschiebung im File das Gate.
+#
+# Das Gate blockiert in BEIDE Richtungen: ein nicht gelisteter toter Fund ist rot,
+# eine gelistete Zeile, deren Symbol wieder erreichbar ist, ebenfalls (sonst wächst
+# die Liste zum Deckel). Ist der Grund „tot, gehört Welle X", steht genau das da.
+#
+# deadcode sieht nur Funktionen. Konstanten, Vars, Typen und Struct-Felder deckt
+# der `unused`-Linter aus ../.golangci.yml ab; seine Form derselben Doktrin ist
+# ein //nolint:unused mit ausgeschriebenem Grund an der Deklaration.
+
+internal/schemacontract/manifest.go	MarshalManifest	# Aufrufer generate_test.go:136 unter //go:build genmanifest; deadcode kennt den Tag nicht

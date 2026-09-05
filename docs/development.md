@@ -79,8 +79,25 @@ bash test.sh --with-ollama          # 18 system + retrieval + MCP tests
 bash eval.sh                        # 47 eval tests (baseline regression)
 bash eval.sh --update-baseline      # Set a new baseline
 bash eval.sh --no-warmup            # Skip the unscored warm-up pass (development runs)
+bash deadcode.sh                    # Unreachable-code gate against go/deadcode-allow.txt
 cd go && go test ./... -short       # Go unit tests
 ```
+
+`deadcode.sh` needs `go install golang.org/x/tools/cmd/deadcode@v0.49.0` (the same
+pin the CI `lint` job installs). It also runs from `.hooks/pre-push` — as a hint,
+not a block, when the tool is missing locally. CI is the authority.
+
+**Allowlist doctrine: keeping a dead symbol means writing a line with a reason.**
+`go/deadcode-allow.txt` is TAB-separated, `<path><TAB><symbol><TAB># <reason>`, and
+the reason column is mandatory, so "we keep this" shows up as a decision in the
+diff. The gate blocks in both directions: a new unreachable symbol that is not
+listed, **and** a listed line whose symbol became reachable again (delete the line
+— an allowlist that only grows is a lid, not a policy). `deadcode` only sees
+functions; constants, vars, types and struct fields are covered by the `unused`
+linter in `.golangci.yml`, whose form of the same doctrine is a
+`//nolint:unused // <reason>` at the declaration. Note that the lint run of CI and
+`.hooks/pre-commit` is **tag-less**, so a symbol read only from an
+`//go:build integration` file reads as unused and needs such a line.
 
 `eval.sh` fires every query **twice**: an unscored warm-up pass, then the scored
 pass. That is the old "run it twice, score run 2" rule moved into the script, and

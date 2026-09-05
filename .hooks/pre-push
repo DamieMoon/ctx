@@ -158,4 +158,28 @@ if [ "$REJECTED" -eq 1 ]; then
     exit 1
 fi
 
+# Gate 3 (T02-7) — deadcode allowlist tripwire, deliberately here and NOT in
+# pre-commit: pre-commit already runs a full `go vet -tags=integration ./...`
+# plus golangci-lint, and a third whole-tree typecheck per commit would double
+# commit latency. A push, by rule 1 above, only ever happens against an
+# annotated v* tag — and ci.yml's `build` job needs `lint`, so the CI verdict
+# arrives only AFTER the tag is already published. That is the window this gate
+# closes. CI stays the authority; this is the early warning.
+#
+# Missing tool means a hint, never a block: whoever pushes without deadcode
+# installed still gets the CI verdict. deadcode.sh itself refuses to report ok
+# without running when CI is set, so the CI side cannot go silently green.
+if command -v deadcode >/dev/null 2>&1; then
+    if ! bash "$(git rev-parse --show-toplevel)/deadcode.sh"; then
+        echo ""
+        echo "pre-push: deadcode gate failed — cut the symbol, or add a line"
+        echo "  with a reason to go/deadcode-allow.txt. Bypass: git push --no-verify"
+        echo ""
+        exit 1
+    fi
+else
+    echo "pre-push: deadcode not found, skipping the allowlist gate (CI enforces it)."
+    echo "  install: go install golang.org/x/tools/cmd/deadcode@v0.49.0"
+fi
+
 exit 0

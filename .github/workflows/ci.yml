@@ -79,6 +79,30 @@ jobs:
           skip-cache: true
           only-new-issues: ${{ github.event_name == 'pull_request' }}
 
+      # T02-7: der Tripwire des Tree-Shaking-Runs. deadcode.sh vergleicht die
+      # Erreichbarkeitsanalyse gegen go/deadcode-allow.txt und blockiert in
+      # BEIDE Richtungen (neuer toter Fund / gelistete Zeile lebt wieder).
+      # Version gepinnt aus demselben Grund wie golangci-lint oben: ein
+      # @latest-Bump würde die Allowlist ohne Commit röten. KEIN
+      # working-directory — das Skript wechselt selbst nach go/, sonst tragen
+      # die Ausgabepfade ein cwd-Präfix und kein Allowlist-Schlüssel matcht.
+      - name: deadcode allowlist gate
+        run: |
+          go install golang.org/x/tools/cmd/deadcode@v0.49.0
+          bash "$GITHUB_WORKSPACE/deadcode.sh"
+
+      # Beobachtung, kein Gate: dupl misst Klon-Masse und schreibt sie in die
+      # Job-Summary. `if: always()` liefert die Zahl auch dann, wenn ein Gate
+      # davor rot war — gerade dann ist sie interessant. `|| true`, weil dupl
+      # bei Funden rc≠0 liefert und der Report niemandem den Build brechen soll.
+      - name: dupl report (nicht blockierend)
+        if: always()
+        working-directory: go
+        run: |
+          go install github.com/mibk/dupl@v1.1.0
+          dupl -t 80 $(find internal cmd -name '*.go' -not -name '*_test.go') \
+            | tee -a "$GITHUB_STEP_SUMMARY" || true
+
   # ─── Stage 1b: Web (frontend gate, parallel to Lint) ─────────────────────────
   # Wave PV8 (design 06 §7): PRs check the frontend for the first time.
   # Every bun step runs inside the digest-pinned toolchain container built
