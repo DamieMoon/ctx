@@ -67,7 +67,7 @@ func (h *ProjectIssuesHandler) WithConfig(cfg ConfigStore) *ProjectIssuesHandler
 // RequireMember group (design/03 §5.1: the gate lives in the mount, so a missing
 // gate is a missing route — 404, never fail-open). RequireMember admits; each
 // handler then re-scopes to the project's scope — reads via ar.ReadScopes, writes
-// via the per-project WRITE-SCOPE gate (resolveWriteScope, §4.6). Distinct from
+// via the per-project WRITE-SCOPE gate (resolveProjectWriteScope, §4.6). Distinct from
 // MountProject (W4); chi routes the deeper /issues* patterns independently.
 func MountProjectIssues(r chi.Router, h *ProjectIssuesHandler) {
 	r.Group(func(r chi.Router) {

@@ -50,7 +50,6 @@ import (
 	"github.com/GottZ/ctx/internal/auth"
 	"github.com/GottZ/ctx/internal/store"
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -84,13 +83,17 @@ type restCommentCreate struct {
 	Metadata map[string]any `json:"metadata,omitempty"`
 }
 
-// resolveWriteScope loads the project of {id} and returns its scope IFF the
-// caller may WRITE it. The order is the no-oracle contract: a foreign/unknown/
+// resolveProjectWriteScope loads the project of {id} and returns its scope IFF
+// the caller may WRITE it. The order is the no-oracle contract: a foreign/unknown/
 // malformed project (scope ∉ ReadScopes) ⇒ uniform 404 (caller cannot even
 // learn it exists); a readable-but-not-writable project scope ⇒ 403 (caller
 // already knows it exists via read, so 403 leaks nothing). writableBlockScopes
 // ⊆ ReadScopes always, so the two checks are consistent.
-func (h *ProjectIssuesHandler) resolveWriteScope(w http.ResponseWriter, r *http.Request) (string, *auth.AuthResult, bool) {
+//
+// The name says PROJECT on purpose (F-03-10): the package-level resolveWriteScope
+// (context_store.go) is a different thing — the block-WRITE-scope gate over a
+// caller-supplied scope. This one resolves a project from the path.
+func (h *ProjectIssuesHandler) resolveProjectWriteScope(w http.ResponseWriter, r *http.Request) (string, *auth.AuthResult, bool) {
 	ctx := r.Context()
 	ar := AuthResultFromContext(ctx)
 	row, err := store.GetProjectByID(ctx, h.pool, chi.URLParam(r, "id"))
@@ -110,6 +113,17 @@ func (h *ProjectIssuesHandler) resolveWriteScope(w http.ResponseWriter, r *http.
 		return "", nil, false
 	}
 	return row.Scope, ar, true
+}
+
+// issueWriteEnv is THIS transport's answer to "which scope does this write go
+// to" (Naht 4, one of three): the path-resolved project scope, and — scope
+// purity, §5.2 — a writable set of exactly that one scope, never the caller's
+// whole writable set. ApiKeyID rides along because REST is the transport that
+// meters: it is the identity the write throttle counts (writeRateBlocked) and
+// the one logIssueWrite books after the commit. Those two gates stay HERE and
+// are not wired into the core (E03-5 B, issues_core.go header).
+func (h *ProjectIssuesHandler) issueWriteEnv(scope string, ar *auth.AuthResult) issueWriteEnv {
+	return issueWriteEnv{Scope: scope, WritableScopes: []string{scope}, ApiKeyID: ar.ApiKeyID}
 }
 
 // writeScopeForbidden writes the uniform 403 for the write-scope gate (§4.6).
@@ -154,7 +168,7 @@ func (h *ProjectIssuesHandler) writeRateBlocked(w http.ResponseWriter, r *http.R
 func (h *ProjectIssuesHandler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	reqID := RequestIDFromContext(ctx)
-	scope, ar, ok := h.resolveWriteScope(w, r)
+	scope, ar, ok := h.resolveProjectWriteScope(w, r)
 	if !ok {
 		return
 	}
@@ -169,36 +183,15 @@ func (h *ProjectIssuesHandler) HandleCreate(w http.ResponseWriter, r *http.Reque
 		writeBadRequest(w, "Missing required field: title")
 		return
 	}
-	set := h.issueSet(r)
-	if set == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"success": false, "error": "type registry unavailable"})
-		return
-	}
-	// Resolve the initial status from policy DATA; a client-supplied status must be
-	// a valid entry (transition from "") — swapping the registry set changes this
-	// verdict with no Go rebuild (§4.3).
-	status := set.WorkflowInitial(store.IssueTypeName)
-	if p.Status != "" {
-		if err := set.ValidateTransition(store.IssueTypeName, "", p.Status); err != nil {
-			writeIssueStoreError(w, "issue-create", err, reqID)
-			return
-		}
-		status = p.Status
-	}
-
-	b, err := issueTx(ctx, h.pool, func(tx pgx.Tx) (*store.Block, error) {
-		// writableScopes = [project scope]: the create is bound to THIS project's
-		// single scope, never the caller's whole writable set (scope purity).
-		return store.InsertIssueBlock(ctx, tx, store.IssueFields{
-			Scope: scope, Title: p.Title, Content: p.Content,
-			Tags: p.Tags, Metadata: p.Metadata, Status: status,
-		}, []string{scope})
-	})
+	env := h.issueWriteEnv(scope, ar)
+	b, err := issueCreateCore(ctx, h.pool, h.issueSet(r), env, store.IssueFields{
+		Title: p.Title, Content: p.Content, Tags: p.Tags, Metadata: p.Metadata,
+	}, p.Status)
 	if err != nil {
 		writeIssueStoreError(w, "issue-create", err, reqID)
 		return
 	}
-	logIssueWrite(h.pool, ar.ApiKeyID, b.ID, reqID)
+	logIssueWrite(h.pool, env.ApiKeyID, b.ID, reqID)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"success": true, "render": "untrusted", "issue": b,
 	})
@@ -211,7 +204,7 @@ func (h *ProjectIssuesHandler) HandleCreate(w http.ResponseWriter, r *http.Reque
 func (h *ProjectIssuesHandler) HandlePatch(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	reqID := RequestIDFromContext(ctx)
-	scope, ar, ok := h.resolveWriteScope(w, r)
+	scope, ar, ok := h.resolveProjectWriteScope(w, r)
 	if !ok {
 		return
 	}
@@ -231,23 +224,15 @@ func (h *ProjectIssuesHandler) HandlePatch(w http.ResponseWriter, r *http.Reques
 		writeBadRequest(w, "No fields to update (title, content, tags, metadata, status)")
 		return
 	}
-	set := h.issueSet(r)
-	if set == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"success": false, "error": "type registry unavailable"})
-		return
-	}
-	b, err := issueTx(ctx, h.pool, func(tx pgx.Tx) (*store.Block, error) {
-		// writableScopes = [project scope]: a block in another scope ⇒ ErrIssueNotFound
-		// (404 uniform), so the PATCH can never reach across projects.
-		return store.UpdateIssueBlock(ctx, tx, blockID, store.IssueUpdate{
-			Title: p.Title, Content: p.Content, Tags: p.Tags, Metadata: p.Metadata, Status: p.Status,
-		}, set, []string{scope})
+	env := h.issueWriteEnv(scope, ar)
+	b, err := issueUpdateCore(ctx, h.pool, h.issueSet(r), env, blockID, store.IssueUpdate{
+		Title: p.Title, Content: p.Content, Tags: p.Tags, Metadata: p.Metadata, Status: p.Status,
 	})
 	if err != nil {
 		writeIssueStoreError(w, "issue-update", err, reqID)
 		return
 	}
-	logIssueWrite(h.pool, ar.ApiKeyID, b.ID, reqID)
+	logIssueWrite(h.pool, env.ApiKeyID, b.ID, reqID)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"success": true, "render": "untrusted", "issue": b,
 	})
@@ -260,7 +245,7 @@ func (h *ProjectIssuesHandler) HandlePatch(w http.ResponseWriter, r *http.Reques
 func (h *ProjectIssuesHandler) HandleCommentCreate(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	reqID := RequestIDFromContext(ctx)
-	scope, ar, ok := h.resolveWriteScope(w, r)
+	scope, ar, ok := h.resolveProjectWriteScope(w, r)
 	if !ok {
 		return
 	}
@@ -276,18 +261,15 @@ func (h *ProjectIssuesHandler) HandleCommentCreate(w http.ResponseWriter, r *htt
 	if !decodeIssueBody(w, r, &p) {
 		return
 	}
-	b, err := issueTx(ctx, h.pool, func(tx pgx.Tx) (*store.Block, error) {
-		// writableScopes = [project scope]: a parent in another scope ⇒
-		// ErrLinkScopeViolation (404 uniform) — no cross-project comment.
-		return store.InsertCommentBlock(ctx, tx, parentID, store.CommentFields{
-			Author: p.Author, Content: p.Content, Metadata: p.Metadata,
-		}, []string{scope})
+	env := h.issueWriteEnv(scope, ar)
+	b, err := issueCommentCore(ctx, h.pool, env, parentID, store.CommentFields{
+		Author: p.Author, Content: p.Content, Metadata: p.Metadata,
 	})
 	if err != nil {
 		writeIssueStoreError(w, "issue-comment-create", err, reqID)
 		return
 	}
-	logIssueWrite(h.pool, ar.ApiKeyID, b.ID, reqID)
+	logIssueWrite(h.pool, env.ApiKeyID, b.ID, reqID)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"success": true, "render": "untrusted", "comment": b,
 	})

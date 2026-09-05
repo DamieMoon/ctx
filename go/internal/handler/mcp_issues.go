@@ -37,7 +37,6 @@ import (
 
 	"github.com/GottZ/ctx/internal/blocktype"
 	"github.com/GottZ/ctx/internal/store"
-	"github.com/jackc/pgx/v5"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -104,27 +103,13 @@ func mcpIssueCreateHandler(cfg MCPConfig) mcp.ToolHandlerFor[issueCreateInput, a
 		if ar == nil { // T07/L7 fail-closed: never fall back to the default tenant
 			return errResult("unauthorized: no resolved tenant identity"), nil, nil
 		}
-		set := cfg.issueSet(ctx)
-		if set == nil {
-			return errResult("type registry unavailable"), nil, nil
-		}
-		// Initial status from policy DATA; a client-supplied status must be a valid
-		// ENTRY transition ("" → status). Swapping the registry set changes this
-		// verdict with no Go rebuild (design/03 §4.3), identical to REST/manage.
-		status := set.WorkflowInitial(store.IssueTypeName)
-		if input.Status != "" {
-			if err := set.ValidateTransition(store.IssueTypeName, "", input.Status); err != nil {
-				return mcpIssueError("issue_create", err), nil, nil
-			}
-			status = input.Status
-		}
-		scope := ar.HomeScope
-		b, err := issueTx(ctx, cfg.Pool, func(tx pgx.Tx) (*store.Block, error) {
-			return store.InsertIssueBlock(ctx, tx, store.IssueFields{
-				Scope: scope, Title: input.Title, Content: input.Content,
-				Tags: input.Tags, Metadata: input.Metadata, Status: status,
-			}, writableBlockScopes(ar))
-		})
+		// Scope source of THIS transport (Naht 4, one of three): the tools carry
+		// no scope and no project parameter — a create always writes the key's
+		// HomeScope, gated by the same block-write formula the other two use.
+		env := issueWriteEnv{Scope: ar.HomeScope, WritableScopes: writableBlockScopes(ar), ApiKeyID: ar.ApiKeyID}
+		b, err := issueCreateCore(ctx, cfg.Pool, cfg.issueSet(ctx), env, store.IssueFields{
+			Title: input.Title, Content: input.Content, Tags: input.Tags, Metadata: input.Metadata,
+		}, input.Status)
 		if err != nil {
 			return mcpIssueError("issue_create", err), nil, nil
 		}
@@ -141,10 +126,11 @@ func mcpIssueCommentHandler(cfg MCPConfig) mcp.ToolHandlerFor[issueCommentInput,
 		if ar == nil { // T07/L7 fail-closed
 			return errResult("unauthorized: no resolved tenant identity"), nil, nil
 		}
-		b, err := issueTx(ctx, cfg.Pool, func(tx pgx.Tx) (*store.Block, error) {
-			return store.InsertCommentBlock(ctx, tx, input.IssueID, store.CommentFields{
-				Author: input.Author, Content: input.Content, Metadata: input.Metadata,
-			}, writableBlockScopes(ar))
+		// Scope source (Naht 4): the comment inherits the parent issue's scope,
+		// gated by writableBlockScopes(ar) — no scope travels in the tool call.
+		env := issueWriteEnv{Scope: ar.HomeScope, WritableScopes: writableBlockScopes(ar), ApiKeyID: ar.ApiKeyID}
+		b, err := issueCommentCore(ctx, cfg.Pool, env, input.IssueID, store.CommentFields{
+			Author: input.Author, Content: input.Content, Metadata: input.Metadata,
 		})
 		if err != nil {
 			return mcpIssueError("issue_comment", err), nil, nil
@@ -165,15 +151,13 @@ func mcpIssueStateHandler(cfg MCPConfig) mcp.ToolHandlerFor[issueStateInput, any
 		if ar == nil { // T07/L7 fail-closed
 			return errResult("unauthorized: no resolved tenant identity"), nil, nil
 		}
-		set := cfg.issueSet(ctx)
-		if set == nil {
-			return errResult("type registry unavailable"), nil, nil
-		}
+		// Scope source (Naht 4): by-id transition, gated by writableBlockScopes(ar).
+		// issue_state fills exactly ONE field of the update shape — that is the cut
+		// of the tool surface (design/03 §4.10), not a missing feature.
 		status := input.Status
-		b, err := issueTx(ctx, cfg.Pool, func(tx pgx.Tx) (*store.Block, error) {
-			return store.UpdateIssueBlock(ctx, tx, input.IssueID, store.IssueUpdate{
-				Status: &status,
-			}, set, writableBlockScopes(ar))
+		env := issueWriteEnv{Scope: ar.HomeScope, WritableScopes: writableBlockScopes(ar), ApiKeyID: ar.ApiKeyID}
+		b, err := issueUpdateCore(ctx, cfg.Pool, cfg.issueSet(ctx), env, input.IssueID, store.IssueUpdate{
+			Status: &status,
 		})
 		if err != nil {
 			return mcpIssueError("issue_state", err), nil, nil
@@ -223,6 +207,11 @@ func mcpIssueResult(key string, b *store.Block) *mcp.CallToolResult {
 // success (the state-transition-policy gate).
 func mcpIssueError(tool string, err error) *mcp.CallToolResult {
 	switch {
+	case errors.Is(err, errIssueRegistryUnavailable):
+		// Pre-store class from the core (issues_core.go): no policy data wired.
+		// cfg.issueSet already logged the WARN; this is the same text the three
+		// tools returned inline before the core existed.
+		return errResult("type registry unavailable")
 	case errors.Is(err, store.ErrIssueNotFound), errors.Is(err, store.ErrLinkScopeViolation):
 		return errResult("not found")
 	case errors.Is(err, store.ErrIssueScope):

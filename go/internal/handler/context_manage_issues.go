@@ -126,32 +126,17 @@ func (h *ManageHandler) handleIssueCreate(w http.ResponseWriter, r *http.Request
 		writeBadRequest(w, "Missing required field: title")
 		return
 	}
-	set := h.issueSet(ctx)
-	if set == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"success": false, "error": "type registry unavailable"})
-		return
-	}
+	// Scope source of THIS transport (Naht 4, one of three): the operator names
+	// the scope, the key's home scope is the fallback — and the write is bounded
+	// by the caller's whole writable set, not by one project.
 	scope := p.Scope
 	if scope == "" {
 		scope = ar.HomeScope
 	}
-	// Resolve the initial workflow status from policy (never a hardcoded set);
-	// a client-supplied status must be a valid ENTRY (transition from "").
-	status := set.WorkflowInitial(store.IssueTypeName)
-	if p.Status != "" {
-		if err := set.ValidateTransition(store.IssueTypeName, "", p.Status); err != nil {
-			h.writeIssueError(w, "issue-create", err, reqID)
-			return
-		}
-		status = p.Status
-	}
-
-	b, err := h.inIssueTx(ctx, func(tx pgx.Tx) (*store.Block, error) {
-		return store.InsertIssueBlock(ctx, tx, store.IssueFields{
-			Scope: scope, Title: p.Title, Content: p.Content,
-			Tags: p.Tags, Metadata: p.Metadata, Status: status,
-		}, writableBlockScopes(ar))
-	})
+	env := issueWriteEnv{Scope: scope, WritableScopes: writableBlockScopes(ar), ApiKeyID: ar.ApiKeyID}
+	b, err := issueCreateCore(ctx, h.pool, h.issueSet(ctx), env, store.IssueFields{
+		Title: p.Title, Content: p.Content, Tags: p.Tags, Metadata: p.Metadata,
+	}, p.Status)
 	if err != nil {
 		h.writeIssueError(w, "issue-create", err, reqID)
 		return
@@ -177,15 +162,11 @@ func (h *ManageHandler) handleIssueUpdate(w http.ResponseWriter, r *http.Request
 		writeBadRequest(w, "No fields to update (title, content, tags, metadata, status)")
 		return
 	}
-	set := h.issueSet(ctx)
-	if set == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"success": false, "error": "type registry unavailable"})
-		return
-	}
-	b, err := h.inIssueTx(ctx, func(tx pgx.Tx) (*store.Block, error) {
-		return store.UpdateIssueBlock(ctx, tx, req.ID, store.IssueUpdate{
-			Title: p.Title, Content: p.Content, Tags: p.Tags, Metadata: p.Metadata, Status: p.Status,
-		}, set, writableBlockScopes(ar))
+	// Scope source (Naht 4): the update targets a block by id, bounded by the
+	// caller's whole writable set — no project narrowing on this transport.
+	env := issueWriteEnv{Scope: ar.HomeScope, WritableScopes: writableBlockScopes(ar), ApiKeyID: ar.ApiKeyID}
+	b, err := issueUpdateCore(ctx, h.pool, h.issueSet(ctx), env, req.ID, store.IssueUpdate{
+		Title: p.Title, Content: p.Content, Tags: p.Tags, Metadata: p.Metadata, Status: p.Status,
 	})
 	if err != nil {
 		h.writeIssueError(w, "issue-update", err, reqID)
@@ -279,10 +260,11 @@ func (h *ManageHandler) handleIssueCommentCreate(w http.ResponseWriter, r *http.
 		writeIssueNotFound(w) // malformed parent = uniform 404 (no oracle)
 		return
 	}
-	b, err := h.inIssueTx(ctx, func(tx pgx.Tx) (*store.Block, error) {
-		return store.InsertCommentBlock(ctx, tx, p.ParentID, store.CommentFields{
-			Author: p.Author, Content: p.Content, Metadata: p.Metadata,
-		}, writableBlockScopes(ar))
+	// Scope source (Naht 4): the comment inherits the PARENT's scope; the caller's
+	// whole writable set is what the store re-asserts against.
+	env := issueWriteEnv{Scope: ar.HomeScope, WritableScopes: writableBlockScopes(ar), ApiKeyID: ar.ApiKeyID}
+	b, err := issueCommentCore(ctx, h.pool, env, p.ParentID, store.CommentFields{
+		Author: p.Author, Content: p.Content, Metadata: p.Metadata,
 	})
 	if err != nil {
 		h.writeIssueError(w, "issue-comment-create", err, reqID)
@@ -413,16 +395,17 @@ func validateLinkClass(set *blocktype.Set, typeName, class string) error {
 var errInvalidLinkClass = errors.New("link_class not permitted for the source block type")
 
 // inIssueTx runs fn in a transaction (the manage transport wrapper); it
-// delegates to the shared issueTx so the REST W7 surface and the manage transport
-// share ONE tx-boilerplate + error-mapping truth (one write logic, two
-// transports).
+// delegates to the shared issueTx. Since T03-10 the three issue WRITE families
+// reach issueTx through issues_core.go — what is left here are the two
+// structural-link actions, which are manage-only and have no core.
 func (h *ManageHandler) inIssueTx(ctx context.Context, fn func(tx pgx.Tx) (*store.Block, error)) (*store.Block, error) {
 	return issueTx(ctx, h.pool, fn)
 }
 
 // issueTx runs fn in a transaction, committing on success and rolling back on
-// error. Returns fn's block (nil for link/void writes). Shared by the manage
-// transport (inIssueTx) and the REST W7 write handlers.
+// error. Returns fn's block (nil for link/void writes). Shared by the issue write
+// core (issues_core.go, three call sites for all three transports) and the
+// manage-only structural-link actions (inIssueTx).
 func issueTx(ctx context.Context, pool *pgxpool.Pool, fn func(tx pgx.Tx) (*store.Block, error)) (*store.Block, error) {
 	// Stages{} keeps begin, fn and commit errors UNWRAPPED: writeIssueStoreError
 	// and mcpIssueError map ~8 store sentinels with errors.Is, and a label would
@@ -454,6 +437,12 @@ func (h *ManageHandler) writeIssueError(w http.ResponseWriter, action string, er
 // (logged, no wire detail). Shared by the manage transport and the REST W7 writes.
 func writeIssueStoreError(w http.ResponseWriter, action string, err error, reqID string) {
 	switch {
+	case errors.Is(err, errIssueRegistryUnavailable):
+		// Pre-store class: the core refused because no policy data is wired
+		// (issues_core.go). The WARN was already logged by the transport's
+		// issueSet; this is the wire verdict the three handlers wrote inline
+		// before the core existed — same status, same prose.
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"success": false, "error": "type registry unavailable"})
 	case errors.Is(err, store.ErrIssueNotFound), errors.Is(err, store.ErrLinkScopeViolation):
 		writeIssueNotFound(w)
 	case errors.Is(err, store.ErrIssueScope):

@@ -11,7 +11,8 @@
 // (that is the manage-action transport). A scope the caller cannot even READ ⇒ 404
 // uniform (no existence oracle); readable-but-not-writable ⇒ 403 (the caller
 // already knows the project exists, so 403 leaks nothing). This mirrors the W7
-// write surface exactly (project_issues_write.go resolveWriteScope).
+// write surface exactly (project_issues_write.go resolveProjectWriteScope — the
+// PROJECT resolver, not the package-level block-write gate of the same old name).
 //
 // RUN-STATE (§4.4): the engine holds a PER-PROJECT single-flight (double-start of
 // the SAME project ⇒ 409) UNDER a process-global concurrency semaphore (project.
