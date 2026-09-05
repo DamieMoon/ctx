@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -208,19 +207,27 @@ func healthIndicator(status string) string {
 func fetchBackendData(cfg Config) *statusCache {
 	result := &statusCache{Health: "error", BlockCount: 0}
 
-	// Fast HTTP client for statusline (500ms timeout)
-	fast := &http.Client{Timeout: 500 * time.Millisecond}
+	// The statusline speaks the same Client as every other command, but with
+	// ITS budget: 500 ms per call (it runs on every prompt) and a 1 MB read cap
+	// — both are parameters, not inherited from the 120 s / 10 MB main client
+	// (design/03 §5.6). Errors stay silent: a statusline must never crash the
+	// prompt, so every failed step keeps the "error"/0 placeholder.
+	c := NewClientWithTimeout(cfg, 500*time.Millisecond, maxStatuslineResponse)
 
-	baseURL := cfg.BaseURL
-	baseURL = strings.TrimSuffix(baseURL, "/")
+	baseURL := strings.TrimSuffix(cfg.BaseURL, "/")
 
-	// Health check
-	if resp, err := fast.Get(baseURL + "/health"); err == nil {
+	// Health check. Deliberately NOT c.Get: /health is the one anonymous route
+	// (cmd/ctxd/server.go registers it before the auth middleware and the
+	// handler reads no header), and Client.Get would put X-Context-Key on it.
+	// The statusline fires on every prompt, so that would spray the key across
+	// the public health path for no gain — the request stays header-free, the
+	// 500 ms budget and the 1 MB cap come from the same client.
+	if resp, err := c.HTTPClient.Get(baseURL + "/health"); err == nil {
 		defer func() { _ = resp.Body.Close() }()
 		var h struct {
 			Status string `json:"status"`
 		}
-		if body, err := io.ReadAll(io.LimitReader(resp.Body, maxStatuslineResponse)); err == nil {
+		if body, err := io.ReadAll(io.LimitReader(resp.Body, c.readLimit())); err == nil {
 			if json.Unmarshal(body, &h) == nil {
 				result.Health = h.Status
 			}
@@ -228,21 +235,12 @@ func fetchBackendData(cfg Config) *statusCache {
 	}
 
 	// Block count via stats
-	statsBody, _ := json.Marshal(map[string]any{"action": "stats"})
-	req, err := http.NewRequest("POST", strings.TrimSuffix(cfg.BaseURL, "/")+"/api/manage", strings.NewReader(string(statsBody)))
-	if err == nil {
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("X-Context-Key", cfg.Key)
-		if resp, err := fast.Do(req); err == nil {
-			defer func() { _ = resp.Body.Close() }()
-			var s map[string]any
-			if body, err := io.ReadAll(io.LimitReader(resp.Body, maxStatuslineResponse)); err == nil {
-				if json.Unmarshal(body, &s) == nil {
-					if stats, ok := s["stats"].(map[string]any); ok {
-						if n, ok := stats["total_blocks"].(float64); ok {
-							result.BlockCount = n
-						}
-					}
+	if body, err := c.Post("manage", map[string]any{"action": "stats"}); err == nil {
+		var s map[string]any
+		if json.Unmarshal(body, &s) == nil {
+			if stats, ok := s["stats"].(map[string]any); ok {
+				if n, ok := stats["total_blocks"].(float64); ok {
+					result.BlockCount = n
 				}
 			}
 		}

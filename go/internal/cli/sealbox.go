@@ -107,35 +107,33 @@ func runSecretsList(getClient func() (*Client, error)) error {
 	if err := checkSettingsEnvelope(resp); err != nil {
 		return err
 	}
-	if !StdoutIsTTY() {
-		PrintJSON(resp)
-		return nil
-	}
-	var payload struct {
-		Secrets []secretRow `json:"secrets"`
-	}
-	if err := json.Unmarshal(resp, &payload); err != nil {
-		PrintJSON(resp)
-		return err
-	}
-	if len(payload.Secrets) == 0 {
-		fmt.Println("no secrets stored")
-		return nil
-	}
-	w := tabwriter.NewWriter(os.Stdout, 2, 4, 2, ' ', 0)
-	_, _ = fmt.Fprintln(w, "NAME\tKEY_VERSION\tCREATED\tROTATED\tREFERENCED_BY")
-	for _, s := range payload.Secrets {
-		rotated := "-"
-		if s.RotatedAt != nil {
-			rotated = *s.RotatedAt
+	return renderOrJSON(resp, func(resp []byte) error {
+		var payload struct {
+			Secrets []secretRow `json:"secrets"`
 		}
-		refs := "-"
-		if len(s.ReferencedBy) > 0 {
-			refs = strings.Join(s.ReferencedBy, ",")
+		if err := json.Unmarshal(resp, &payload); err != nil {
+			PrintJSON(resp)
+			return err
 		}
-		_, _ = fmt.Fprintf(w, "%s\t%d\t%s\t%s\t%s\n", s.Name, s.KeyVersion, s.CreatedAt, rotated, refs)
-	}
-	return w.Flush()
+		if len(payload.Secrets) == 0 {
+			fmt.Println("no secrets stored")
+			return nil
+		}
+		w := tabwriter.NewWriter(os.Stdout, 2, 4, 2, ' ', 0)
+		_, _ = fmt.Fprintln(w, "NAME\tKEY_VERSION\tCREATED\tROTATED\tREFERENCED_BY")
+		for _, s := range payload.Secrets {
+			rotated := "-"
+			if s.RotatedAt != nil {
+				rotated = *s.RotatedAt
+			}
+			refs := "-"
+			if len(s.ReferencedBy) > 0 {
+				refs = strings.Join(s.ReferencedBy, ",")
+			}
+			_, _ = fmt.Fprintf(w, "%s\t%d\t%s\t%s\t%s\n", s.Name, s.KeyVersion, s.CreatedAt, rotated, refs)
+		}
+		return w.Flush()
+	})
 }
 
 func runSecretsPut(getClient func() (*Client, error), name, value string) error {
@@ -150,21 +148,19 @@ func runSecretsPut(getClient func() (*Client, error), name, value string) error 
 	if err := checkSettingsEnvelope(resp); err != nil {
 		return err
 	}
-	if !StdoutIsTTY() {
-		PrintJSON(resp)
+	return renderOrJSON(resp, func(resp []byte) error {
+		var payload struct {
+			Name   string `json:"name"`
+			Action string `json:"action"`
+		}
+		if err := json.Unmarshal(resp, &payload); err != nil {
+			PrintJSON(resp)
+			return err
+		}
+		fmt.Printf("%s: %sd (value sealed; reference it from a backend-pool row, e.g. `ctx backends update <id> '{\"api_key_ref\":\"%s\"}'`)\n",
+			payload.Name, payload.Action, payload.Name)
 		return nil
-	}
-	var payload struct {
-		Name   string `json:"name"`
-		Action string `json:"action"`
-	}
-	if err := json.Unmarshal(resp, &payload); err != nil {
-		PrintJSON(resp)
-		return err
-	}
-	fmt.Printf("%s: %sd (value sealed; reference it from a backend-pool row, e.g. `ctx backends update <id> '{\"api_key_ref\":\"%s\"}'`)\n",
-		payload.Name, payload.Action, payload.Name)
-	return nil
+	})
 }
 
 func runSecretsRm(getClient func() (*Client, error), name string) error {
@@ -179,10 +175,8 @@ func runSecretsRm(getClient func() (*Client, error), name string) error {
 	if err := checkSettingsEnvelope(resp); err != nil {
 		return err
 	}
-	if !StdoutIsTTY() {
-		PrintJSON(resp)
+	return renderOrJSON(resp, func(resp []byte) error {
+		fmt.Printf("%s: deleted\n", name)
 		return nil
-	}
-	fmt.Printf("%s: deleted\n", name)
-	return nil
+	})
 }

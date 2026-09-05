@@ -121,13 +121,11 @@ func runProjectProvisionInit(c *Client, baseURL string, chosen resolvedIdentity)
 
 	// Idempotent re-run: No-op with the existing project (no new key file).
 	if !res.Provisioned {
-		if !StdoutIsTTY() {
-			PrintJSON(resp)
+		return renderOrJSON(resp, func(resp []byte) error {
+			fmt.Printf("already provisioned (no-op):\n")
+			printProjectDetail(res.Project)
 			return nil
-		}
-		fmt.Printf("already provisioned (no-op):\n")
-		printProjectDetail(res.Project)
-		return nil
+		})
 	}
 
 	// Fresh provision: store the repo-agent key 0600 under ~/.config, write the marker.
@@ -140,21 +138,19 @@ func runProjectProvisionInit(c *Client, baseURL string, chosen resolvedIdentity)
 		Errorf("warning: could not write %s: %v", ctxProjectFile, werr)
 	}
 
-	if !StdoutIsTTY() {
-		PrintJSON(resp)
+	return renderOrJSON(resp, func(resp []byte) error {
+		fmt.Printf("provisioned %s\n", chosen.Identity)
+		fmt.Printf("  tenant scope:   %s\n", res.Scope)
+		fmt.Printf("  project id:     %s\n", res.RepoID)
+		if keyPath != "" {
+			fmt.Printf("  repo-agent key: stored 0600 at %s\n", keyPath)
+		}
+		fmt.Printf("\n  owner key (SHOWN ONCE — store it, it is your tenant-admin credential):\n    %s\n", res.OwnerKey)
+		if keyPath == "" {
+			fmt.Printf("\n  repo-agent key (SHOWN ONCE — the key file could not be written):\n    %s\n", res.AgentKey)
+		}
 		return nil
-	}
-	fmt.Printf("provisioned %s\n", chosen.Identity)
-	fmt.Printf("  tenant scope:   %s\n", res.Scope)
-	fmt.Printf("  project id:     %s\n", res.RepoID)
-	if keyPath != "" {
-		fmt.Printf("  repo-agent key: stored 0600 at %s\n", keyPath)
-	}
-	fmt.Printf("\n  owner key (SHOWN ONCE — store it, it is your tenant-admin credential):\n    %s\n", res.OwnerKey)
-	if keyPath == "" {
-		fmt.Printf("\n  repo-agent key (SHOWN ONCE — the key file could not be written):\n    %s\n", res.AgentKey)
-	}
-	return nil
+	})
 }
 
 // markerDir resolves the git repo root for the .ctx-project marker (or the CWD

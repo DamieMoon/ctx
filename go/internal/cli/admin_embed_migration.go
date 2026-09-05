@@ -152,58 +152,56 @@ func runEmbedMigrationStatus(getClient func() (*Client, error), id string, exact
 	if err := checkSettingsEnvelope(resp); err != nil {
 		return err
 	}
-	if !StdoutIsTTY() {
-		PrintJSON(resp)
+	return renderOrJSON(resp, func(resp []byte) error {
+		var payload struct {
+			Migration *struct {
+				ID                string  `json:"id"`
+				Status            string  `json:"status"`
+				FromModel         string  `json:"from_model"`
+				ToModel           string  `json:"to_model"`
+				ToBackend         string  `json:"to_backend"`
+				TotalBlocks       int64   `json:"total_blocks"`
+				MigratedCount     int64   `json:"migrated_count"`
+				FailedCount       int64   `json:"failed_count"`
+				SkippedCount      int64   `json:"skipped_count"`
+				Pending           int64   `json:"pending"`
+				PendingExact      *int64  `json:"pending_exact"`
+				InfinityMigration int64   `json:"infinity_migration"`
+				InfinityBackfill  int64   `json:"infinity_backfill"`
+				HasVerifyReport   bool    `json:"has_verify_report"`
+				LastError         *string `json:"last_error"`
+			} `json:"migration"`
+		}
+		if err := json.Unmarshal(resp, &payload); err != nil {
+			PrintJSON(resp)
+			return nil //nolint:nilerr // raw already printed
+		}
+		if payload.Migration == nil {
+			fmt.Println("No active migration.")
+			return nil
+		}
+		m := payload.Migration
+		w := tabwriter.NewWriter(os.Stdout, 2, 4, 2, ' ', 0)
+		_, _ = fmt.Fprintf(w, "id:\t%s\n", m.ID)
+		_, _ = fmt.Fprintf(w, "status:\t%s\n", m.Status)
+		_, _ = fmt.Fprintf(w, "models:\t%s → %s (backend %s)\n", m.FromModel, m.ToModel, m.ToBackend)
+		_, _ = fmt.Fprintf(w, "total:\t%d\n", m.TotalBlocks)
+		_, _ = fmt.Fprintf(w, "migrated:\t%d\n", m.MigratedCount)
+		_, _ = fmt.Fprintf(w, "failed:\t%d\n", m.FailedCount)
+		_, _ = fmt.Fprintf(w, "skipped:\t%d\n", m.SkippedCount)
+		_, _ = fmt.Fprintf(w, "pending (arith):\t%d\n", m.Pending)
+		if m.PendingExact != nil {
+			_, _ = fmt.Fprintf(w, "pending (exact):\t%d\n", *m.PendingExact)
+		}
+		_, _ = fmt.Fprintf(w, "parked ∞ (migration):\t%d\n", m.InfinityMigration)
+		_, _ = fmt.Fprintf(w, "parked ∞ (backfill):\t%d\n", m.InfinityBackfill)
+		_, _ = fmt.Fprintf(w, "verify_report:\t%v\n", m.HasVerifyReport)
+		if m.LastError != nil && *m.LastError != "" {
+			_, _ = fmt.Fprintf(w, "last_error:\t%s\n", *m.LastError)
+		}
+		_ = w.Flush()
 		return nil
-	}
-	var payload struct {
-		Migration *struct {
-			ID                string  `json:"id"`
-			Status            string  `json:"status"`
-			FromModel         string  `json:"from_model"`
-			ToModel           string  `json:"to_model"`
-			ToBackend         string  `json:"to_backend"`
-			TotalBlocks       int64   `json:"total_blocks"`
-			MigratedCount     int64   `json:"migrated_count"`
-			FailedCount       int64   `json:"failed_count"`
-			SkippedCount      int64   `json:"skipped_count"`
-			Pending           int64   `json:"pending"`
-			PendingExact      *int64  `json:"pending_exact"`
-			InfinityMigration int64   `json:"infinity_migration"`
-			InfinityBackfill  int64   `json:"infinity_backfill"`
-			HasVerifyReport   bool    `json:"has_verify_report"`
-			LastError         *string `json:"last_error"`
-		} `json:"migration"`
-	}
-	if err := json.Unmarshal(resp, &payload); err != nil {
-		PrintJSON(resp)
-		return nil //nolint:nilerr // raw already printed
-	}
-	if payload.Migration == nil {
-		fmt.Println("No active migration.")
-		return nil
-	}
-	m := payload.Migration
-	w := tabwriter.NewWriter(os.Stdout, 2, 4, 2, ' ', 0)
-	_, _ = fmt.Fprintf(w, "id:\t%s\n", m.ID)
-	_, _ = fmt.Fprintf(w, "status:\t%s\n", m.Status)
-	_, _ = fmt.Fprintf(w, "models:\t%s → %s (backend %s)\n", m.FromModel, m.ToModel, m.ToBackend)
-	_, _ = fmt.Fprintf(w, "total:\t%d\n", m.TotalBlocks)
-	_, _ = fmt.Fprintf(w, "migrated:\t%d\n", m.MigratedCount)
-	_, _ = fmt.Fprintf(w, "failed:\t%d\n", m.FailedCount)
-	_, _ = fmt.Fprintf(w, "skipped:\t%d\n", m.SkippedCount)
-	_, _ = fmt.Fprintf(w, "pending (arith):\t%d\n", m.Pending)
-	if m.PendingExact != nil {
-		_, _ = fmt.Fprintf(w, "pending (exact):\t%d\n", *m.PendingExact)
-	}
-	_, _ = fmt.Fprintf(w, "parked ∞ (migration):\t%d\n", m.InfinityMigration)
-	_, _ = fmt.Fprintf(w, "parked ∞ (backfill):\t%d\n", m.InfinityBackfill)
-	_, _ = fmt.Fprintf(w, "verify_report:\t%v\n", m.HasVerifyReport)
-	if m.LastError != nil && *m.LastError != "" {
-		_, _ = fmt.Fprintf(w, "last_error:\t%s\n", *m.LastError)
-	}
-	_ = w.Flush()
-	return nil
+	})
 }
 
 // embedMigrationTransitionCmd builds a reason-less action command (pause/resume/
@@ -230,15 +228,12 @@ func embedMigrationTransitionCmd(getClient func() (*Client, error), action, shor
 				return err
 			}
 			if action == "confirm" {
-				renderConfirm(resp)
-				return nil
+				return renderConfirm(resp)
 			}
-			if !StdoutIsTTY() {
-				PrintJSON(resp)
+			return renderOrJSON(resp, func(resp []byte) error {
+				fmt.Printf("%s: ok\n", action)
 				return nil
-			}
-			fmt.Printf("%s: ok\n", action)
-			return nil
+			})
 		},
 	}
 	if action != "purge" {
@@ -247,33 +242,32 @@ func embedMigrationTransitionCmd(getClient func() (*Client, error), action, shor
 	return cmd
 }
 
-func renderConfirm(resp []byte) {
-	if !StdoutIsTTY() {
-		PrintJSON(resp)
-		return
-	}
-	var r struct {
-		ID                   string   `json:"id"`
-		FromModel            string   `json:"from_model"`
-		ToModel              string   `json:"to_model"`
-		VisibilityLoss       int64    `json:"visibility_loss"`
-		PostWatermarkPending int64    `json:"post_watermark_pending"`
-		SweepCleared         int64    `json:"sweep_cleared"`
-		MemosCopied          int64    `json:"memos_copied"`
-		FlippedBackends      []string `json:"flipped_backends"`
-	}
-	if err := json.Unmarshal(resp, &r); err != nil {
-		PrintJSON(resp)
-		return
-	}
-	w := tabwriter.NewWriter(os.Stdout, 2, 4, 2, ' ', 0)
-	_, _ = fmt.Fprintf(w, "cutover done:\t%s (%s → %s)\n", r.ID, r.FromModel, r.ToModel)
-	_, _ = fmt.Fprintf(w, "visibility_loss:\t%d\n", r.VisibilityLoss)
-	_, _ = fmt.Fprintf(w, "post_watermark_pending:\t%d\n", r.PostWatermarkPending)
-	_, _ = fmt.Fprintf(w, "sweep_cleared:\t%d\n", r.SweepCleared)
-	_, _ = fmt.Fprintf(w, "memos_copied:\t%d\n", r.MemosCopied)
-	_, _ = fmt.Fprintf(w, "flipped_backends:\t%v\n", r.FlippedBackends)
-	_ = w.Flush()
+func renderConfirm(resp []byte) error {
+	return renderOrJSON(resp, func(resp []byte) error {
+		var r struct {
+			ID                   string   `json:"id"`
+			FromModel            string   `json:"from_model"`
+			ToModel              string   `json:"to_model"`
+			VisibilityLoss       int64    `json:"visibility_loss"`
+			PostWatermarkPending int64    `json:"post_watermark_pending"`
+			SweepCleared         int64    `json:"sweep_cleared"`
+			MemosCopied          int64    `json:"memos_copied"`
+			FlippedBackends      []string `json:"flipped_backends"`
+		}
+		if err := json.Unmarshal(resp, &r); err != nil {
+			PrintJSON(resp)
+			return nil //nolint:nilerr // raw response already printed above
+		}
+		w := tabwriter.NewWriter(os.Stdout, 2, 4, 2, ' ', 0)
+		_, _ = fmt.Fprintf(w, "cutover done:\t%s (%s → %s)\n", r.ID, r.FromModel, r.ToModel)
+		_, _ = fmt.Fprintf(w, "visibility_loss:\t%d\n", r.VisibilityLoss)
+		_, _ = fmt.Fprintf(w, "post_watermark_pending:\t%d\n", r.PostWatermarkPending)
+		_, _ = fmt.Fprintf(w, "sweep_cleared:\t%d\n", r.SweepCleared)
+		_, _ = fmt.Fprintf(w, "memos_copied:\t%d\n", r.MemosCopied)
+		_, _ = fmt.Fprintf(w, "flipped_backends:\t%v\n", r.FlippedBackends)
+		_ = w.Flush()
+		return nil
+	})
 }
 
 // embedMigrationReasonCmd builds a reason-carrying action (abort/rollback) — the
@@ -304,15 +298,12 @@ func embedMigrationReasonCmd(getClient func() (*Client, error), action, short st
 				return err
 			}
 			if action == "rollback" {
-				renderConfirm(resp) // same shape family (from/to/sweep/flipped)
-				return nil
+				return renderConfirm(resp) // same shape family (from/to/sweep/flipped)
 			}
-			if !StdoutIsTTY() {
-				PrintJSON(resp)
+			return renderOrJSON(resp, func(resp []byte) error {
+				fmt.Printf("%s: ok\n", action)
 				return nil
-			}
-			fmt.Printf("%s: ok\n", action)
-			return nil
+			})
 		},
 	}
 	cmd.Flags().StringVar(&reason, "reason", "", "operator reason (mandatory)")
@@ -337,34 +328,32 @@ func embedMigrationFailuresCmd(getClient func() (*Client, error)) *cobra.Command
 			if err != nil {
 				return err
 			}
-			if !StdoutIsTTY() {
-				PrintJSON(resp)
+			return renderOrJSON(resp, func(resp []byte) error {
+				var payload struct {
+					Failures []struct {
+						BlockID       string `json:"block_id"`
+						Attempts      int    `json:"attempts"`
+						LastClass     string `json:"last_class"`
+						NextAttemptAt string `json:"next_attempt_at"`
+						LastError     string `json:"last_error"`
+					} `json:"failures"`
+				}
+				if err := json.Unmarshal(resp, &payload); err != nil {
+					PrintJSON(resp)
+					return nil //nolint:nilerr // raw already printed
+				}
+				if len(payload.Failures) == 0 {
+					fmt.Println("No embed failures.")
+					return nil
+				}
+				w := tabwriter.NewWriter(os.Stdout, 2, 4, 2, ' ', 0)
+				_, _ = fmt.Fprintln(w, "BLOCK\tATTEMPTS\tCLASS\tNEXT_ATTEMPT\tLAST_ERROR")
+				for _, f := range payload.Failures {
+					_, _ = fmt.Fprintf(w, "%s\t%d\t%s\t%s\t%s\n", f.BlockID, f.Attempts, f.LastClass, f.NextAttemptAt, f.LastError)
+				}
+				_ = w.Flush()
 				return nil
-			}
-			var payload struct {
-				Failures []struct {
-					BlockID       string `json:"block_id"`
-					Attempts      int    `json:"attempts"`
-					LastClass     string `json:"last_class"`
-					NextAttemptAt string `json:"next_attempt_at"`
-					LastError     string `json:"last_error"`
-				} `json:"failures"`
-			}
-			if err := json.Unmarshal(resp, &payload); err != nil {
-				PrintJSON(resp)
-				return nil //nolint:nilerr // raw already printed
-			}
-			if len(payload.Failures) == 0 {
-				fmt.Println("No embed failures.")
-				return nil
-			}
-			w := tabwriter.NewWriter(os.Stdout, 2, 4, 2, ' ', 0)
-			_, _ = fmt.Fprintln(w, "BLOCK\tATTEMPTS\tCLASS\tNEXT_ATTEMPT\tLAST_ERROR")
-			for _, f := range payload.Failures {
-				_, _ = fmt.Fprintf(w, "%s\t%d\t%s\t%s\t%s\n", f.BlockID, f.Attempts, f.LastClass, f.NextAttemptAt, f.LastError)
-			}
-			_ = w.Flush()
-			return nil
+			})
 		},
 	}
 	cmd.Flags().IntVar(&limit, "limit", 0, "max rows (default 50, max 500)")

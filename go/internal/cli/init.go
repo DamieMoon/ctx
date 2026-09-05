@@ -179,7 +179,7 @@ func stepConfig() (Config, bool) {
 func stepServer(cfg Config) bool {
 	baseURL := strings.TrimSuffix(cfg.BaseURL, "/")
 
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := newHTTPClient(5 * time.Second)
 	resp, err := client.Get(baseURL + "/health")
 	if err != nil {
 		fmt.Println(label("Server", "%s (unreachable) %s", baseURL, failMark()))
@@ -508,10 +508,18 @@ type githubRelease struct {
 	TagName string `json:"tag_name"`
 }
 
+// stepVersion is the ONE call in the whole CLI that leaves the user's ctxd and
+// talks to a FOREIGN host. It therefore builds its OWN http.Client and must
+// never be routed through the package Client or newHTTPClient's twin from
+// stepServer: Client.Get/Post/Do set the header X-Context-Key unconditionally
+// (client.go), so a "one client for everything" merge would hand the user's API
+// key to a third party (design/03 §5.6). The rule is held by a grep invariant
+// and by TestForeignHostClientCarriesNoKey, not by this comment.
 func stepVersion() bool {
 	local := Version
 	fmt.Printf("") // anchor for the line
 
+	// Own client, foreign host — see the doc comment above before merging it.
 	client := &http.Client{Timeout: 5 * time.Second}
 	req, err := http.NewRequest("GET", "https://api.github.com/repos/GottZ/ctx/releases/latest", nil)
 	if err != nil {

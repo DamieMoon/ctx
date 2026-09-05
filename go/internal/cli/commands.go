@@ -65,6 +65,47 @@ func RegisterCommands(root *cobra.Command) {
 	root.AddCommand(adminCmd(getClient))
 }
 
+// simpleCmd builds the shape that eleven commands shared verbatim: resolve the
+// lazy client, POST one body to one endpoint, print the response as JSON.
+//
+// endpoint is a PARAMETER, not "manage": `ctx digest` posts to "digest".
+// body is a FUNCTION over args, not a literal map: `ctx mcp delete <client_id>`
+// and `ctx keys delete <id>` build their payload from args[0]. args is the
+// cobra.PositionalArgs of the command (nil for the argument-less ones, which is
+// the zero value cobra already used).
+//
+// The response goes out through PrintJSON unconditionally — these commands have
+// no human rendering, on a TTY or piped. That is also why the envelope check is
+// NOT here: `success:false` handling for these eleven is one change at one
+// place, and it belongs to the wave that owns the exit-code contract (T03-13).
+func simpleCmd(
+	use string,
+	aliases []string,
+	short, endpoint string,
+	args cobra.PositionalArgs,
+	body func(args []string) map[string]any,
+	getClient func() (*Client, error),
+) *cobra.Command {
+	return &cobra.Command{
+		Use:     use,
+		Aliases: aliases,
+		Short:   short,
+		Args:    args,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := getClient()
+			if err != nil {
+				return err
+			}
+			resp, err := c.Post(endpoint, body(args))
+			if err != nil {
+				return err
+			}
+			PrintJSON(resp)
+			return nil
+		},
+	}
+}
+
 // ── query ────────────────────────────────────────────────────────────.
 
 func queryCmd(getClient func() (*Client, error)) *cobra.Command {
@@ -307,141 +348,53 @@ func searchCmd(getClient func() (*Client, error)) *cobra.Command {
 // ── stats ────────────────────────────────────────────────────────────.
 
 func statsCmd(getClient func() (*Client, error)) *cobra.Command {
-	return &cobra.Command{
-		Use:     "stats",
-		Aliases: []string{"st"},
-		Short:   "DB statistics",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := getClient()
-			if err != nil {
-				return err
-			}
-			resp, err := c.Post("manage", map[string]any{"action": "stats"})
-			if err != nil {
-				return err
-			}
-			PrintJSON(resp)
-			return nil
-		},
-	}
+	return simpleCmd("stats", []string{"st"}, "DB statistics", "manage", nil,
+		func([]string) map[string]any { return map[string]any{"action": "stats"} }, getClient)
 }
 
 // ── categories ───────────────────────────────────────────────────────.
 
 func categoriesCmd(getClient func() (*Client, error)) *cobra.Command {
-	return &cobra.Command{
-		Use:     "categories",
-		Aliases: []string{"cats"},
-		Short:   "List categories",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := getClient()
-			if err != nil {
-				return err
-			}
-			resp, err := c.Post("manage", map[string]any{"action": "list-categories"})
-			if err != nil {
-				return err
-			}
-			PrintJSON(resp)
-			return nil
-		},
-	}
+	return simpleCmd("categories", []string{"cats"}, "List categories", "manage", nil,
+		func([]string) map[string]any { return map[string]any{"action": "list-categories"} }, getClient)
 }
 
 // ── get ──────────────────────────────────────────────────────────────.
 
 func getCmd(getClient func() (*Client, error)) *cobra.Command {
-	return &cobra.Command{
-		Use:     "get <block-id>",
-		Aliases: []string{"g"},
-		Short:   "Fetch full block",
-		Args:    cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := getClient()
-			if err != nil {
-				return err
-			}
-			resp, err := c.Post("manage", map[string]any{
+	return simpleCmd("get <block-id>", []string{"g"}, "Fetch full block", "manage", cobra.ExactArgs(1),
+		func(args []string) map[string]any {
+			return map[string]any{
 				"action": "get",
 				"id":     args[0],
-			})
-			if err != nil {
-				return err
 			}
-			PrintJSON(resp)
-			return nil
-		},
-	}
+		}, getClient)
 }
 
 // ── delete ───────────────────────────────────────────────────────────.
 
 func deleteCmd(getClient func() (*Client, error)) *cobra.Command {
-	return &cobra.Command{
-		Use:     "delete <block-id>",
-		Aliases: []string{"del"},
-		Short:   "Delete block",
-		Args:    cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := getClient()
-			if err != nil {
-				return err
-			}
-			resp, err := c.Post("manage", map[string]any{
+	return simpleCmd("delete <block-id>", []string{"del"}, "Delete block", "manage", cobra.ExactArgs(1),
+		func(args []string) map[string]any {
+			return map[string]any{
 				"action": "delete",
 				"id":     args[0],
-			})
-			if err != nil {
-				return err
 			}
-			PrintJSON(resp)
-			return nil
-		},
-	}
+		}, getClient)
 }
 
 // ── list-meta ────────────────────────────────────────────────────────.
 
 func listMetaCmd(getClient func() (*Client, error)) *cobra.Command {
-	return &cobra.Command{
-		Use:     "list-meta",
-		Aliases: []string{"lm"},
-		Short:   "All blocks (no content)",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := getClient()
-			if err != nil {
-				return err
-			}
-			resp, err := c.Post("manage", map[string]any{"action": "list-meta"})
-			if err != nil {
-				return err
-			}
-			PrintJSON(resp)
-			return nil
-		},
-	}
+	return simpleCmd("list-meta", []string{"lm"}, "All blocks (no content)", "manage", nil,
+		func([]string) map[string]any { return map[string]any{"action": "list-meta"} }, getClient)
 }
 
 // ── digest ───────────────────────────────────────────────────────────.
 
 func digestCmd(getClient func() (*Client, error)) *cobra.Command {
-	return &cobra.Command{
-		Use:     "digest",
-		Aliases: []string{"d"},
-		Short:   "Rebuild topic map",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := getClient()
-			if err != nil {
-				return err
-			}
-			resp, err := c.Post("digest", map[string]any{"trigger": "manual"})
-			if err != nil {
-				return err
-			}
-			PrintJSON(resp)
-			return nil
-		},
-	}
+	return simpleCmd("digest", []string{"d"}, "Rebuild topic map", "digest", nil,
+		func([]string) map[string]any { return map[string]any{"trigger": "manual"} }, getClient)
 }
 
 // ── guard ────────────────────────────────────────────────────────────.
@@ -873,23 +826,8 @@ func dreamStatsRun(getClient func() (*Client, error)) error {
 }
 
 func dreamReviewCmd(getClient func() (*Client, error)) *cobra.Command {
-	return &cobra.Command{
-		Use:     "review",
-		Aliases: []string{"rv"},
-		Short:   "Review Dream links (low confidence, supersedes, recent)",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := getClient()
-			if err != nil {
-				return err
-			}
-			resp, err := c.Post("manage", map[string]any{"action": "dream-review"})
-			if err != nil {
-				return err
-			}
-			PrintJSON(resp)
-			return nil
-		},
-	}
+	return simpleCmd("review", []string{"rv"}, "Review Dream links (low confidence, supersedes, recent)", "manage", nil,
+		func([]string) map[string]any { return map[string]any{"action": "dream-review"} }, getClient)
 }
 
 func dreamResolveCmd(getClient func() (*Client, error)) *cobra.Command {
@@ -969,49 +907,23 @@ func dreamResolveCmd(getClient func() (*Client, error)) *cobra.Command {
 }
 
 func dreamEnableCmd(getClient func() (*Client, error)) *cobra.Command {
-	return &cobra.Command{
-		Use:     "enable",
-		Aliases: []string{"on"},
-		Short:   "Enable Dream Mode (full throttle)",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := getClient()
-			if err != nil {
-				return err
-			}
-			resp, err := c.Post("manage", map[string]any{
+	return simpleCmd("enable", []string{"on"}, "Enable Dream Mode (full throttle)", "manage", nil,
+		func([]string) map[string]any {
+			return map[string]any{
 				"action": "dream-mode",
 				"data":   map[string]any{"mode": "on"},
-			})
-			if err != nil {
-				return err
 			}
-			PrintJSON(resp)
-			return nil
-		},
-	}
+		}, getClient)
 }
 
 func dreamDisableCmd(getClient func() (*Client, error)) *cobra.Command {
-	return &cobra.Command{
-		Use:     "disable",
-		Aliases: []string{"off"},
-		Short:   "Disable Dream Mode (maintenance/dev)",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := getClient()
-			if err != nil {
-				return err
-			}
-			resp, err := c.Post("manage", map[string]any{
+	return simpleCmd("disable", []string{"off"}, "Disable Dream Mode (maintenance/dev)", "manage", nil,
+		func([]string) map[string]any {
+			return map[string]any{
 				"action": "dream-mode",
 				"data":   map[string]any{"mode": "off"},
-			})
-			if err != nil {
-				return err
 			}
-			PrintJSON(resp)
-			return nil
-		},
-	}
+		}, getClient)
 }
 
 func dreamThrottleCmd(getClient func() (*Client, error)) *cobra.Command {
@@ -1173,26 +1085,13 @@ func mcpListRun(getClient func() (*Client, error)) error {
 }
 
 func mcpDeleteCmd(getClient func() (*Client, error)) *cobra.Command {
-	return &cobra.Command{
-		Use:   "delete <client_id>",
-		Short: "Revoke an MCP OAuth client",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := getClient()
-			if err != nil {
-				return err
-			}
-			resp, err := c.Post("manage", map[string]any{
+	return simpleCmd("delete <client_id>", nil, "Revoke an MCP OAuth client", "manage", cobra.ExactArgs(1),
+		func(args []string) map[string]any {
+			return map[string]any{
 				"action": "mcp-client-delete",
 				"data":   map[string]any{"client_id": args[0]},
-			})
-			if err != nil {
-				return err
 			}
-			PrintJSON(resp)
-			return nil
-		},
-	}
+		}, getClient)
 }
 
 // parseDuration parses a duration string. Bare integers are treated as seconds.
@@ -1363,24 +1262,11 @@ func keysListRun(getClient func() (*Client, error)) error {
 }
 
 func keysDeleteCmd(getClient func() (*Client, error)) *cobra.Command {
-	return &cobra.Command{
-		Use:   "delete <id>",
-		Short: "Revoke an API key (soft delete; sets active=false)",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := getClient()
-			if err != nil {
-				return err
-			}
-			resp, err := c.Post("manage", map[string]any{
+	return simpleCmd("delete <id>", nil, "Revoke an API key (soft delete; sets active=false)", "manage", cobra.ExactArgs(1),
+		func(args []string) map[string]any {
+			return map[string]any{
 				"action": "api-key-delete",
 				"data":   map[string]any{"id": args[0]},
-			})
-			if err != nil {
-				return err
 			}
-			PrintJSON(resp)
-			return nil
-		},
-	}
+		}, getClient)
 }

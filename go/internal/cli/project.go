@@ -272,13 +272,15 @@ func (stdinPrompter) askSlug() (string, error) {
 // emitIdentity prints a resolved identity: JSON when piped (the golden shape),
 // two human lines on a TTY.
 func emitIdentity(id resolvedIdentity) {
-	if !StdoutIsTTY() {
-		out, _ := json.MarshalIndent(id, "", "  ")
-		fmt.Println(string(out))
-		return
-	}
-	fmt.Printf("identity: %s\n", id.Identity)
-	fmt.Printf("source:   %s\n", id.Source)
+	// json.Marshal + PrintJSON is byte-for-byte json.MarshalIndent + Println:
+	// MarshalIndent IS Marshal followed by Indent with the same prefix/indent,
+	// and PrintJSON terminates with the same single newline.
+	out, _ := json.Marshal(id)
+	_ = renderOrJSON(out, func([]byte) error {
+		fmt.Printf("identity: %s\n", id.Identity)
+		fmt.Printf("source:   %s\n", id.Source)
+		return nil
+	})
 }
 
 // printProjectTable renders the list view (TTY).
@@ -436,19 +438,17 @@ func runProjectList(getClient func() (*Client, error)) error {
 	if err := checkSettingsEnvelope(resp); err != nil {
 		return err
 	}
-	if !StdoutIsTTY() {
-		PrintJSON(resp)
+	return renderOrJSON(resp, func(resp []byte) error {
+		var payload struct {
+			Projects []projectRow `json:"projects"`
+		}
+		if err := json.Unmarshal(resp, &payload); err != nil {
+			PrintJSON(resp)
+			return err
+		}
+		printProjectTable(payload.Projects)
 		return nil
-	}
-	var payload struct {
-		Projects []projectRow `json:"projects"`
-	}
-	if err := json.Unmarshal(resp, &payload); err != nil {
-		PrintJSON(resp)
-		return err
-	}
-	printProjectTable(payload.Projects)
-	return nil
+	})
 }
 
 func runProjectShow(getClient func() (*Client, error)) error {
@@ -464,18 +464,18 @@ func runProjectShow(getClient func() (*Client, error)) error {
 	if err != nil {
 		return err
 	}
-	if !StdoutIsTTY() {
-		// Pipe: emit the raw server list for the identity (stable, scriptable).
-		out, _ := json.MarshalIndent(map[string]any{"success": true, "identity": id.Identity, "source": id.Source, "projects": rows}, "", "  ")
-		fmt.Println(string(out))
+	// Pipe: the raw server list for the identity (stable, scriptable). Marshal
+	// + PrintJSON is byte-identical to MarshalIndent + Println (map keys are
+	// sorted by encoding/json in both).
+	out, _ := json.Marshal(map[string]any{"success": true, "identity": id.Identity, "source": id.Source, "projects": rows})
+	return renderOrJSON(out, func([]byte) error {
+		if len(rows) == 0 {
+			fmt.Printf("%s (%s)\n  not registered — run: ctx project init\n", id.Identity, id.Source)
+			return nil
+		}
+		printProjectDetail(rows[0])
 		return nil
-	}
-	if len(rows) == 0 {
-		fmt.Printf("%s (%s)\n  not registered — run: ctx project init\n", id.Identity, id.Source)
-		return nil
-	}
-	printProjectDetail(rows[0])
-	return nil
+	})
 }
 
 func runProjectInit(getClient func() (*Client, error), identity, repo, scope string) error {

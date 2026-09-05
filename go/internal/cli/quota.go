@@ -120,32 +120,30 @@ func runQuotaSet(getClient func() (*Client, error), data json.RawMessage) error 
 }
 
 func renderQuota(resp []byte) error {
-	if !StdoutIsTTY() {
-		PrintJSON(resp)
-		return nil
-	}
-	var payload struct {
-		Quota quotaView `json:"quota"`
-	}
-	if err := json.Unmarshal(resp, &payload); err != nil {
-		PrintJSON(resp)
-		return err
-	}
-	q := payload.Quota
-	w := tabwriter.NewWriter(os.Stdout, 2, 4, 2, ' ', 0)
-	_, _ = fmt.Fprintf(w, "scope\t%s\n", q.Scope)
-	if q.Unlimited {
-		_, _ = fmt.Fprintf(w, "quota\tunlimited (no policy)\n")
+	return renderOrJSON(resp, func(resp []byte) error {
+		var payload struct {
+			Quota quotaView `json:"quota"`
+		}
+		if err := json.Unmarshal(resp, &payload); err != nil {
+			PrintJSON(resp)
+			return err
+		}
+		q := payload.Quota
+		w := tabwriter.NewWriter(os.Stdout, 2, 4, 2, ' ', 0)
+		_, _ = fmt.Fprintf(w, "scope\t%s\n", q.Scope)
+		if q.Unlimited {
+			_, _ = fmt.Fprintf(w, "quota\tunlimited (no policy)\n")
+			_ = w.Flush()
+			return nil
+		}
+		_, _ = fmt.Fprintf(w, "enabled\t%v\n", q.Enabled)
+		_, _ = fmt.Fprintf(w, "daily cost\t%s\n", quotaLimit(q.DailyCostUSD))
+		_, _ = fmt.Fprintf(w, "monthly cost\t%s\n", quotaLimit(q.MonthlyCostUSD))
+		_, _ = fmt.Fprintf(w, "daily calls\t%s\n", quotaCallLimit(q.DailyCalls))
+		_, _ = fmt.Fprintf(w, "on exceed\t%s\n", q.OnExceed)
 		_ = w.Flush()
 		return nil
-	}
-	_, _ = fmt.Fprintf(w, "enabled\t%v\n", q.Enabled)
-	_, _ = fmt.Fprintf(w, "daily cost\t%s\n", quotaLimit(q.DailyCostUSD))
-	_, _ = fmt.Fprintf(w, "monthly cost\t%s\n", quotaLimit(q.MonthlyCostUSD))
-	_, _ = fmt.Fprintf(w, "daily calls\t%s\n", quotaCallLimit(q.DailyCalls))
-	_, _ = fmt.Fprintf(w, "on exceed\t%s\n", q.OnExceed)
-	_ = w.Flush()
-	return nil
+	})
 }
 
 func quotaLimit(v *float64) string {

@@ -45,6 +45,24 @@ func PrintJSON(data []byte) {
 	_, _ = os.Stdout.Write(buf.Bytes())
 }
 
+// renderOrJSON is the ONE place where the CLI decides between the two output
+// contracts: piped/redirected stdout gets the server's JSON verbatim (the
+// machine contract every script and `| jq` relies on), an interactive terminal
+// gets render's human form. Every command that renders a response goes through
+// here, so the decision cannot drift apart across commands — the shape used to
+// stand hand-written at 38 places.
+//
+// render is only called on a TTY; its error is the command's error. A renderer
+// that cannot parse the response prints the raw JSON itself and returns nil,
+// exactly as the hand-written branches did.
+func renderOrJSON(resp []byte, render func(resp []byte) error) error {
+	if !StdoutIsTTY() {
+		PrintJSON(resp)
+		return nil
+	}
+	return render(resp)
+}
+
 // PrintRaw writes raw bytes to stdout.
 func PrintRaw(data []byte) {
 	_, _ = os.Stdout.Write(data)

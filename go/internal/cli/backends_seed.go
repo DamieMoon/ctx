@@ -646,14 +646,20 @@ func seedCreateRow(c *Client, r seedRow) (bool, error) {
 }
 
 func printSeedResult(res seedResult) error {
-	if !StdoutIsTTY() {
-		out, err := json.Marshal(res)
-		if err != nil {
-			return err
-		}
-		PrintJSON(out)
-		return nil
+	// The seed result is built locally, not received: it has to be marshalled
+	// before the pipe branch can print it. Marshalling first (instead of inside
+	// the branch) is the one ordering change — seedResult holds a bool, a
+	// string and four []string (:116-126), so json.Marshal has no failing input.
+	out, err := json.Marshal(res)
+	if err != nil {
+		return err
 	}
+	return renderOrJSON(out, func([]byte) error {
+		return printSeedResultHuman(res)
+	})
+}
+
+func printSeedResultHuman(res seedResult) error {
 	fmt.Printf("seeded %s: %d created, %d already present\n",
 		backends.GlobalScope, len(res.Created), len(res.Skipped))
 	if len(res.Created) > 0 {

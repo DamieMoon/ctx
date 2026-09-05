@@ -234,50 +234,48 @@ func formatBySource(bySource map[string]int) string {
 }
 
 func printClassifyStatus(resp json.RawMessage) error {
-	if !StdoutIsTTY() {
-		PrintJSON(resp)
+	return renderOrJSON(resp, func(resp []byte) error {
+		var v classifyStatusView
+		if err := json.Unmarshal(resp, &v); err != nil {
+			PrintJSON(resp)
+			return err
+		}
+
+		state := "idle"
+		switch {
+		case v.Run.Running && v.Run.DryRun:
+			state = "running (dry-run)"
+		case v.Run.Running:
+			state = "running"
+		case v.Run.Aborted:
+			state = "ABORTED: " + v.Run.LastError
+		case v.Run.StartedAt != "":
+			state = "finished"
+		}
+		fmt.Printf("scope: %s   run: %s\n", v.Scope, state)
+
+		if line := formatBySource(v.BySource); line != "" {
+			fmt.Printf("by-source: %s\n", line)
+		}
+
+		if v.Run.Scanned > 0 || v.Run.Running {
+			verb := "upgraded"
+			if v.Run.DryRun {
+				verb = "would-upgrade"
+			}
+			fmt.Printf("scanned: %d   %s: %d   discarded: %d\n", v.Run.Scanned, verb, v.Run.Upgraded, v.Run.Discarded)
+		}
+
+		if len(v.Run.Samples) > 0 {
+			w := tabwriter.NewWriter(os.Stdout, 2, 4, 2, ' ', 0)
+			_, _ = fmt.Fprintln(w, "KIND\tTITLE\tID")
+			for _, s := range v.Run.Samples {
+				_, _ = fmt.Fprintf(w, "%s\t%s\t%s\n", s.Kind, truncate(s.Title, 48), s.ID)
+			}
+			_ = w.Flush()
+		}
 		return nil
-	}
-	var v classifyStatusView
-	if err := json.Unmarshal(resp, &v); err != nil {
-		PrintJSON(resp)
-		return err
-	}
-
-	state := "idle"
-	switch {
-	case v.Run.Running && v.Run.DryRun:
-		state = "running (dry-run)"
-	case v.Run.Running:
-		state = "running"
-	case v.Run.Aborted:
-		state = "ABORTED: " + v.Run.LastError
-	case v.Run.StartedAt != "":
-		state = "finished"
-	}
-	fmt.Printf("scope: %s   run: %s\n", v.Scope, state)
-
-	if line := formatBySource(v.BySource); line != "" {
-		fmt.Printf("by-source: %s\n", line)
-	}
-
-	if v.Run.Scanned > 0 || v.Run.Running {
-		verb := "upgraded"
-		if v.Run.DryRun {
-			verb = "would-upgrade"
-		}
-		fmt.Printf("scanned: %d   %s: %d   discarded: %d\n", v.Run.Scanned, verb, v.Run.Upgraded, v.Run.Discarded)
-	}
-
-	if len(v.Run.Samples) > 0 {
-		w := tabwriter.NewWriter(os.Stdout, 2, 4, 2, ' ', 0)
-		_, _ = fmt.Fprintln(w, "KIND\tTITLE\tID")
-		for _, s := range v.Run.Samples {
-			_, _ = fmt.Fprintf(w, "%s\t%s\t%s\n", s.Kind, truncate(s.Title, 48), s.ID)
-		}
-		_ = w.Flush()
-	}
-	return nil
+	})
 }
 
 // blocksRun binds one blocks-* manage action to the renderer of its family:
@@ -329,49 +327,47 @@ func blocksManageCall(getClient func() (*Client, error), action string, data jso
 }
 
 func printAuditStatus(resp json.RawMessage) error {
-	if !StdoutIsTTY() {
-		PrintJSON(resp)
-		return nil
-	}
-	var v auditStatusView
-	if err := json.Unmarshal(resp, &v); err != nil {
-		PrintJSON(resp)
-		return err
-	}
-
-	state := "idle"
-	switch {
-	case v.Run.Running && v.Run.DryRun:
-		state = "running (dry-run)"
-	case v.Run.Running:
-		state = "running"
-	case v.Run.Aborted:
-		state = "ABORTED: " + v.Run.LastError
-	case v.Run.StartedAt != "":
-		state = "finished"
-	}
-	fmt.Printf("scope: %s   pending: %d   run: %s\n", v.Scope, v.Pending, state)
-
-	if line := formatBySource(v.BySource); line != "" {
-		fmt.Printf("by-source: %s\n", line)
-	}
-
-	if v.Run.Processed > 0 || v.Run.Running {
-		fmt.Printf("processed: %d   credentials: %d   personal: %d   internal: %d   no-verdict: %d   discarded: %d\n",
-			v.Run.Processed, v.Run.KeptCredentials, v.Run.ToPersonal, v.Run.ToInternal,
-			v.Run.NoVerdict, v.Run.Discarded)
-	}
-
-	if len(v.Run.Samples) > 0 {
-		w := tabwriter.NewWriter(os.Stdout, 2, 4, 2, ' ', 0)
-		_, _ = fmt.Fprintln(w, "VERDICT\tCRED\tPERS\tTITLE\tID")
-		for _, s := range v.Run.Samples {
-			_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
-				s.Verdict, boolMark(s.Credentials), boolMark(s.Personal), truncate(s.Title, 48), s.ID)
+	return renderOrJSON(resp, func(resp []byte) error {
+		var v auditStatusView
+		if err := json.Unmarshal(resp, &v); err != nil {
+			PrintJSON(resp)
+			return err
 		}
-		_ = w.Flush()
-	}
-	return nil
+
+		state := "idle"
+		switch {
+		case v.Run.Running && v.Run.DryRun:
+			state = "running (dry-run)"
+		case v.Run.Running:
+			state = "running"
+		case v.Run.Aborted:
+			state = "ABORTED: " + v.Run.LastError
+		case v.Run.StartedAt != "":
+			state = "finished"
+		}
+		fmt.Printf("scope: %s   pending: %d   run: %s\n", v.Scope, v.Pending, state)
+
+		if line := formatBySource(v.BySource); line != "" {
+			fmt.Printf("by-source: %s\n", line)
+		}
+
+		if v.Run.Processed > 0 || v.Run.Running {
+			fmt.Printf("processed: %d   credentials: %d   personal: %d   internal: %d   no-verdict: %d   discarded: %d\n",
+				v.Run.Processed, v.Run.KeptCredentials, v.Run.ToPersonal, v.Run.ToInternal,
+				v.Run.NoVerdict, v.Run.Discarded)
+		}
+
+		if len(v.Run.Samples) > 0 {
+			w := tabwriter.NewWriter(os.Stdout, 2, 4, 2, ' ', 0)
+			_, _ = fmt.Fprintln(w, "VERDICT\tCRED\tPERS\tTITLE\tID")
+			for _, s := range v.Run.Samples {
+				_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
+					s.Verdict, boolMark(s.Credentials), boolMark(s.Personal), truncate(s.Title, 48), s.ID)
+			}
+			_ = w.Flush()
+		}
+		return nil
+	})
 }
 
 func boolMark(b *bool) string {

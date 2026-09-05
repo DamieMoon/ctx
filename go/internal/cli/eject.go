@@ -84,27 +84,25 @@ func runEject(getClient func() (*Client, error), data json.RawMessage) error {
 	if err := checkSettingsEnvelope(resp); err != nil {
 		return err
 	}
-	if !StdoutIsTTY() {
-		PrintJSON(resp)
+	return renderOrJSON(resp, func(resp []byte) error {
+		// The response still nests the view under "gaming" (legacy wire key, kept
+		// byte-identical for client compat, N19).
+		var payload struct {
+			Gaming ejectView `json:"gaming"`
+		}
+		if err := json.Unmarshal(resp, &payload); err != nil {
+			PrintJSON(resp)
+			return err
+		}
+		g := payload.Gaming
+		state := "off"
+		if g.Active {
+			state = "on"
+		}
+		w := tabwriter.NewWriter(os.Stdout, 2, 4, 2, ' ', 0)
+		_, _ = fmt.Fprintf(w, "eject\t%s\n", state)
+		_, _ = fmt.Fprintf(w, "disabled backends\t%s\n", strings.Join(g.DisabledBackends, ", "))
+		_ = w.Flush()
 		return nil
-	}
-	// The response still nests the view under "gaming" (legacy wire key, kept
-	// byte-identical for client compat, N19).
-	var payload struct {
-		Gaming ejectView `json:"gaming"`
-	}
-	if err := json.Unmarshal(resp, &payload); err != nil {
-		PrintJSON(resp)
-		return err
-	}
-	g := payload.Gaming
-	state := "off"
-	if g.Active {
-		state = "on"
-	}
-	w := tabwriter.NewWriter(os.Stdout, 2, 4, 2, ' ', 0)
-	_, _ = fmt.Fprintf(w, "eject\t%s\n", state)
-	_, _ = fmt.Fprintf(w, "disabled backends\t%s\n", strings.Join(g.DisabledBackends, ", "))
-	_ = w.Flush()
-	return nil
+	})
 }

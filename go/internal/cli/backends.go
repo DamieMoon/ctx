@@ -185,32 +185,30 @@ func runBackendsList(getClient func() (*Client, error)) error {
 	if err := checkSettingsEnvelope(resp); err != nil {
 		return err
 	}
-	if !StdoutIsTTY() {
-		PrintJSON(resp)
+	return renderOrJSON(resp, func(resp []byte) error {
+		var payload struct {
+			Backends []backendRow `json:"backends"`
+		}
+		if err := json.Unmarshal(resp, &payload); err != nil {
+			PrintJSON(resp)
+			return err
+		}
+		w := tabwriter.NewWriter(os.Stdout, 2, 4, 2, ' ', 0)
+		_, _ = fmt.Fprintln(w, "NAME\tSTATE\tTRUST\tLOCALITY\tPRIO\tROLES\tID")
+		for _, b := range payload.Backends {
+			state := b.EffectiveState
+			if b.CooldownS > 0 {
+				state = fmt.Sprintf("%s(%ds)", state, b.CooldownS)
+			}
+			if b.LastError != "" {
+				state += " !" + b.LastError
+			}
+			_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%d\t%s\t%s\n",
+				b.Name, state, b.Trust, b.Locality, b.Priority, strings.Join(b.Roles, ","), b.ID)
+		}
+		_ = w.Flush()
 		return nil
-	}
-	var payload struct {
-		Backends []backendRow `json:"backends"`
-	}
-	if err := json.Unmarshal(resp, &payload); err != nil {
-		PrintJSON(resp)
-		return err
-	}
-	w := tabwriter.NewWriter(os.Stdout, 2, 4, 2, ' ', 0)
-	_, _ = fmt.Fprintln(w, "NAME\tSTATE\tTRUST\tLOCALITY\tPRIO\tROLES\tID")
-	for _, b := range payload.Backends {
-		state := b.EffectiveState
-		if b.CooldownS > 0 {
-			state = fmt.Sprintf("%s(%ds)", state, b.CooldownS)
-		}
-		if b.LastError != "" {
-			state += " !" + b.LastError
-		}
-		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%d\t%s\t%s\n",
-			b.Name, state, b.Trust, b.Locality, b.Priority, strings.Join(b.Roles, ","), b.ID)
-	}
-	_ = w.Flush()
-	return nil
+	})
 }
 
 func runBackendsMutate(getClient func() (*Client, error), action, id string, data json.RawMessage) error {

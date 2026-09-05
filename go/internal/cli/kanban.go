@@ -140,18 +140,16 @@ func runKanban(getClient func() (*Client, error), project string, limit int) err
 	// Pipe / non-TTY: the machine contract — forward the server board verbatim
 	// (pty NOTE §7-W10: a pty would elide the TUI's box-drawing chars, so the
 	// non-TTY branch is the JSON path, never a headless render).
-	if !StdoutIsTTY() {
-		PrintJSON(resp)
-		return nil
-	}
-	board, err := parseBoard(resp)
-	if err != nil {
+	return renderOrJSON(resp, func(resp []byte) error {
+		board, err := parseBoard(resp)
+		if err != nil {
+			return err
+		}
+		m := newBoardModel(board, lipgloss.DefaultRenderer())
+		p := tea.NewProgram(m, tea.WithAltScreen())
+		_, err = p.Run()
 		return err
-	}
-	m := newBoardModel(board, lipgloss.DefaultRenderer())
-	p := tea.NewProgram(m, tea.WithAltScreen())
-	_, err = p.Run()
-	return err
+	})
 }
 
 // ── bubbletea model (View() is golden-tested non-pty; §7-W10) ──────────────────.

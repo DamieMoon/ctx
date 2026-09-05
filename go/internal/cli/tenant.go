@@ -122,29 +122,27 @@ func tenantListRun(getClient func() (*Client, error)) error {
 	if err != nil {
 		return err
 	}
-	if !StdoutIsTTY() {
-		PrintJSON(resp)
-		return nil
-	}
-	var payload struct {
-		Tenants []tenantView `json:"tenants"`
-	}
-	if err := json.Unmarshal(resp, &payload); err != nil {
-		PrintJSON(resp)
-		return err
-	}
-	if len(payload.Tenants) == 0 {
-		fmt.Println("No tenants.")
-		return nil
-	}
-	w := tabwriter.NewWriter(os.Stdout, 2, 4, 2, ' ', 0)
-	_, _ = fmt.Fprintln(w, "ID\tSLUG\tSTATUS\tSCOPES\tKEYS\tCREATED\tDISPLAY NAME")
-	for _, t := range payload.Tenants {
-		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			t.ID, t.Slug, t.Status, limitCell(t.MaxScopes), limitCell(t.MaxKeys),
-			dateCell(t.CreatedAt), t.DisplayName)
-	}
-	return w.Flush()
+	return renderOrJSON(resp, func(resp []byte) error {
+		var payload struct {
+			Tenants []tenantView `json:"tenants"`
+		}
+		if err := json.Unmarshal(resp, &payload); err != nil {
+			PrintJSON(resp)
+			return err
+		}
+		if len(payload.Tenants) == 0 {
+			fmt.Println("No tenants.")
+			return nil
+		}
+		w := tabwriter.NewWriter(os.Stdout, 2, 4, 2, ' ', 0)
+		_, _ = fmt.Fprintln(w, "ID\tSLUG\tSTATUS\tSCOPES\tKEYS\tCREATED\tDISPLAY NAME")
+		for _, t := range payload.Tenants {
+			_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				t.ID, t.Slug, t.Status, limitCell(t.MaxScopes), limitCell(t.MaxKeys),
+				dateCell(t.CreatedAt), t.DisplayName)
+		}
+		return w.Flush()
+	})
 }
 
 func tenantGetCmd(getClient func() (*Client, error)) *cobra.Command {
@@ -396,19 +394,17 @@ func tenantGrantDeleteCmd(getClient func() (*Client, error)) *cobra.Command {
 // same convention as `ctx quota` and `ctx dream stats`.
 
 func renderTenant(resp []byte) error {
-	if !StdoutIsTTY() {
-		PrintJSON(resp)
+	return renderOrJSON(resp, func(resp []byte) error {
+		var payload struct {
+			Tenant tenantView `json:"tenant"`
+		}
+		if err := json.Unmarshal(resp, &payload); err != nil {
+			PrintJSON(resp)
+			return err
+		}
+		writeTenantKV(payload.Tenant)
 		return nil
-	}
-	var payload struct {
-		Tenant tenantView `json:"tenant"`
-	}
-	if err := json.Unmarshal(resp, &payload); err != nil {
-		PrintJSON(resp)
-		return err
-	}
-	writeTenantKV(payload.Tenant)
-	return nil
+	})
 }
 
 func writeTenantKV(t tenantView) {
@@ -424,72 +420,66 @@ func writeTenantKV(t tenantView) {
 }
 
 func renderTenantCreate(resp []byte) error {
-	if !StdoutIsTTY() {
-		PrintJSON(resp)
+	return renderOrJSON(resp, func(resp []byte) error {
+		var payload struct {
+			Tenant     tenantView `json:"tenant"`
+			Scope      string     `json:"scope"`
+			OwnerKeyID string     `json:"owner_key_id"`
+			OwnerKey   string     `json:"owner_key"`
+		}
+		if err := json.Unmarshal(resp, &payload); err != nil {
+			PrintJSON(resp)
+			return err
+		}
+		fmt.Printf("Tenant created: %s\n\n", payload.Tenant.DisplayName)
+		writeTenantKV(payload.Tenant)
+		fmt.Printf("\n  initial scope: %s\n", payload.Scope)
+		fmt.Printf("  owner_key_id:  %s\n", payload.OwnerKeyID)
+		fmt.Printf("  owner_key:     %s\n", payload.OwnerKey)
+		fmt.Printf("\n  Save the owner key now — it cannot be retrieved later.\n")
 		return nil
-	}
-	var payload struct {
-		Tenant     tenantView `json:"tenant"`
-		Scope      string     `json:"scope"`
-		OwnerKeyID string     `json:"owner_key_id"`
-		OwnerKey   string     `json:"owner_key"`
-	}
-	if err := json.Unmarshal(resp, &payload); err != nil {
-		PrintJSON(resp)
-		return err
-	}
-	fmt.Printf("Tenant created: %s\n\n", payload.Tenant.DisplayName)
-	writeTenantKV(payload.Tenant)
-	fmt.Printf("\n  initial scope: %s\n", payload.Scope)
-	fmt.Printf("  owner_key_id:  %s\n", payload.OwnerKeyID)
-	fmt.Printf("  owner_key:     %s\n", payload.OwnerKey)
-	fmt.Printf("\n  Save the owner key now — it cannot be retrieved later.\n")
-	return nil
+	})
 }
 
 func renderTenantUsage(resp []byte) error {
-	if !StdoutIsTTY() {
-		PrintJSON(resp)
+	return renderOrJSON(resp, func(resp []byte) error {
+		var payload struct {
+			Usage tenantUsageView `json:"usage"`
+		}
+		if err := json.Unmarshal(resp, &payload); err != nil {
+			PrintJSON(resp)
+			return err
+		}
+		u := payload.Usage
+		w := tabwriter.NewWriter(os.Stdout, 2, 4, 2, ' ', 0)
+		_, _ = fmt.Fprintf(w, "tenant\t%s\n", u.TenantID)
+		_, _ = fmt.Fprintf(w, "scopes\t%d / %s\n", u.ScopeCount, limitCell(u.MaxScopes))
+		_, _ = fmt.Fprintf(w, "active keys\t%d / %s\n", u.KeyCount, limitCell(u.MaxKeys))
+		_ = w.Flush()
 		return nil
-	}
-	var payload struct {
-		Usage tenantUsageView `json:"usage"`
-	}
-	if err := json.Unmarshal(resp, &payload); err != nil {
-		PrintJSON(resp)
-		return err
-	}
-	u := payload.Usage
-	w := tabwriter.NewWriter(os.Stdout, 2, 4, 2, ' ', 0)
-	_, _ = fmt.Fprintf(w, "tenant\t%s\n", u.TenantID)
-	_, _ = fmt.Fprintf(w, "scopes\t%d / %s\n", u.ScopeCount, limitCell(u.MaxScopes))
-	_, _ = fmt.Fprintf(w, "active keys\t%d / %s\n", u.KeyCount, limitCell(u.MaxKeys))
-	_ = w.Flush()
-	return nil
+	})
 }
 
 func renderTenantGrants(resp []byte) error {
-	if !StdoutIsTTY() {
-		PrintJSON(resp)
-		return nil
-	}
-	var payload struct {
-		Grants []tenantGrantView `json:"grants"`
-	}
-	if err := json.Unmarshal(resp, &payload); err != nil {
-		PrintJSON(resp)
-		return err
-	}
-	if len(payload.Grants) == 0 {
-		fmt.Println("No grants.")
-		return nil
-	}
-	w := tabwriter.NewWriter(os.Stdout, 2, 4, 2, ' ', 0)
-	_, _ = fmt.Fprintln(w, "ID\tGRANTEE TENANT\tSCOPE\tCREATED")
-	for _, g := range payload.Grants {
-		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", g.ID, g.GranteeTenant, g.GrantedScope, dateCell(g.CreatedAt))
-	}
-	return w.Flush()
+	return renderOrJSON(resp, func(resp []byte) error {
+		var payload struct {
+			Grants []tenantGrantView `json:"grants"`
+		}
+		if err := json.Unmarshal(resp, &payload); err != nil {
+			PrintJSON(resp)
+			return err
+		}
+		if len(payload.Grants) == 0 {
+			fmt.Println("No grants.")
+			return nil
+		}
+		w := tabwriter.NewWriter(os.Stdout, 2, 4, 2, ' ', 0)
+		_, _ = fmt.Fprintln(w, "ID\tGRANTEE TENANT\tSCOPE\tCREATED")
+		for _, g := range payload.Grants {
+			_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", g.ID, g.GranteeTenant, g.GrantedScope, dateCell(g.CreatedAt))
+		}
+		return w.Flush()
+	})
 }
 
 // ── helpers ──────────────────────────────────────────────────────────.

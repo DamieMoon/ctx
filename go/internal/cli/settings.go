@@ -173,19 +173,17 @@ func runSettingsList(getClient func() (*Client, error)) error {
 	if err := checkSettingsEnvelope(resp); err != nil {
 		return err
 	}
-	if !StdoutIsTTY() {
-		PrintJSON(resp)
+	return renderOrJSON(resp, func(resp []byte) error {
+		var payload struct {
+			Settings []settingRow `json:"settings"`
+		}
+		if err := json.Unmarshal(resp, &payload); err != nil {
+			PrintJSON(resp)
+			return err
+		}
+		printSettingsTable(payload.Settings)
 		return nil
-	}
-	var payload struct {
-		Settings []settingRow `json:"settings"`
-	}
-	if err := json.Unmarshal(resp, &payload); err != nil {
-		PrintJSON(resp)
-		return err
-	}
-	printSettingsTable(payload.Settings)
-	return nil
+	})
 }
 
 // printSettingsTable renders the TTY view: overrides first matters less than
@@ -223,49 +221,47 @@ func runSettingsGet(getClient func() (*Client, error), key string) error {
 	if err := checkSettingsEnvelope(resp); err != nil {
 		return err
 	}
-	if !StdoutIsTTY() {
-		PrintJSON(resp)
-		return nil
-	}
-	var payload struct {
-		Setting settingRow        `json:"setting"`
-		Audit   []settingAuditRow `json:"audit"`
-	}
-	if err := json.Unmarshal(resp, &payload); err != nil {
-		PrintJSON(resp)
-		return err
-	}
-	s := payload.Setting
-	fmt.Printf("%s\n", s.Key)
-	if s.Desc != "" {
-		fmt.Printf("  %s\n", s.Desc)
-	}
-	fmt.Printf("  value:      %v\n", renderCell(s.Value))
-	fmt.Printf("  source:     %s\n", s.Source)
-	fmt.Printf("  default:    %v\n", renderCell(s.Default))
-	fmt.Printf("  type:       %s\n", s.Type)
-	fmt.Printf("  mutability: %s\n", s.Mutability)
-	if s.EnvVar != "" {
-		fmt.Printf("  env var:    %s\n", s.EnvVar)
-	}
-	if s.Sensitive {
-		fmt.Printf("  sensitive:  true (values masked everywhere)\n")
-	}
-	if len(payload.Audit) > 0 {
-		fmt.Println("  audit:")
-		for _, a := range payload.Audit {
-			actor := "(sql)"
-			if a.ActorLabel != nil {
-				actor = *a.ActorLabel
-			}
-			detail := ""
-			if a.Action == "set" {
-				detail = fmt.Sprintf(" %s → %s", compactRaw(a.OldValue), compactRaw(a.NewValue))
-			}
-			fmt.Printf("    %s  %s%s  by %s (%s)\n", a.CreatedAt, a.Action, detail, actor, a.Via)
+	return renderOrJSON(resp, func(resp []byte) error {
+		var payload struct {
+			Setting settingRow        `json:"setting"`
+			Audit   []settingAuditRow `json:"audit"`
 		}
-	}
-	return nil
+		if err := json.Unmarshal(resp, &payload); err != nil {
+			PrintJSON(resp)
+			return err
+		}
+		s := payload.Setting
+		fmt.Printf("%s\n", s.Key)
+		if s.Desc != "" {
+			fmt.Printf("  %s\n", s.Desc)
+		}
+		fmt.Printf("  value:      %v\n", renderCell(s.Value))
+		fmt.Printf("  source:     %s\n", s.Source)
+		fmt.Printf("  default:    %v\n", renderCell(s.Default))
+		fmt.Printf("  type:       %s\n", s.Type)
+		fmt.Printf("  mutability: %s\n", s.Mutability)
+		if s.EnvVar != "" {
+			fmt.Printf("  env var:    %s\n", s.EnvVar)
+		}
+		if s.Sensitive {
+			fmt.Printf("  sensitive:  true (values masked everywhere)\n")
+		}
+		if len(payload.Audit) > 0 {
+			fmt.Println("  audit:")
+			for _, a := range payload.Audit {
+				actor := "(sql)"
+				if a.ActorLabel != nil {
+					actor = *a.ActorLabel
+				}
+				detail := ""
+				if a.Action == "set" {
+					detail = fmt.Sprintf(" %s → %s", compactRaw(a.OldValue), compactRaw(a.NewValue))
+				}
+				fmt.Printf("    %s  %s%s  by %s (%s)\n", a.CreatedAt, a.Action, detail, actor, a.Via)
+			}
+		}
+		return nil
+	})
 }
 
 // compactRaw renders an audit JSONB value; NULL (create/unset side) as "∅".
@@ -292,31 +288,29 @@ func runSettingsSet(getClient func() (*Client, error), key, value string, confir
 	if err := checkSettingsEnvelope(resp); err != nil {
 		return err
 	}
-	if !StdoutIsTTY() {
-		PrintJSON(resp)
+	return renderOrJSON(resp, func(resp []byte) error {
+		var payload struct {
+			Key      string `json:"key"`
+			Value    any    `json:"value"`
+			Source   string `json:"source"`
+			Previous struct {
+				Value  any    `json:"value"`
+				Source string `json:"source"`
+			} `json:"previous"`
+			Warnings []string `json:"warnings"`
+		}
+		if err := json.Unmarshal(resp, &payload); err != nil {
+			PrintJSON(resp)
+			return err
+		}
+		fmt.Printf("%s = %v (%s; was %v from %s)\n",
+			payload.Key, renderCell(payload.Value), payload.Source,
+			renderCell(payload.Previous.Value), payload.Previous.Source)
+		for _, warn := range payload.Warnings {
+			Errorf("warning: %s", warn)
+		}
 		return nil
-	}
-	var payload struct {
-		Key      string `json:"key"`
-		Value    any    `json:"value"`
-		Source   string `json:"source"`
-		Previous struct {
-			Value  any    `json:"value"`
-			Source string `json:"source"`
-		} `json:"previous"`
-		Warnings []string `json:"warnings"`
-	}
-	if err := json.Unmarshal(resp, &payload); err != nil {
-		PrintJSON(resp)
-		return err
-	}
-	fmt.Printf("%s = %v (%s; was %v from %s)\n",
-		payload.Key, renderCell(payload.Value), payload.Source,
-		renderCell(payload.Previous.Value), payload.Previous.Source)
-	for _, warn := range payload.Warnings {
-		Errorf("warning: %s", warn)
-	}
-	return nil
+	})
 }
 
 func runSettingsUnset(getClient func() (*Client, error), key string) error {
@@ -331,19 +325,17 @@ func runSettingsUnset(getClient func() (*Client, error), key string) error {
 	if err := checkSettingsEnvelope(resp); err != nil {
 		return err
 	}
-	if !StdoutIsTTY() {
-		PrintJSON(resp)
+	return renderOrJSON(resp, func(resp []byte) error {
+		var payload struct {
+			Key    string `json:"key"`
+			Value  any    `json:"value"`
+			Source string `json:"source"`
+		}
+		if err := json.Unmarshal(resp, &payload); err != nil {
+			PrintJSON(resp)
+			return err
+		}
+		fmt.Printf("%s reverted to %v (%s)\n", payload.Key, renderCell(payload.Value), payload.Source)
 		return nil
-	}
-	var payload struct {
-		Key    string `json:"key"`
-		Value  any    `json:"value"`
-		Source string `json:"source"`
-	}
-	if err := json.Unmarshal(resp, &payload); err != nil {
-		PrintJSON(resp)
-		return err
-	}
-	fmt.Printf("%s reverted to %v (%s)\n", payload.Key, renderCell(payload.Value), payload.Source)
-	return nil
+	})
 }

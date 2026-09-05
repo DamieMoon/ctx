@@ -146,19 +146,17 @@ func runTypesSet(getClient func() (*Client, error), name string, payload map[str
 	if err := checkSettingsEnvelope(resp); err != nil {
 		return err
 	}
-	if !StdoutIsTTY() {
-		PrintJSON(resp)
+	return renderOrJSON(resp, func(resp []byte) error {
+		var out struct {
+			Type typeRow `json:"type"`
+		}
+		if err := json.Unmarshal(resp, &out); err != nil {
+			PrintJSON(resp)
+			return err
+		}
+		fmt.Printf("set %s (%s)\n", out.Type.Name, out.Type.Source)
 		return nil
-	}
-	var out struct {
-		Type typeRow `json:"type"`
-	}
-	if err := json.Unmarshal(resp, &out); err != nil {
-		PrintJSON(resp)
-		return err
-	}
-	fmt.Printf("set %s (%s)\n", out.Type.Name, out.Type.Source)
-	return nil
+	})
 }
 
 func runTypesRm(getClient func() (*Client, error), name string) error {
@@ -173,12 +171,10 @@ func runTypesRm(getClient func() (*Client, error), name string) error {
 	if err := checkSettingsEnvelope(resp); err != nil {
 		return err
 	}
-	if !StdoutIsTTY() {
-		PrintJSON(resp)
+	return renderOrJSON(resp, func(resp []byte) error {
+		fmt.Printf("deleted %s\n", name)
 		return nil
-	}
-	fmt.Printf("deleted %s\n", name)
-	return nil
+	})
 }
 
 func runTypesList(getClient func() (*Client, error)) error {
@@ -193,19 +189,17 @@ func runTypesList(getClient func() (*Client, error)) error {
 	if err := checkSettingsEnvelope(resp); err != nil { // shared success/error frame
 		return err
 	}
-	if !StdoutIsTTY() {
-		PrintJSON(resp)
+	return renderOrJSON(resp, func(resp []byte) error {
+		var payload struct {
+			Types []typeRow `json:"types"`
+		}
+		if err := json.Unmarshal(resp, &payload); err != nil {
+			PrintJSON(resp)
+			return err
+		}
+		printTypesTable(payload.Types)
 		return nil
-	}
-	var payload struct {
-		Types []typeRow `json:"types"`
-	}
-	if err := json.Unmarshal(resp, &payload); err != nil {
-		PrintJSON(resp)
-		return err
-	}
-	printTypesTable(payload.Types)
-	return nil
+	})
 }
 
 func printTypesTable(rows []typeRow) {
@@ -233,29 +227,27 @@ func runTypesGet(getClient func() (*Client, error), name string) error {
 	if err := checkSettingsEnvelope(resp); err != nil {
 		return err
 	}
-	if !StdoutIsTTY() {
-		PrintJSON(resp)
+	return renderOrJSON(resp, func(resp []byte) error {
+		var payload struct {
+			Type typeRow `json:"type"`
+		}
+		if err := json.Unmarshal(resp, &payload); err != nil {
+			PrintJSON(resp)
+			return err
+		}
+		t := payload.Type
+		fmt.Printf("%s\n", t.Name)
+		fmt.Printf("  source:       %s\n", t.Source)
+		fmt.Printf("  scope:        %s\n", t.Scope)
+		fmt.Printf("  builtin:      %v\n", t.Builtin)
+		fmt.Printf("  is_default:   %v\n", t.IsDefault)
+		if t.DisplayName != "" {
+			fmt.Printf("  display_name: %s\n", t.DisplayName)
+		}
+		if t.Description != "" {
+			fmt.Printf("  description:  %s\n", t.Description)
+		}
+		fmt.Printf("  config:       %s\n", compactRaw(t.Config))
 		return nil
-	}
-	var payload struct {
-		Type typeRow `json:"type"`
-	}
-	if err := json.Unmarshal(resp, &payload); err != nil {
-		PrintJSON(resp)
-		return err
-	}
-	t := payload.Type
-	fmt.Printf("%s\n", t.Name)
-	fmt.Printf("  source:       %s\n", t.Source)
-	fmt.Printf("  scope:        %s\n", t.Scope)
-	fmt.Printf("  builtin:      %v\n", t.Builtin)
-	fmt.Printf("  is_default:   %v\n", t.IsDefault)
-	if t.DisplayName != "" {
-		fmt.Printf("  display_name: %s\n", t.DisplayName)
-	}
-	if t.Description != "" {
-		fmt.Printf("  description:  %s\n", t.Description)
-	}
-	fmt.Printf("  config:       %s\n", compactRaw(t.Config))
-	return nil
+	})
 }

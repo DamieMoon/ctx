@@ -267,16 +267,14 @@ func runIssuesSync(getClient func() (*Client, error), project string, status boo
 	if err := checkSettingsEnvelope(resp); err != nil {
 		return err
 	}
-	if !StdoutIsTTY() {
-		PrintJSON(resp)
+	return renderOrJSON(resp, func(resp []byte) error {
+		if status {
+			printSyncStatus(resp)
+		} else {
+			printSyncStarted(resp)
+		}
 		return nil
-	}
-	if status {
-		printSyncStatus(resp)
-	} else {
-		printSyncStarted(resp)
-	}
-	return nil
+	})
 }
 
 // syncRun mirrors the run-state fields the CLI renders (store.SyncRunRow / the
@@ -417,23 +415,21 @@ func runIssuesListFiltered(_ *cobra.Command, getClient func() (*Client, error), 
 	if err := checkSettingsEnvelope(resp); err != nil {
 		return err
 	}
-	if !StdoutIsTTY() {
-		PrintJSON(resp)
+	return renderOrJSON(resp, func(resp []byte) error {
+		var payload struct {
+			Issues []issueListRow `json:"issues"`
+			Cursor *string        `json:"cursor"`
+		}
+		if err := json.Unmarshal(resp, &payload); err != nil {
+			PrintJSON(resp)
+			return err
+		}
+		printIssueTable(payload.Issues)
+		if payload.Cursor != nil && *payload.Cursor != "" {
+			fmt.Printf("\nnext page: --after %s\n", *payload.Cursor)
+		}
 		return nil
-	}
-	var payload struct {
-		Issues []issueListRow `json:"issues"`
-		Cursor *string        `json:"cursor"`
-	}
-	if err := json.Unmarshal(resp, &payload); err != nil {
-		PrintJSON(resp)
-		return err
-	}
-	printIssueTable(payload.Issues)
-	if payload.Cursor != nil && *payload.Cursor != "" {
-		fmt.Printf("\nnext page: --after %s\n", *payload.Cursor)
-	}
-	return nil
+	})
 }
 
 func runIssuesShow(getClient func() (*Client, error), project, blockID string) error {
@@ -452,20 +448,18 @@ func runIssuesShow(getClient func() (*Client, error), project, blockID string) e
 	if err := checkSettingsEnvelope(resp); err != nil {
 		return err
 	}
-	if !StdoutIsTTY() {
-		PrintJSON(resp)
+	return renderOrJSON(resp, func(resp []byte) error {
+		var payload struct {
+			Issue    issueBlock   `json:"issue"`
+			Comments []issueBlock `json:"comments"`
+		}
+		if err := json.Unmarshal(resp, &payload); err != nil {
+			PrintJSON(resp)
+			return err
+		}
+		printIssueDetail(payload.Issue, payload.Comments)
 		return nil
-	}
-	var payload struct {
-		Issue    issueBlock   `json:"issue"`
-		Comments []issueBlock `json:"comments"`
-	}
-	if err := json.Unmarshal(resp, &payload); err != nil {
-		PrintJSON(resp)
-		return err
-	}
-	printIssueDetail(payload.Issue, payload.Comments)
-	return nil
+	})
 }
 
 func runIssuesCreate(getClient func() (*Client, error), project, title, content, status string, tags []string) error {
@@ -539,50 +533,46 @@ func runIssuesStatus(getClient func() (*Client, error), project, blockID, status
 	if err := checkSettingsEnvelope(resp); err != nil {
 		return err
 	}
-	if !StdoutIsTTY() {
-		PrintJSON(resp)
+	return renderOrJSON(resp, func(resp []byte) error {
+		var payload struct {
+			Issue issueBlock `json:"issue"`
+		}
+		if err := json.Unmarshal(resp, &payload); err != nil {
+			PrintJSON(resp)
+			return err
+		}
+		fmt.Printf("%s → %s\n", shortID(payload.Issue.ID), sanitizeTerminal(payload.Issue.WorkflowStatus))
 		return nil
-	}
-	var payload struct {
-		Issue issueBlock `json:"issue"`
-	}
-	if err := json.Unmarshal(resp, &payload); err != nil {
-		PrintJSON(resp)
-		return err
-	}
-	fmt.Printf("%s → %s\n", shortID(payload.Issue.ID), sanitizeTerminal(payload.Issue.WorkflowStatus))
-	return nil
+	})
 }
 
 // printCreatedIssue renders a create/comment response: raw JSON when piped, a
 // one-line human confirmation on a TTY (id + sanitized title/status).
 func printCreatedIssue(resp []byte, kind string) error {
-	if !StdoutIsTTY() {
-		PrintJSON(resp)
+	return renderOrJSON(resp, func(resp []byte) error {
+		var payload struct {
+			Issue   *issueBlock `json:"issue"`
+			Comment *issueBlock `json:"comment"`
+		}
+		if err := json.Unmarshal(resp, &payload); err != nil {
+			PrintJSON(resp)
+			return err
+		}
+		b := payload.Issue
+		if b == nil {
+			b = payload.Comment
+		}
+		if b == nil {
+			PrintJSON(resp)
+			return nil
+		}
+		if b.WorkflowStatus != "" {
+			fmt.Printf("created %s %s [%s] %s\n", kind, shortID(b.ID), sanitizeTerminal(b.WorkflowStatus), sanitizeTerminal(b.Title))
+			return nil
+		}
+		fmt.Printf("created %s %s\n", kind, shortID(b.ID))
 		return nil
-	}
-	var payload struct {
-		Issue   *issueBlock `json:"issue"`
-		Comment *issueBlock `json:"comment"`
-	}
-	if err := json.Unmarshal(resp, &payload); err != nil {
-		PrintJSON(resp)
-		return err
-	}
-	b := payload.Issue
-	if b == nil {
-		b = payload.Comment
-	}
-	if b == nil {
-		PrintJSON(resp)
-		return nil
-	}
-	if b.WorkflowStatus != "" {
-		fmt.Printf("created %s %s [%s] %s\n", kind, shortID(b.ID), sanitizeTerminal(b.WorkflowStatus), sanitizeTerminal(b.Title))
-		return nil
-	}
-	fmt.Printf("created %s %s\n", kind, shortID(b.ID))
-	return nil
+	})
 }
 
 // ── TTY rendering (all attacker-controlled text is sanitized, §5.4) ────────────.
