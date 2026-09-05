@@ -351,6 +351,10 @@ only for an arm whose attribution rule is implemented — nothing is written and
 touched) · `3` count gate violated · `4` the non-disruption metric broke its threshold. The table and
 the JSON file are written on `3` and `4` as well — they are the evidence.
 
+The rule behind all three: DB-direct tools open `READ ONLY` (`pgxdb.Read`, or a connection that sets
+`default_transaction_read_only`), and the only writing exception is `ctx-distillreset` — a list
+`cmd/dbaccess_test.go` pins site by site, so a new direct write is a line with a reason or a red test.
+
 ### Shadow-retype reset: ctx-distillreset
 
 The shadow measurement programme builds its corpus by re-typing the distiller's insight blocks to a
