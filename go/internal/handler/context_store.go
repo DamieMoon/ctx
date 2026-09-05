@@ -71,72 +71,38 @@ func (h *StoreHandler) HandleStore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate required fields.
-	if req.Category == "" || req.Title == "" || req.Content == "" {
-		writeJSONReject(w, classMissingFields.reject("Missing required fields: category, title, content"))
-		return
-	}
-
-	// Size limits (HTTP 413).
-	if msg := blockSizeLimit(req.Category, req.Title, req.Content); msg != "" {
-		writeJSONReject(w, classSizeCap.reject(msg))
-		return
-	}
-
-	// Sensitivity: request > settings default (F3 §2.3b precedence). MT 06-C5:
-	// the per-tenant generation resolves from the request context (tenant scope
-	// from the auth result), so the default honors a tenant's own override.
-	sens, sensErr := storeSensitivity(h.cfg.SnapshotForRequest(ctx).Pool.DefaultBlockSensitivity, req.Sensitivity)
-	if sensErr != "" {
-		writeJSONReject(w, classInvalidSensitivity.reject(sensErr))
-		return
-	}
-
-	// What the client may CLAIM about this block, BEFORE any write: the
-	// category it occupies (I7/S2), the provenance key it carries (I7/S3) and
-	// the type it names (I7/S1 + the WF T10 registry check, fail-closed on a
-	// nil registry — an unvalidated name must never reach the manual-provenance
-	// write path). Same function, same order and same position as the MCP
-	// surfaces' gate chain (runStageWriteGates): that is what makes it ONE
-	// chain. Raw request metadata, before the detector adds its own key.
-	if rej := claimReject(h.classifySet(ctx), req.Category, req.Type, req.Metadata); rej != nil {
+	// The write gates: required fields → size caps → sensitivity → the I7 claim
+	// gates (category, provenance key, type + the WF T10 registry check) → the
+	// G40 credentials detector → write scope → write rate limit. Until T03-2
+	// this route spelled that chain out a second time, in the same order and
+	// with the same prose, while runStageWriteGates already claimed to be the
+	// one chain of REST, MCP-direct and MCP-staged (stage_gates.go). The claim
+	// is now wired: the doc comment there and the parity probes hold because
+	// this arm CALLS the chain, not because four copies happen to agree.
+	//
+	// res is what the gates DECIDED, not merely what they let pass: the
+	// resolved scope, whether the caller named it, the post-detector
+	// sensitivity and the post-detector metadata. Everything below reads THOSE
+	// values (mcp.go does the same at its own call site) — reading req.Metadata
+	// again would drop the detector's annotation for a caller that sent none.
+	//
+	// ONE config snapshot for the whole chain — still per tenant, resolved from
+	// the request context (MT 06-C5), so a tenant's own default sensitivity and
+	// its own RateLimitWrite override still apply. What changes is the COUNT:
+	// the two values used to be read at two points (F3 §2.3b precedence for the
+	// default, the limit further down), so a settings Replace in between could
+	// serve them from two generations — the rule context_search.go states for
+	// its own surface, now held here too.
+	snap := h.cfg.SnapshotForRequest(ctx)
+	res, rej := runStageWriteGates(ctx, h.pool, h.classifySet(ctx), authResult, req,
+		snap.Pool.DefaultBlockSensitivity, snap.Query.RateLimitWrite, reqID)
+	if rej != nil {
 		writeJSONReject(w, rej)
 		return
 	}
 
-	// G40 credentials detector: a content pattern hit forces credentials
-	// (upgrade-only, source='pattern'). See applyWriteDetector.
-	sens, req.Metadata = applyWriteDetector(req.Content, reqID, sens, req.Metadata)
-
-	// Scope validation: the write scope must be one the key may write — its
-	// home_scope or 'shared' if allowed (writableBlockScopes, the same gate as
-	// manage update/delete). Since E-M4 the rule lives in resolveWriteScope,
-	// shared verbatim with the stage gates and the blob write core.
-	writeScope, scopeExplicit, scopeRej := resolveWriteScope(authResult, req.Scope)
-	if scopeRej != nil {
-		writeJSONReject(w, scopeRej)
-		return
-	}
-
-	// Rate limit check (writes/min, 0 = disabled). MT 06-C5: the limit now
-	// resolves per-tenant from the request context — a tenant's own
-	// RateLimitWrite override applies, falling back to the _global value.
-	if limit := h.cfg.SnapshotForRequest(ctx).Query.RateLimitWrite; limit > 0 {
-		writeCount, err := store.CheckRateLimit(ctx, h.pool, authResult.ApiKeyID)
-		if err != nil {
-			slog.Error("store: rate limit check error", "error", err, "request_id", reqID)
-			writeJSONReject(w, classInternal.reject("Internal server error"))
-			return
-		}
-		if writeCount >= limit {
-			writeJSONReject(w, classRateLimit.reject(
-				fmt.Sprintf("Rate limit exceeded: max %d writes per 60 seconds", limit)))
-			return
-		}
-	}
-
 	// Hash NOOP check: skip if identical content already exists.
-	existingID, err := store.HashNOOPCheck(ctx, h.pool, req.Content, writeScope, req.Category, req.Title)
+	existingID, err := store.HashNOOPCheck(ctx, h.pool, req.Content, res.WriteScope, req.Category, req.Title)
 	if err != nil {
 		slog.Error("store: hash noop check error", "error", err, "request_id", reqID)
 		writeJSONReject(w, classInternal.reject("Internal server error"))
@@ -162,7 +128,7 @@ func (h *StoreHandler) HandleStore(w http.ResponseWriter, r *http.Request) {
 	// internally and must never self-stage.
 
 	// Execute upsert.
-	block, err := store.UpsertBlock(ctx, h.pool, req.Category, req.Title, req.Content, req.Tags, req.Metadata, writeScope, scopeExplicit, sens, req.Type)
+	block, err := store.UpsertBlock(ctx, h.pool, req.Category, req.Title, req.Content, req.Tags, res.Metadata, res.WriteScope, res.ScopeExplicit, res.Sens, req.Type)
 	if err != nil {
 		// I7/S3: the conflicting row is a derivative. The refusal is decided in
 		// the store (atomic with the row lock) and answered here as 403.
@@ -205,12 +171,12 @@ func (h *StoreHandler) HandleStore(w http.ResponseWriter, r *http.Request) {
 		"success": true,
 		"block":   block,
 	}
-	if sens.Manual && block.Sensitivity != string(sens.Value) {
+	if res.Sens.Manual && block.Sensitivity != string(res.Sens.Value) {
 		// Upsert-conflict downgrade rejected (upgrade-only write path): say so
 		// instead of silently keeping the higher level.
 		resp["warnings"] = []string{fmt.Sprintf(
 			"sensitivity %s not applied: existing block is %s — downgrades need manage update with confirm_sensitivity_downgrade",
-			sens.Value, block.Sensitivity)}
+			res.Sens.Value, block.Sensitivity)}
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

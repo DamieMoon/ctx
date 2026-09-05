@@ -25,6 +25,27 @@ type stageWriteGateResult struct {
 	Metadata      map[string]any
 }
 
+// extraWriteGates is the WIRING probe's seam into this chain: gates that run
+// after the seven production ones, on every surface that calls
+// runStageWriteGates. It is nil in every production build — the only assignment
+// lives in the probe test (mcp_store_gatechain_integration_test.go), which
+// restores it through t.Cleanup.
+//
+// It exists for the same reason handleBlobManage takes its action table as a
+// parameter (blob.go:294-300): a surface that copies the seven gates by hand
+// and a surface that CALLS this function answer the same bytes for every one of
+// them, so no assertion over those seven can tell the two wirings apart. A
+// probe gate hung here can: it reaches REST, MCP-direct and MCP-staged if and
+// only if all three really run this chain — which is what keeps the claim of
+// the doc comment below ("a gate added here reaches all three at once")
+// checkable after the fact instead of merely stated.
+//
+// A gate sees the REQUEST and nothing else: not the resolved sensitivity, not
+// the post-detector metadata, not the resolved scope. That is deliberate — the
+// seam can neither reorder nor overturn a verdict of the seven, and it is
+// useless as a place to grow production logic.
+var extraWriteGates []func(req storeRequest) *writeReject
+
 // runStageWriteGates runs EVERY write gate of the direct /api/store path over
 // a staged write intent, in the same order (D1-M2 complete): required fields →
 // size limits → sensitivity resolution → explicit-type validation → G40
@@ -104,6 +125,13 @@ func runStageWriteGates(
 		if writeCount >= rateLimitWrite {
 			return nil, classRateLimit.reject(
 				fmt.Sprintf("Rate limit exceeded: max %d writes per 60 seconds", rateLimitWrite))
+		}
+	}
+
+	// Probe seam, last and empty in production (see extraWriteGates).
+	for _, gate := range extraWriteGates {
+		if rej := gate(req); rej != nil {
+			return nil, rej
 		}
 	}
 

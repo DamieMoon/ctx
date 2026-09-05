@@ -26,6 +26,14 @@
 //	e GateParityAcrossArms    — REST | MCP-direct | MCP-staged decide identically. RED.
 //	f NoDoubleBooking         — one staged store ⇒ exactly ONE write row. RED: zero.
 //	g ScopeGolden             — no scope field ⇒ HomeScope, unchanged. GREEN pre-fix.
+//	h ProbeGateReachesAllArms — a gate hung into the chain (extraWriteGates)
+//	                            answers identically on REST, MCP-direct and
+//	                            MCP-staged. RED before T03-2: REST answered 200
+//	                            and STORED the block, because HandleStore ran a
+//	                            hand-written copy of the chain instead of the
+//	                            chain. This is the DURABLE wiring probe (R4) —
+//	                            the six probes above pin the seven gates, this
+//	                            one pins that all three arms run THEM.
 //
 // Run with:
 //
@@ -54,6 +62,11 @@ import (
 // rule "token-prefix". Deliberately the FIRST-matching structured rule, so the
 // expected Kind is stable regardless of the surrounding prose.
 const gcCredContent = "rotation note: ghp_0123456789abcdefghijABCDEFGHIJ012345 leaked into a paste"
+
+// gcProbeTitle is the marker the wiring probe's gate refuses (subtest h). It is
+// a title no production write carries, so the gate is inert for every other
+// subtest that shares the process.
+const gcProbeTitle = "__gateprobe__"
 
 // gcOversize is 52224 bytes — past the shared 50 KB content cap. 'x' repeats
 // carry zero entropy, so the payload trips the SIZE gate and nothing else.
@@ -454,6 +467,163 @@ func TestMCPStoreGateChain(t *testing.T) {
 		}
 		if scope, _, _, _ := blockRow("gc-g-shared-block"); scope != "shared" {
 			t.Errorf("block scope = %q, want shared", scope)
+		}
+	})
+
+	t.Run("h_ProbeGateReachesAllArms", func(t *testing.T) {
+		// The wiring probe (R4). Every other subtest asserts over the SEVEN
+		// production gates — and those are worded identically in a copy and in
+		// the chain, so none of them can see whether an arm CALLS the chain. This
+		// one hangs an eighth gate into extraWriteGates (stage_gates.go) and asks
+		// all three arms the same question: a gate that only the chain knows
+		// about must reach every surface that claims to run it.
+		//
+		// RED before T03-2 on the REST arm: HTTP 200 and the block in
+		// context_blocks, while both MCP arms refused. GREEN after: one verdict,
+		// three arms, identical code and identical prose.
+		//
+		// The class is built HERE rather than taken from errcode.go's closed
+		// vocabulary: 418/gate_probe belongs to no production rejection, so a
+		// match cannot be one of the seven gates firing by coincidence, and the
+		// probe adds no code to the vocabulary docs/api.md publishes.
+		probeClass := rejectClass{http.StatusTeapot, "gate_probe"}
+		const probeMsg = "gate probe: this title is refused by the wiring probe gate"
+
+		prev := extraWriteGates
+		extraWriteGates = append(append([]func(storeRequest) *writeReject{}, prev...),
+			func(req storeRequest) *writeReject {
+				if req.Title == gcProbeTitle {
+					return probeClass.reject(probeMsg)
+				}
+				return nil
+			})
+		t.Cleanup(func() { extraWriteGates = prev })
+
+		// gcCoded is the full rejection surface a client can branch on. status
+		// stays 0 on the MCP arms — that transport carries no HTTP status
+		// (errcode.go: errResultReject drops rej.Status), so the comparison
+		// below is over code and prose, and the status is pinned on REST alone.
+		type gcCoded struct {
+			rejected bool
+			status   int
+			code     string
+			text     string
+		}
+		restRaw := func(keyCtx context.Context, in storeInput) gcCoded {
+			t.Helper()
+			body, _ := json.Marshal(map[string]any{
+				"category": in.Category, "title": in.Title, "content": in.Content,
+			})
+			req := httptest.NewRequest(http.MethodPost, "/api/store", strings.NewReader(string(body)))
+			req = req.WithContext(keyCtx)
+			rec := httptest.NewRecorder()
+			NewStoreHandler(pool, cfgWith(0), reg).HandleStore(rec, req)
+			var resp struct {
+				Error string `json:"error"`
+				Code  string `json:"code"`
+			}
+			_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+			return gcCoded{
+				rejected: rec.Code != http.StatusOK,
+				status:   rec.Code,
+				code:     resp.Code,
+				text:     resp.Error,
+			}
+		}
+		mcpRaw := func(keyCtx context.Context, in storeInput) gcCoded {
+			t.Helper()
+			r, _, err := mcpStoreHandler(mcpCfg(0))(keyCtx, nil, in)
+			if err != nil {
+				t.Fatalf("mcp store %q: protocol error %v", in.Title, err)
+			}
+			txt := resultText(t, r)
+			out := gcCoded{
+				// A STAGED answer is IsError=true and means the gates PASSED
+				// (D3-C3) — only an IsError that is not a stage card is a
+				// rejection.
+				rejected: r.IsError && !strings.Contains(txt, "STAGED — NOT saved yet"),
+				text:     txt,
+			}
+			if env, ok := r.StructuredContent.(mcpErrorEnvelope); ok {
+				out.code = env.Code
+			}
+			return out
+		}
+
+		_, restCtx, _ := mkKey("gc-h-rest", "private", nil, false)
+		_, directCtx, _ := mkKey("gc-h-direct", "private", nil, false)
+		stagedID, stagedCtx, _ := mkKey("gc-h-staged", "private", nil, true)
+
+		// One payload per arm, differing in CONTENT: the MCP arms run their
+		// scoped hash-NOOP check BEFORE the chain (mcp.go: resolveWriteScope +
+		// HashNOOPCheck ahead of the gate call), so a byte-identical payload
+		// behind an arm that already stored it would answer "identical content
+		// already exists" without ever reaching a gate — and the probe would
+		// measure the NOOP instead of the wiring. The title is what the probe
+		// gate keys on and stays the same on all three.
+		arms := []struct {
+			name string
+			out  gcCoded
+		}{
+			{"rest", restRaw(restCtx, storeInput{
+				Category: "test", Title: gcProbeTitle, Content: "probe payload for the REST arm"})},
+			{"mcp-direct", mcpRaw(directCtx, storeInput{
+				Category: "test", Title: gcProbeTitle, Content: "probe payload for the MCP-direct arm"})},
+			{"mcp-staged", mcpRaw(stagedCtx, storeInput{
+				Category: "test", Title: gcProbeTitle, Content: "probe payload for the MCP-staged arm"})},
+		}
+		for _, a := range arms {
+			if !a.out.rejected {
+				t.Errorf("[%s] accepted the probe payload, want the probe gate to refuse it (body %q)",
+					a.name, a.out.text)
+				continue
+			}
+			if a.out.code != probeClass.code {
+				t.Errorf("[%s] code = %q, want %q", a.name, a.out.code, probeClass.code)
+			}
+			if a.out.text != probeMsg {
+				t.Errorf("[%s] prose = %q, want %q", a.name, a.out.text, probeMsg)
+			}
+		}
+		// Parity as an EQUALITY between the arms, not only against the constants
+		// above: a future arm that renders its own wording is caught here even if
+		// it picks the right class.
+		for _, a := range arms[1:] {
+			if a.out.code != arms[0].out.code || a.out.text != arms[0].out.text {
+				t.Errorf("[%s] answers %q/%q, REST answers %q/%q — the arms diverge",
+					a.name, a.out.code, a.out.text, arms[0].out.code, arms[0].out.text)
+			}
+		}
+		if arms[0].out.status != http.StatusTeapot {
+			t.Errorf("REST status = %d, want the probe class's %d", arms[0].out.status, http.StatusTeapot)
+		}
+		// The refusal has to STOP the write, on every arm — a verdict that is
+		// rendered but not obeyed would satisfy the assertions above.
+		if n := blockCount(gcProbeTitle); n != 0 {
+			t.Errorf("%d block(s) titled %q stored, want the probe payload never written", n, gcProbeTitle)
+		}
+		if n := pendingCount(stagedID); n != 0 {
+			t.Errorf("%d staged card(s) for the probe payload, want none", n)
+		}
+
+		// Counter-probe: with the marker gone the same three arms accept, so the
+		// probe gate is a GATE and not a blanket refusal (an arm that rejected
+		// everything would pass the block above).
+		clean := []struct {
+			name string
+			out  gcCoded
+		}{
+			{"rest", restRaw(restCtx, storeInput{
+				Category: "test", Title: "gc-h-rest-clean", Content: "no marker, ordinary write"})},
+			{"mcp-direct", mcpRaw(directCtx, storeInput{
+				Category: "test", Title: "gc-h-direct-clean", Content: "no marker, ordinary write"})},
+			{"mcp-staged", mcpRaw(stagedCtx, storeInput{
+				Category: "test", Title: "gc-h-staged-clean", Content: "no marker, ordinary write"})},
+		}
+		for _, a := range clean {
+			if a.out.rejected {
+				t.Errorf("[%s] refused an unmarked payload: %q", a.name, a.out.text)
+			}
 		}
 	})
 }
