@@ -200,6 +200,31 @@ linters:
             - pkg: "github.com/GottZ/ctx/internal/topiclabel$"
               desc: "internal/derived must not import store, llm, blocktype or topiclabel — echo.go is deliberately an independent implementation of the topiclabel/guard.go index, not an import (derived.go:14-20)"
 
+        # evalscore stays TOOLING (design/06 §4.7, masterplan K18 + A-15).
+        # internal/evalscore is the measurement vocabulary of the gold bench —
+        # nDCG, MRR, recall, rank diversity. The server answers a query; it
+        # does not grade its own answer, and a product package that reaches
+        # for a scoring helper is measuring in the request path. T01-4 moved
+        # the one primitive that was genuinely shared (TokenSet) to
+        # internal/util and left internal/derived and internal/events without
+        # an evalscore import; this rule is what keeps that cut instead of
+        # letting it drift back one import at a time. Globs match absolute
+        # paths (same as the rules above), and the negations carve out the
+        # allowed consumers: the three tooling packages, the cmd/ctx-*
+        # binaries — and the package itself, for its tests
+        # (internal/evalscore/{rank,diversity}_test.go are package
+        # evalscore_test and import it; golangci lints untagged tests).
+        evalscore-tooling-only:
+          files:
+            - "!**/go/internal/armsweep/**"
+            - "!**/go/internal/goldbench/**"
+            - "!**/go/internal/goldset/**"
+            - "!**/go/cmd/ctx-*/**"
+            - "!**/go/internal/evalscore/**"
+          deny:
+            - pkg: "github.com/GottZ/ctx/internal/evalscore$"
+              desc: "internal/evalscore is the tooling-side scoring vocabulary (nDCG, MRR, recall, diversity) — only internal/{armsweep,goldbench,goldset} and cmd/ctx-* may import it; a product package that needs a text primitive takes it from internal/util instead (T01-4, design/06 §4.7)"
+
     gosec:
       excludes:
         - G115

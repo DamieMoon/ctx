@@ -55,15 +55,42 @@ func (r EnvNameRef) String() string {
 
 // envNamePattern is anchored on purpose: it matches a literal that IS an env
 // name, never a literal that merely contains one. Both prefixes are in use in
-// the tree (CTX_* for the ctx surface, CONTEXT_* for the database group).
+// the server runtime (CTX_* for the ctx surface, CONTEXT_* for the database
+// group); it is the default of ScanEnvNames.
 var envNamePattern = regexp.MustCompile(`^(CTX_|CONTEXT_)[A-Z0-9_]{2,}$`)
+
+// ScanOption adjusts one aspect of a scan. The empty option set is the
+// server-runtime behaviour T05-6 pinned; the tooling fence (T06-7) is the
+// second caller of this one scanner (masterplan K10) and differs from the
+// first in exactly one aspect — its name pattern.
+type ScanOption func(*scanConfig)
+
+// scanConfig holds what the options set. It is unexported because the option
+// funcs are the whole API: a struct literal in a caller would silently gain
+// zero values on every future field.
+type scanConfig struct {
+	pattern *regexp.Regexp
+}
+
+// WithNamePattern replaces the pattern a string literal must match FULLY to
+// count as an env name. The tooling packages carry a third prefix that the
+// server runtime does not know (GOLDBENCH_API_KEY, cmd/ctx-goldbench), so the
+// fence over cmd/ctx-* passes its own anchored pattern instead of getting a
+// scanner of its own.
+func WithNamePattern(pattern *regexp.Regexp) ScanOption {
+	return func(c *scanConfig) { c.pattern = pattern }
+}
 
 // ScanEnvNames walks the non-test .go files of every package in pkgs and
 // returns each env-name-shaped string literal that is not in allow, in
 // package order and then file order. A nil allow returns every literal found,
 // which is what the counting gate needs. Struct tags are skipped (see the
 // file comment above); comments never enter the tree.
-func ScanEnvNames(pkgs []ScanPackage, allow map[string]bool) ([]EnvNameRef, error) {
+func ScanEnvNames(pkgs []ScanPackage, allow map[string]bool, opts ...ScanOption) ([]EnvNameRef, error) {
+	cfg := scanConfig{pattern: envNamePattern}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
 	fset := token.NewFileSet()
 	var out []EnvNameRef
 	for _, pkg := range pkgs {
@@ -76,7 +103,7 @@ func ScanEnvNames(pkgs []ScanPackage, allow map[string]bool) ([]EnvNameRef, erro
 			if err != nil {
 				return nil, fmt.Errorf("env scan: parse %s: %w", path, err)
 			}
-			out = append(out, envNameRefs(fset, file, pkg.ImportPath, allow)...)
+			out = append(out, envNameRefs(fset, file, pkg.ImportPath, allow, cfg.pattern)...)
 		}
 	}
 	return out, nil
@@ -105,7 +132,7 @@ func nonTestGoFiles(dir string) ([]string, error) {
 }
 
 // envNameRefs collects the matching string literals of one parsed file.
-func envNameRefs(fset *token.FileSet, file *ast.File, importPath string, allow map[string]bool) []EnvNameRef {
+func envNameRefs(fset *token.FileSet, file *ast.File, importPath string, allow map[string]bool, pattern *regexp.Regexp) []EnvNameRef {
 	var out []EnvNameRef
 	var visit func(ast.Node) bool
 	visit = func(node ast.Node) bool {
@@ -124,7 +151,7 @@ func envNameRefs(fset *token.FileSet, file *ast.File, importPath string, allow m
 				return false
 			}
 			value, err := strconv.Unquote(n.Value)
-			if err != nil || !envNamePattern.MatchString(value) || allow[value] {
+			if err != nil || !pattern.MatchString(value) || allow[value] {
 				return false
 			}
 			pos := fset.Position(n.Pos())
