@@ -26,6 +26,7 @@ import (
 	"github.com/GottZ/ctx/internal/auth"
 	"github.com/GottZ/ctx/internal/blocktype"
 	"github.com/GottZ/ctx/internal/store"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // Row-column caps (design/01 §3.3 R1 — resource-exhaustion guard; the
@@ -56,24 +57,6 @@ type typeUpdatePayload struct {
 	DisplayName *string         `json:"display_name,omitempty"`
 	Description *string         `json:"description,omitempty"`
 	Config      json.RawMessage `json:"config,omitempty"`
-}
-
-// dispatchTypeAction fans the type-* actions out (split from HandleManage's
-// switch for the cyclomatic budget, mirrors dispatchBackendAction). Tier
-// gating happened upstream in enforceActionTier.
-func (h *ManageHandler) dispatchTypeAction(w http.ResponseWriter, r *http.Request, ar *auth.AuthResult, req manageRequest) {
-	switch req.Action {
-	case "type-list":
-		h.handleTypeList(w, r, ar)
-	case "type-get":
-		h.handleTypeGet(w, r, ar, req)
-	case "type-create":
-		h.handleTypeCreate(w, r, ar, req)
-	case "type-update":
-		h.handleTypeUpdate(w, r, ar, req)
-	case "type-delete":
-		h.handleTypeDelete(w, r, ar, req)
-	}
 }
 
 // typeVisibleScopes is the namespace set a caller may SEE (K-T1 handler
@@ -209,7 +192,7 @@ func (h *ManageHandler) handleTypeCreate(w http.ResponseWriter, r *http.Request,
 		h.writeTypeStoreError(w, "type-create", err, reqID)
 		return
 	}
-	h.reloadBlockTypes(ctx, reqID)
+	reloadBlockTypes(ctx, h.blocktypes, h.pool, "manage", reqID)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"action":  "type-create",
 		"success": true,
@@ -289,7 +272,7 @@ func (h *ManageHandler) handleTypeUpdate(w http.ResponseWriter, r *http.Request,
 		writeJSON(w, http.StatusNotFound, map[string]any{"success": false, "error": "Type not found"})
 		return
 	}
-	h.reloadBlockTypes(ctx, reqID)
+	reloadBlockTypes(ctx, h.blocktypes, h.pool, "manage", reqID)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"action":  "type-update",
 		"success": true,
@@ -327,7 +310,7 @@ func (h *ManageHandler) handleTypeDelete(w http.ResponseWriter, r *http.Request,
 		writeJSON(w, http.StatusNotFound, map[string]any{"success": false, "error": "Type not found"})
 		return
 	}
-	h.reloadBlockTypes(ctx, reqID)
+	reloadBlockTypes(ctx, h.blocktypes, h.pool, "manage", reqID)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"action":  "type-delete",
 		"success": true,
@@ -341,12 +324,17 @@ func (h *ManageHandler) handleTypeDelete(w http.ResponseWriter, r *http.Request,
 // fires too — this is a latency optimization, not the consistency mechanism
 // — so a failure only logs (the listener reload heals eventually). nil
 // registry = test wiring without blocktype consumers.
-func (h *ManageHandler) reloadBlockTypes(ctx context.Context, reqID string) {
-	if h.blocktypes == nil {
+//
+// One function for both transports (Z-03-07): the manage family and the REST
+// /api/types writes ran identical copies that differed in nothing but the log
+// prefix, so the prefix is the parameter. Each transport keeps its own word in
+// the message ("manage:" / "types:") — the log line is what an operator greps.
+func reloadBlockTypes(ctx context.Context, reg *blocktype.Registry, pool *pgxpool.Pool, noun, reqID string) {
+	if reg == nil {
 		return
 	}
-	if err := h.blocktypes.Reload(ctx, h.pool); err != nil {
-		slog.Warn("manage: block-type registry reload after mutation failed — NOTIFY listener will retry",
+	if err := reg.Reload(ctx, pool); err != nil {
+		slog.Warn(noun+": block-type registry reload after mutation failed — NOTIFY listener will retry",
 			"error", err, "request_id", reqID)
 	}
 }

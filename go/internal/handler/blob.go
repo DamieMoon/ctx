@@ -243,11 +243,17 @@ type blobManageRequest struct {
 type blobActionFunc func(*BlobHandler, http.ResponseWriter, *http.Request, *auth.AuthResult, blobManageRequest)
 
 // blobAction binds ONE dispatchable /api/blob/manage action to its admin tier
-// and its handler. Tier and routing living in the same row is the point (Gap-
-// C0-d): in the manage dispatcher they are two structures that must agree
-// (actionTierExplicit's table vs. HandleManage's switch), which is why that one
-// needs an enumeration gate to catch a dispatch arm added without a tier entry.
-// Here a row without a tier does not compile.
+// and its handler. Tier and routing living in the same row is the point
+// (Gap-C0-d) — /api/manage was two structures that had to agree by hand until
+// it took this same form (manage_table.go).
+//
+// CORRECTION (T03-11): this comment used to claim "here a row without a tier
+// does not compile". That was never true. adminTier is an int, and its zero
+// value was tierOpen, so a row written as {handle: …} compiled and admitted
+// every valid key — the omission was invisible in exactly the dangerous
+// direction. adminTier now starts at tierUnset (context_manage.go) and
+// enforceBlobActionTier refuses that value; the tier gate below is what makes
+// an omission visible, not the type system.
 type blobAction struct {
 	tier   adminTier
 	handle blobActionFunc
@@ -270,14 +276,26 @@ var blobActions = map[string]blobAction{
 
 // enforceBlobActionTier applies the admin tier of a blob-manage action and
 // reports whether dispatch may proceed; on a violation it has already written
-// the 403. Mirror of enforceActionTier (context_manage.go) with the tier taken
-// from the dispatch row instead of a parallel classification: server-global
-// actions need a server-admin, per-tenant actions also admit a tenant-admin of
-// the caller's OWN tenant (the per-resource target check then belongs IN the
-// handler), tierOpen skips the gate. The 403 body is the shared
+// the response. Mirror of enforceManageActionTier (manage_table.go) with the
+// tier taken from the dispatch row instead of a parallel classification:
+// server-global actions need a server-admin, per-tenant actions also admit a
+// tenant-admin of the caller's OWN tenant (the per-resource target check then
+// belongs IN the handler), tierOpen skips the gate. The 403 body is the shared
 // requireAdminAction text — no tier oracle for the caller.
+//
+// tierUnset is a row that declares no tier at all — a table bug, not a caller
+// error, so it answers 500 and logs. Never 403 (that would confirm a tier
+// exists) and never open (the pre-tierUnset zero value did exactly that).
+// All four shipped rows carry a tier, so the branch is unreachable in the
+// delivered tree.
 func enforceBlobActionTier(w http.ResponseWriter, tier adminTier, ar *auth.AuthResult) bool {
 	switch tier {
+	case tierUnset:
+		slog.Error("blob-manage: dispatch row carries no admin tier — refusing")
+		writeJSON(w, http.StatusInternalServerError, map[string]any{
+			"success": false, "error": "Internal server error",
+		})
+		return false
 	case tierServerAdmin:
 		return requireAdminAction(w, ar)
 	case tierTenantAdmin:

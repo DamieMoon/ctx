@@ -38,23 +38,6 @@ type ForgeController interface {
 // tests that exercise forge-* set it directly. nil ⇒ the actions answer 503.
 func (h *ManageHandler) SetForgeController(fc ForgeController) { h.forge = fc }
 
-// dispatchForgeAction routes the forge-* family (one arm in HandleManage, cyclop
-// budget). Every action loads + ownership-checks the project first (404 uniform).
-func (h *ManageHandler) dispatchForgeAction(w http.ResponseWriter, r *http.Request, req manageRequest) {
-	if h.forge == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"success": false, "error": "Sync engine not enabled"})
-		return
-	}
-	switch req.Action {
-	case "forge-token-set":
-		h.handleForgeTokenSet(w, r, req)
-	case "forge-sync-start":
-		h.handleForgeSyncStart(w, r, req)
-	case "forge-sync-status":
-		h.handleForgeSyncStatus(w, r, req)
-	}
-}
-
 // loadOwnedProject resolves the project_id from req.Data and enforces ownership.
 // A missing/foreign/absent project is a uniform 404 (no existence oracle, §5.2).
 // ok=false means a response was already written.

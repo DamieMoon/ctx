@@ -19,25 +19,6 @@ import (
 	"github.com/GottZ/ctx/internal/store"
 )
 
-// dispatchDreamAction fans the dream-* actions out (split from HandleManage's
-// switch for the cyclomatic budget when dream-link-resolve landed; the
-// established dispatchGuardAction idiom). Tier gating happened upstream in
-// enforceActionTier.
-func (h *ManageHandler) dispatchDreamAction(w http.ResponseWriter, r *http.Request, ar *auth.AuthResult, req manageRequest) {
-	switch req.Action {
-	case "dream-stats":
-		h.handleDreamStats(w, r, ar)
-	case "dream-review":
-		h.handleDreamReview(w, r, ar)
-	case "dream-mode":
-		h.handleDreamMode(w, r, req)
-	case "dream-link-resolve":
-		h.handleDreamLinkResolve(w, r, ar, req)
-	case "dream-backoff-restamp":
-		h.handleDreamBackoffRestamp(w, r, ar)
-	}
-}
-
 // handleDreamBackoffRestamp re-evaluates every existing cooldown stamp under
 // the CURRENT back-off policy (dream.RestampBackoff): the settings UI calls
 // this right after a dream.backoff_* save, so the new curve governs the

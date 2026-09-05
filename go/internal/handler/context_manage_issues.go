@@ -75,35 +75,6 @@ type linkPayload struct {
 	LinkClass string `json:"link_class"`
 }
 
-// dispatchIssueAction fans the issue-* family out (split from HandleManage for
-// the cyclomatic budget, mirrors dispatchTypeAction). Tier gating happened
-// upstream in enforceActionTier (all tierOpen).
-func (h *ManageHandler) dispatchIssueAction(w http.ResponseWriter, r *http.Request, ar *auth.AuthResult, req manageRequest) {
-	switch req.Action {
-	// Achse-02 forge sync family (I-F) shares this Achse-02 dispatch arm (cyclop
-	// budget in HandleManage). Routing only — the tier is decided in actionTier.
-	case "forge-token-set", "forge-sync-start", "forge-sync-status":
-		h.dispatchForgeAction(w, r, req)
-		return
-	}
-	switch req.Action {
-	case "issue-create":
-		h.handleIssueCreate(w, r, ar, req)
-	case "issue-update":
-		h.handleIssueUpdate(w, r, ar, req)
-	case "issue-get":
-		h.handleIssueGet(w, r, ar, req)
-	case "issue-list":
-		h.handleIssueList(w, r, ar, req)
-	case "issue-comment-create":
-		h.handleIssueCommentCreate(w, r, ar, req)
-	case "issue-link-create":
-		h.handleIssueLinkCreate(w, r, ar, req)
-	case "issue-link-delete":
-		h.handleIssueLinkDelete(w, r, ar, req)
-	}
-}
-
 // issueSet returns the request's resolved type registry snapshot, or nil (with a
 // WARN) when the registry is not wired — the caller then fails closed.
 func (h *ManageHandler) issueSet(ctx context.Context) *blocktype.Set {

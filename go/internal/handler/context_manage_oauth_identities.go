@@ -24,7 +24,6 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/GottZ/ctx/internal/auth"
 	"github.com/GottZ/ctx/internal/oidc"
 	"github.com/GottZ/ctx/internal/store"
 	"github.com/google/uuid"
@@ -155,15 +154,3 @@ func (h *ManageHandler) handleOAuthIdentityUnlink(w http.ResponseWriter, r *http
 	writeJSON(w, http.StatusOK, map[string]any{"success": true, "removed": removed})
 }
 
-// dispatchOAuthIdentityAction fans the oauth-identity-* actions out (R5;
-// same split pattern as dispatchMCPClientAction, cyclop budget).
-func (h *ManageHandler) dispatchOAuthIdentityAction(w http.ResponseWriter, r *http.Request, _ *auth.AuthResult, req manageRequest) {
-	switch req.Action {
-	case "oauth-identity-link":
-		h.handleOAuthIdentityLink(w, r, req)
-	case "oauth-identity-list":
-		h.handleOAuthIdentityList(w, r, req)
-	case "oauth-identity-unlink":
-		h.handleOAuthIdentityUnlink(w, r, req)
-	}
-}

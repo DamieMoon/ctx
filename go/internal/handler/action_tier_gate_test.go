@@ -211,7 +211,7 @@ func TestActionTier_ForgeFamilyExplicitlyTiered(t *testing.T) {
 
 // TestActionTier_DreamLinkResolveExplicitlyTiered is the S9 probe of the
 // dream-link-curation wave (2026-07-26): dream-link-resolve is dispatched
-// (via dispatchDreamAction) and MUST be EXPLICITLY classified tierOpen —
+// (its manageActions row) and MUST be EXPLICITLY classified tierOpen —
 // isolation lives in store.DreamLinkResolve (writableBlockScopes on the
 // source block, uniform not found), never in an admin tier. Remove its
 // actionTier arm and this turns RED (entry + dispatch arm land in the SAME
@@ -339,7 +339,7 @@ func TestActionTier_EmbedMigrationFamilyExplicitlyTiered(t *testing.T) {
 // (T22/T23/T24). mcp-client-*, backend-*, blocks-audit/classify-*, tenant-* and
 // tenant-grant-* STAY server-admin — their handlers carry no tenant filter yet
 // (handleMCPClientList takes no AuthResult; handleBackendList ignores it;
-// dispatchBlocksAction passes none), so opening them now would be fail-OPEN.
+// the blocks-audit handlers take none), so opening them now would be fail-OPEN.
 // dream-/gaming-mode mutations are server-global by design and stay server-admin.
 
 // tenantAdminAR builds a non-server-admin key that IS a tenant-admin of its own

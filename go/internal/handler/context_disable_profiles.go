@@ -77,28 +77,6 @@ func profileWriteScopes(ar *auth.AuthResult) []string {
 	return backendWriteScopes(ar)
 }
 
-// dispatchDisableProfileAction fans the disable-profile-* actions out (split
-// from HandleManage's switch for the cyclomatic budget).
-func (h *ManageHandler) dispatchDisableProfileAction(w http.ResponseWriter, r *http.Request, ar *auth.AuthResult, req manageRequest) {
-	switch req.Action {
-	case "gaming-mode", "eject-mode":
-		// AM-7: kanonische eject-Fläche + gaming-Alias (Read = Legacy-Shape,
-		// Mutation = Ein-Tx-Doppel-Write) — hier mit-dispatcht, damit HandleManage
-		// im cyclop-Budget bleibt.
-		h.handleGamingMode(w, r, req)
-	case "disable-profile-list":
-		h.handleDisableProfileList(w, r, ar)
-	case "disable-profile-create":
-		h.handleDisableProfileCreate(w, r, ar, req)
-	case "disable-profile-update":
-		h.handleDisableProfileUpdate(w, r, ar, req)
-	case "disable-profile-delete":
-		h.handleDisableProfileDelete(w, r, ar, req)
-	case "disable-profile-toggle":
-		h.handleDisableProfileToggle(w, r, ar, req)
-	}
-}
-
 func (h *ManageHandler) handleDisableProfileList(w http.ResponseWriter, r *http.Request, ar *auth.AuthResult) {
 	ctx := r.Context()
 	all, err := store.ListDisableProfiles(ctx, h.pool)

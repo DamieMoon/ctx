@@ -34,7 +34,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 
 	"github.com/GottZ/ctx/internal/auth"
@@ -324,7 +323,7 @@ func (h *TypesHandler) putCreate(w http.ResponseWriter, r *http.Request, ar *aut
 		writeBlockTypeStoreError(w, "types put-create", err, reqID)
 		return
 	}
-	h.reloadBlockTypes(ctx, reqID)
+	reloadBlockTypes(ctx, h.blocktypes, h.pool, "types", reqID)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"success": true,
 		"type":    typeView{BlockTypeRow: *bt, Source: typeSourceForScope(bt.Scope)},
@@ -378,7 +377,7 @@ func (h *TypesHandler) putUpdate(w http.ResponseWriter, r *http.Request, ar *aut
 		writeJSON(w, http.StatusNotFound, map[string]any{"success": false, "error": "Type not found"})
 		return
 	}
-	h.reloadBlockTypes(ctx, reqID)
+	reloadBlockTypes(ctx, h.blocktypes, h.pool, "types", reqID)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"success": true,
 		"type":    typeView{BlockTypeRow: *bt, Source: typeSourceForScope(bt.Scope)},
@@ -419,24 +418,10 @@ func (h *TypesHandler) HandleDelete(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]any{"success": false, "error": "Type not found"})
 		return
 	}
-	h.reloadBlockTypes(ctx, reqID)
+	reloadBlockTypes(ctx, h.blocktypes, h.pool, "types", reqID)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"success": true,
 		"deleted": cur.Name,
 	})
 }
 
-// reloadBlockTypes refreshes the in-memory registry snapshot after a successful
-// mutation so the writer's next request validates against the new policy at once
-// (mirrors ManageHandler.reloadBlockTypes). The NOTIFY listener is the
-// consistency mechanism; this is a latency optimization, so a failure only logs.
-// nil registry = test wiring / read-only deployment.
-func (h *TypesHandler) reloadBlockTypes(ctx context.Context, reqID string) {
-	if h.blocktypes == nil {
-		return
-	}
-	if err := h.blocktypes.Reload(ctx, h.pool); err != nil {
-		slog.Warn("types: block-type registry reload after mutation failed — NOTIFY listener will retry",
-			"error", err, "request_id", reqID)
-	}
-}

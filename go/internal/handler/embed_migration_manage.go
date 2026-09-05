@@ -26,7 +26,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/GottZ/ctx/internal/auth"
 	"github.com/GottZ/ctx/internal/embedmigration"
 	"github.com/GottZ/ctx/internal/events"
 	"github.com/jackc/pgx/v5"
@@ -105,39 +104,6 @@ type embedFailureRow struct {
 	// — a string keeps both the timestamp and the 'infinity' sentinel readable.
 	NextAttemptAt string    `json:"next_attempt_at"`
 	FirstSeen     time.Time `json:"first_seen"`
-}
-
-// dispatchEmbedMigrationAction fans the embed-migration-* family out (split from
-// HandleManage's switch for the cyclomatic budget — mirrors dispatchBackendAction
-// / dispatchAPIKeyAction). All arms are server-admin-gated upstream (actionTier).
-func (h *ManageHandler) dispatchEmbedMigrationAction(w http.ResponseWriter, r *http.Request, ar *auth.AuthResult, req manageRequest) {
-	switch req.Action {
-	case "embed-migration-create":
-		h.handleEmbedMigrationCreate(w, r, req)
-	case "embed-migration-status":
-		h.handleEmbedMigrationStatus(w, r, req)
-	case "embed-migration-pause":
-		h.handleEmbedMigrationTransition(w, r, req, embedmigration.StatusRunning, embedmigration.StatusPaused)
-	case "embed-migration-resume":
-		// resume/start is →running from the CURRENT status: valid from both
-		// pending (the initial start — the worker is idle in pending, §4.1, so
-		// the operator moves it) AND paused (resume). A fixed from would only
-		// cover one; reading current + IsAllowedTransition covers both and
-		// surfaces a wrong-state attempt verbatim.
-		h.handleEmbedMigrationResume(w, r, req)
-	case "embed-migration-abort":
-		h.handleEmbedMigrationAbort(w, r, req)
-	case "embed-migration-confirm":
-		h.handleEmbedMigrationConfirm(w, r, req)
-	case "embed-migration-rollback":
-		h.handleEmbedMigrationRollback(w, r, req)
-	case "embed-migration-cleanup":
-		h.handleEmbedMigrationCleanup(w, r, req)
-	case "embed-migration-purge":
-		h.handleEmbedMigrationPurge(w, r)
-	case "embed-migration-failures":
-		h.handleEmbedMigrationFailures(w, r, req)
-	}
 }
 
 // parseEmbedMigrationData unmarshals req.Data into embedMigrationData (empty on

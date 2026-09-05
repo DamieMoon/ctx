@@ -18,17 +18,6 @@ import (
 // server-admin for any scope. The enforcement reads context_tenant_quota live
 // (T36a); a set refreshes the accountant synchronously so it takes effect at once.
 
-// dispatchQuotaAction fans the tenant-quota-* actions out (split from
-// HandleManage's switch for cyclomatic budget, like the other dispatch* helpers).
-func (h *ManageHandler) dispatchQuotaAction(w http.ResponseWriter, r *http.Request, ar *auth.AuthResult, req manageRequest) {
-	switch req.Action {
-	case "tenant-quota-get":
-		h.handleTenantQuotaGet(w, r, ar, req)
-	case "tenant-quota-set":
-		h.handleTenantQuotaSet(w, r, ar, req)
-	}
-}
-
 // quotaSpec is the tenant-quota-set payload. Pointer budget fields distinguish
 // "absent/unlimited" (null) from a real limit; on_exceed defaults to
 // external_off, enabled defaults to true.

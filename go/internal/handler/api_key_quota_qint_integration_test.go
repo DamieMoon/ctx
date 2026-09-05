@@ -3,8 +3,8 @@
 // E2E-Q-INT — the RELEASE GATE (design/02 §Q-INT, Masterplan/BUILD-LOG).
 //
 // The sharp proof that the api-key quota is enforced AT THE HANDLER SEAM — the
-// real HandleManage path (auth-injected AuthResult → enforceActionTier →
-// dispatchAPIKeyAction → handleApiKeyCreate → store.MintKeyWithQuota), NOT the
+// real HandleManage path (auth-injected AuthResult → enforceManageActionTier →
+// the manageActions row → handleApiKeyCreate → store.MintKeyWithQuota), NOT the
 // store mechanic in isolation (that is BE6-2's api_keys_mint_quota test) and NOT
 // a Playwright fixture (that is BE5-Q4's status:429 mock). The release-invariante
 // is: self-service onboarding must NOT be unlocked/advertised before these three

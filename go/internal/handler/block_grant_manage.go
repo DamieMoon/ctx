@@ -28,20 +28,6 @@ type blockGrantSpec struct {
 	GranteeTenant string `json:"grantee_tenant"`
 }
 
-// dispatchBlockGrantAction fans the block-grant-* actions out (split from
-// HandleManage's switch for the cyclomatic budget, mirroring dispatchTenantAction).
-// All three are server-admin-gated upstream; create/revoke add the ownership gate.
-func (h *ManageHandler) dispatchBlockGrantAction(w http.ResponseWriter, r *http.Request, ar *auth.AuthResult, req manageRequest) {
-	switch req.Action {
-	case "block-grant-create":
-		h.handleBlockGrantCreate(w, r, ar, req)
-	case "block-grant-list":
-		h.handleBlockGrantList(w, r, ar, req)
-	case "block-grant-revoke":
-		h.handleBlockGrantRevoke(w, r, ar, req)
-	}
-}
-
 // blockOwnershipGate enforces design/07 §5.1: the caller-tenant must OWN the
 // block (block.scope ∈ TenantScopes(ar.TenantID), Modell C — one scope = one
 // tenant). It returns (0, "") when the caller owns the block, else an HTTP status
