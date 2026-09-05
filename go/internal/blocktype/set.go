@@ -281,9 +281,24 @@ func (s *Set) GuardSameScopeOnly(name string) bool {
 
 // ParentMode resolves the type's parent.mode (ParentModeNone|Optional|Required,
 // unlocked in Achse 02 Welle I-D). Unknown names and the zero value fall back to
-// ParentModeNone (no parent). The comment write path (store.InsertCommentBlock,
-// via the manage/REST handler) consults it: parent.mode=required means a block of
-// that type MUST be created with a parent (orphan prevention, design/01 §9.1a).
+// ParentModeNone (no parent).
+//
+// The CLAIM CHAIN consults it (T02-11, design/02 §8 E02-4):
+// handler.parentRequiredReject — the fourth gate of handler.claimReject in
+// stage_gates.go — refuses a CLIENT-NAMED type with parent.mode=required on
+// every surface that lets a client name one, and not one of them carries a
+// parent: REST /api/store, both MCP store arms, manage-update and the confirm
+// of a staged card. (The chat stage runner, /api/ingest and the MCP update tool
+// reach the same function but pass no type at all, so the gate is inert there —
+// a write without a `type` is untouched everywhere.) parent.mode=required
+// therefore means what it says: a block of that type is never CREATED orphaned
+// through a generic write (orphan prevention, design/01 §9.1a). Until T02-11
+// this method had ZERO production callers and the promise was configuration
+// without a mechanism.
+//
+// The parent-bearing path is the type's own domain path and does NOT run that
+// chain: for `comment`, store.InsertCommentBlock, which mandates parent_id
+// itself (store.ErrCommentParentRequired) and stays the first refusal there.
 func (s *Set) ParentMode(name string) string {
 	p, ok := s.policies[name]
 	if !ok || p.Parent.Mode == "" {

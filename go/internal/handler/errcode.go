@@ -65,6 +65,15 @@ var (
 	// code: the type exists, it is simply not the client's to claim, and a
 	// client that branches on "typo" must not treat this as one.
 	classReservedType = rejectClass{http.StatusUnprocessableEntity, "reserved_type"}
+	// classParentRequired — explicit `type` names a type whose registry policy
+	// demands a structural parent (parent.mode=required), on a write surface
+	// that carries none (T02-11, design/02 §8 E02-4). 422 like the other two
+	// type-claim classes and for the same reason: the client's assertion about
+	// the entity is what is unprocessable. A separate code, because the remedy
+	// differs from both neighbours — unknown_type says "fix the name",
+	// reserved_type says "drop the claim", this one says "use the type's own
+	// domain path", which is the only place a parent can be handed over.
+	classParentRequired = rejectClass{http.StatusUnprocessableEntity, "parent_required"}
 	// classReservedCategory — the write targets a category reserved for the
 	// derived layer (I7/S2). 403, not 422: the payload is well-formed, the
 	// caller is simply not authorised for that namespace.

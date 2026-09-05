@@ -34,6 +34,13 @@
 //	                            chain. This is the DURABLE wiring probe (R4) —
 //	                            the six probes above pin the seven gates, this
 //	                            one pins that all three arms run THEM.
+//	i ParentRequiredReachesAllArms — a type whose registry row says
+//	                            parent.mode=required is refused on all three
+//	                            arms with ONE code and ONE prose, and neither
+//	                            written nor staged (T02-11). RED before: all
+//	                            three accepted and stored, because
+//	                            blocktype.Set.ParentMode had zero production
+//	                            callers — a policy without a mechanism.
 //
 // Run with:
 //
@@ -623,6 +630,218 @@ func TestMCPStoreGateChain(t *testing.T) {
 		for _, a := range clean {
 			if a.out.rejected {
 				t.Errorf("[%s] refused an unmarked payload: %q", a.name, a.out.text)
+			}
+		}
+	})
+
+	t.Run("i_ParentRequiredReachesAllArms", func(t *testing.T) {
+		// Welle T02-11 (design/02 §8 E02-4): parent.mode=required was a policy
+		// the registry accepted and no write path delivered — blocktype.Set.
+		// ParentMode resolved the value and had ZERO production callers, so a
+		// tenant could configure orphan prevention and write orphans through
+		// /api/store all the same. The fourth claim gate closes it.
+		//
+		// RED before T02-11: all three arms answer 200 / a stage card for a
+		// required-parent type without a parent, and the block lands in
+		// context_blocks. GREEN after: one verdict, three arms, identical code
+		// and identical prose, nothing written and nothing staged.
+		//
+		// The class is the PRODUCTION class here (unlike subtest h's 418 probe):
+		// the point of this wave is exactly that parent_required joins the
+		// published rejection vocabulary of docs/api.md.
+		//
+		// BETRIEBS-NACHWEIS für fremde Installationen — der Sweep, den ein
+		// Operator VOR dem Upgrade fährt, nennt die Population, deren generische
+		// Schreibvorgänge ab jetzt abgelehnt werden:
+		//
+		//	SELECT scope, name, builtin FROM context_block_types
+		//	 WHERE config->'parent'->>'mode' = 'required'
+		//	 ORDER BY scope, name;
+		//
+		// Auf dieser Installation (2026-09-05, 18:52 UTC): genau EINE Zeile,
+		// `_global | comment | t` — 11 Typen gesamt, 0 nicht-builtin. Deshalb
+		// ist der Schnitt hier ein Minor und kein Bruch für einen Tenant.
+		for _, seed := range []struct{ name, mode string }{
+			{"gc-parent-required", blocktype.ParentModeRequired},
+			{"gc-parent-optional", blocktype.ParentModeOptional},
+			{"gc-parent-none", blocktype.ParentModeNone},
+		} {
+			if _, err := pool.Exec(ctx,
+				`INSERT INTO context_block_types (name, scope, display_name, builtin, is_default, config)
+				 VALUES ($1::text, '_global', $1::text, false, false,
+				         jsonb_build_object('v', 1, 'parent', jsonb_build_object('mode', $2::text)))`,
+				seed.name, seed.mode); err != nil {
+				t.Fatalf("seed fixture type %s: %v", seed.name, err)
+			}
+		}
+		// A FRESH registry rather than reg.Reload: the shared reg belongs to the
+		// subtests above and must keep the snapshot they booted with.
+		regP := blocktype.NewRegistry()
+		regP.Boot(ctx, pool)
+		if regP.Health() != blocktype.HealthOK {
+			t.Fatalf("registry boot degraded: %s — a fixture row does not decode", regP.Health())
+		}
+		// Premises, asserted rather than assumed: all four modes must be what
+		// this subtest believes, or every verdict below proves something else.
+		for _, p := range []struct{ name, want string }{
+			{"gc-parent-required", blocktype.ParentModeRequired},
+			{"gc-parent-optional", blocktype.ParentModeOptional},
+			{"gc-parent-none", blocktype.ParentModeNone},
+			{"comment", blocktype.ParentModeRequired}, // the one SHIPPED required type
+		} {
+			if got := regP.Snapshot().ParentMode(p.name); got != p.want {
+				t.Fatalf("fixture ParentMode(%s) = %q, want %q — premise of this subtest",
+					p.name, got, p.want)
+			}
+		}
+
+		cfgP := staticConfigStore{cfg: &config.Config{
+			Query:  config.QueryConfig{RateLimitWrite: 0},
+			Pool:   config.PoolConfig{DefaultBlockSensitivity: backends.SensPublic},
+			Writes: config.WritesConfig{ConfirmTTL: 10 * time.Minute},
+		}}
+		mcpCfgP := MCPConfig{Pool: pool, Cfg: cfgP, Blocktypes: regP}
+
+		// Same shape as subtest h's gcCoded, but the drivers carry `type` —
+		// which is the whole subject here and the one field restArm above drops.
+		type pcCoded struct {
+			rejected bool
+			status   int
+			code     string
+			text     string
+		}
+		restTyped := func(keyCtx context.Context, in storeInput) pcCoded {
+			t.Helper()
+			body, _ := json.Marshal(map[string]any{
+				"category": in.Category, "title": in.Title,
+				"content": in.Content, "type": in.Type,
+			})
+			req := httptest.NewRequest(http.MethodPost, "/api/store", strings.NewReader(string(body)))
+			req = req.WithContext(keyCtx)
+			rec := httptest.NewRecorder()
+			NewStoreHandler(pool, cfgP, regP).HandleStore(rec, req)
+			var resp struct {
+				Error string `json:"error"`
+				Code  string `json:"code"`
+			}
+			_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+			return pcCoded{
+				rejected: rec.Code != http.StatusOK,
+				status:   rec.Code,
+				code:     resp.Code,
+				text:     resp.Error,
+			}
+		}
+		mcpTyped := func(keyCtx context.Context, in storeInput) pcCoded {
+			t.Helper()
+			r, _, err := mcpStoreHandler(mcpCfgP)(keyCtx, nil, in)
+			if err != nil {
+				t.Fatalf("mcp store %q: protocol error %v", in.Title, err)
+			}
+			txt := resultText(t, r)
+			out := pcCoded{
+				rejected: r.IsError && !strings.Contains(txt, "STAGED — NOT saved yet"),
+				text:     txt,
+			}
+			if env, ok := r.StructuredContent.(mcpErrorEnvelope); ok {
+				out.code = env.Code
+			}
+			return out
+		}
+
+		_, restCtx, _ := mkKey("gc-i-rest", "private", nil, false)
+		_, directCtx, _ := mkKey("gc-i-direct", "private", nil, false)
+		stagedID, stagedCtx, _ := mkKey("gc-i-staged", "private", nil, true)
+
+		// One payload per arm, differing in CONTENT for the same reason subtest
+		// h needs it: the MCP arms run their hash-NOOP check BEFORE the chain.
+		probe := func(t *testing.T, typeName, title string) {
+			wantMsg := fmt.Sprintf(
+				"type: %q requires a parent (parent.mode=required) — this write surface carries "+
+					"no parent, so a block of that type is created through its own domain path, "+
+					"not claimed here", typeName)
+			arms := []struct {
+				name string
+				out  pcCoded
+			}{
+				{"rest", restTyped(restCtx, storeInput{
+					Category: "test", Title: title, Type: typeName,
+					Content: "parent probe payload for the REST arm"})},
+				{"mcp-direct", mcpTyped(directCtx, storeInput{
+					Category: "test", Title: title, Type: typeName,
+					Content: "parent probe payload for the MCP-direct arm"})},
+				{"mcp-staged", mcpTyped(stagedCtx, storeInput{
+					Category: "test", Title: title, Type: typeName,
+					Content: "parent probe payload for the MCP-staged arm"})},
+			}
+			for _, a := range arms {
+				if !a.out.rejected {
+					t.Errorf("[%s] accepted type %q without a parent — parent.mode=required is a "+
+						"policy without a mechanism (body %q)", a.name, typeName, a.out.text)
+					continue
+				}
+				if a.out.code != "parent_required" {
+					t.Errorf("[%s] code = %q, want parent_required", a.name, a.out.code)
+				}
+				if a.out.text != wantMsg {
+					t.Errorf("[%s] prose = %q, want %q", a.name, a.out.text, wantMsg)
+				}
+			}
+			// Parity as an EQUALITY between the arms, not only against the
+			// constant: an arm that renders its own wording is caught here even
+			// if it picks the right class.
+			for _, a := range arms[1:] {
+				if a.out.code != arms[0].out.code || a.out.text != arms[0].out.text {
+					t.Errorf("[%s] answers %q/%q, REST answers %q/%q — the arms diverge",
+						a.name, a.out.code, a.out.text, arms[0].out.code, arms[0].out.text)
+				}
+			}
+			if arms[0].out.status != http.StatusUnprocessableEntity {
+				t.Errorf("REST status = %d, want %d (the type-claim class)",
+					arms[0].out.status, http.StatusUnprocessableEntity)
+			}
+			// A verdict that is rendered but not obeyed would satisfy everything
+			// above; the refusal has to STOP the write on every arm.
+			if n := blockCount(title); n != 0 {
+				t.Errorf("%d block(s) titled %q stored, want the payload never written", n, title)
+			}
+		}
+
+		t.Run("fixture_type", func(t *testing.T) { probe(t, "gc-parent-required", "gc-i-required") })
+		// The SHIPPED case: `comment` is builtin required and is NOT
+		// write.internal_only, so before this wave a client could claim it on
+		// /api/store and receive a comment block with parent_id NULL — the exact
+		// orphan the registry row forbids. Its own domain path
+		// (store.InsertCommentBlock behind the issue verbs) is untouched and
+		// keeps ErrCommentParentRequired as its FIRST refusal.
+		t.Run("shipped_comment_type", func(t *testing.T) { probe(t, "comment", "gc-i-comment") })
+
+		if n := pendingCount(stagedID); n != 0 {
+			t.Errorf("%d staged card(s) for the refused payloads, want none — a card that "+
+				"cannot be confirmed must never be issued", n)
+		}
+
+		// Counter-probe: optional and none stay claimable on all three arms, so
+		// the gate is a GATE and not a blanket refusal of every explicit type.
+		for _, typeName := range []string{"gc-parent-optional", "gc-parent-none"} {
+			for _, a := range []struct {
+				name string
+				out  pcCoded
+			}{
+				{"rest", restTyped(restCtx, storeInput{
+					Category: "test", Title: "gc-i-ok-rest-" + typeName, Type: typeName,
+					Content: "control payload for the REST arm, " + typeName})},
+				{"mcp-direct", mcpTyped(directCtx, storeInput{
+					Category: "test", Title: "gc-i-ok-direct-" + typeName, Type: typeName,
+					Content: "control payload for the MCP-direct arm, " + typeName})},
+				{"mcp-staged", mcpTyped(stagedCtx, storeInput{
+					Category: "test", Title: "gc-i-ok-staged-" + typeName, Type: typeName,
+					Content: "control payload for the MCP-staged arm, " + typeName})},
+			} {
+				if a.out.rejected {
+					t.Errorf("[%s] refused type %q: %s/%q — only parent.mode=required is gated",
+						a.name, typeName, a.out.code, a.out.text)
+				}
 			}
 		}
 	})

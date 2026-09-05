@@ -205,13 +205,79 @@ func validateTypeNameAgainstSet(set *blocktype.Set, name string) *writeReject {
 	return nil
 }
 
-// claimReject runs the three gates that decide what a client may CLAIM about a
-// block it writes: the category it occupies (I7/S2), the provenance key it
-// carries in its own metadata (I7/S3, second half) and the type it names
-// (I7/S1 plus the WF T10 registry check). nil = admissible.
+// parentRequiredReject is the fourth claim gate: a type whose registry policy
+// says parent.mode=required may not be claimed on a surface that carries no
+// parent. nil = admissible.
 //
-// ONE function and ONE order — category, metadata, type — called at the same
-// position by every write surface, because the gates only add up to an
+// It is the MECHANISM behind a policy that had none (design/02 §8 E02-4).
+// blocktype.Set.ParentMode resolved the value and no production path read it,
+// so a registry row could promise orphan prevention that no write delivered:
+// REST /api/store, both MCP store arms, manage-update and the confirm of a
+// staged card all take a client-named `type` out of the same client JSON, and
+// NONE of them has a parent field. A block of a required-parent type written
+// through any of them is an orphan by construction — while the registry had
+// accepted the very configuration that forbids it. On the shipped registry the
+// affected type is `comment`, which is not write.internal_only:
+// `{"type":"comment"}` on /api/store bought a comment block with parent_id NULL.
+//
+// The other three callers of claimReject — the chat stage runner, /api/ingest
+// and the MCP update tool — pass no type at all (their tool/chunk shapes have
+// no such field), so this gate is inert on them by construction rather than by
+// omission, exactly as validateTypeNameAgainstSet already is.
+//
+// The refusal is therefore TOTAL on these surfaces, not conditional. There is no
+// request shape here that could satisfy the mode, so asking "does this write
+// carry a parent" would be asking a question with one possible answer. The
+// parent-bearing path is the type's own domain path: for `comment` that is
+// store.InsertCommentBlock behind the issue verbs (manage issue-comment-create,
+// POST /api/project/{id}/issues/{block_id}/comments, the MCP issue_comment
+// tool), which takes parent_id as a mandatory argument and refuses an empty one
+// itself (store.ErrCommentParentRequired). That path runs neither this gate nor
+// this chain and is unchanged, down to the bytes of its first refusal.
+//
+// WHY IN claimReject AND NOT IN runStageWriteGates: the claim gates are the
+// surfaces' shared answer to "what may a client assert about a block it writes",
+// and manage-update asserts a type from the same JSON without being able to set
+// a parent either. Hanging the gate on the store chain alone would have made
+// orphan prevention a property of the VERB a client picks — the exact failure
+// updateClaimReject (context_manage.go) was written to close. It also inherits
+// the confirm-time re-check (confirm_core.go): a card staged before the gate
+// existed is refused at confirm instead of executing under the old rules.
+//
+// KNOWN CONSEQUENCE, deliberate: manage-update cannot re-assert a
+// required-parent type on a block that already HAS a parent either — the gate
+// sees the claim, not the row. No legitimate write is lost by that, because no
+// manage-update payload can give a block the parent the type demands; the case
+// is a no-op re-assertion on an existing comment.
+//
+// It runs AFTER validateTypeNameAgainstSet, and that order is load-bearing:
+// ParentMode falls back to ParentModeNone for names it does not know, so a
+// parent gate placed ahead of the membership check would answer "admissible"
+// for a typo and hand the verdict to the next gate — and a nil set would reach
+// s.policies through a nil receiver. Past the membership check the set is
+// non-nil and the name resolved.
+func parentRequiredReject(set *blocktype.Set, name string) *writeReject {
+	if set == nil {
+		// Unreachable from claimReject (the membership check above fails closed
+		// with unknown_type on a nil set); here so the function is total.
+		return nil
+	}
+	if set.ParentMode(name) != blocktype.ParentModeRequired {
+		return nil
+	}
+	return classParentRequired.reject(fmt.Sprintf(
+		"type: %q requires a parent (parent.mode=required) — this write surface carries no parent, "+
+			"so a block of that type is created through its own domain path, not claimed here", name))
+}
+
+// claimReject runs the four gates that decide what a client may CLAIM about a
+// block it writes: the category it occupies (I7/S2), the provenance key it
+// carries in its own metadata (I7/S3, second half), the type it names (I7/S1
+// plus the WF T10 registry check) and the parent that type's policy demands
+// (T02-11). nil = admissible.
+//
+// ONE function and ONE order — category, metadata, type, parent — called at the
+// same position by every write surface, because the gates only add up to an
 // invariant when their order and their verdicts are identical everywhere: a
 // surface that ran them in its own order would answer the same payload with a
 // different rejection, and that difference is what a probing client measures.
@@ -235,7 +301,10 @@ func claimReject(set *blocktype.Set, category, typeName string, metadata map[str
 	if typeName == "" {
 		return nil
 	}
-	return validateTypeNameAgainstSet(set, typeName)
+	if rej := validateTypeNameAgainstSet(set, typeName); rej != nil {
+		return rej
+	}
+	return parentRequiredReject(set, typeName)
 }
 
 // reservedMetadataReject is the second half of I7/S3 (design D-01 §4.3.1 read
