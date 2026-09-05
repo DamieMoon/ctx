@@ -644,6 +644,26 @@ docker exec n8n-db-1 psql -U "$CONTEXT_DB_USER" -d "$CONTEXT_DB" -c \
 
 Restore what you find **into the backend pool** (`ctx backends`), not as a settings row — writing these keys back through the settings API is not possible any more, and on v4.37 and later it was already refused. Two consequences worth planning for: keep the `CTX_*` tuple variables in your `.env` until the v5 boot is verified — after this migration they are the only remaining source a rollback to 4.x can read — and check `GET /api/secrets` afterwards for sealbox entries whose `referenced_by` is now empty, because a deleted `*.api_key` row took its reference with it while the secret itself stays.
 
+### Migration 152: the rows of the keys that had no successor are deleted
+
+`distill.local_only` and `root_map.label_budget` left the settings registry in v5.16.0. Migration 152 removes what is left of them in the database: every `context_settings` row on those two keys, **in every scope** — both were hot-mutable and therefore writable per tenant through `PUT /api/settings`, so a global-only delete would leave exactly the rows nobody can see. It touches no schema and no other key.
+
+**This is not the Migration 133 situation.** Those 29 keys had a destination — their values moved into the backend pool, and the runbook section above is mostly about getting them there. These two have none. `distill.local_only` never lowered anything: the distill call sets that flag fixed in code, with or without the key. `root_map.label_budget` was a cap without a subject: nothing outside its own tests ever read it. So there is no hop to make, no pool to check, and nothing to restore before serving — the values stop existing because nothing ever consumed them. The reason to delete the rows anyway is the same as for 133: an unregistered key's row is inert only for as long as nobody registers that name again.
+
+**What it tells you.** When it actually deletes something, the migration writes two lines into the boot log (`docker compose logs ctx`): how many rows went and where their values can still be read. On a database that has no such rows — every fresh install, and any installation that never wrote either key — it says nothing at all and changes nothing. Running it twice is a no-op; a second application deletes zero rows and stays silent.
+
+**Recovering a value.** Every delete is recorded by the ordinary settings audit trigger as an `unset` with the old value attached, marked with the migration's request id:
+
+```bash
+docker exec n8n-db-1 psql -U "$CONTEXT_DB_USER" -d "$CONTEXT_DB" -c \
+  "SELECT entity_key, scope, old_value FROM context_settings_audit
+    WHERE metadata->>'request_id' = 'migration-152-retire-v2-settings';"
+```
+
+There is nowhere to restore such a value to — the settings API answers 404 on both keys in every scope, and no other key took the value over. The query exists so that a rollback to a pre-v5.16.0 binary can put the row back by hand, and so that an operator who wants to know what a tenant had configured can still find out.
+
+**Rolling over this upgrade costs nothing here.** The row deletes emit the usual `ctx_settings_write` events, so an old binary still serving alongside would reload its settings and lose the overrides — but since neither key had a reader, losing them changes no behaviour. Take the old container down first anyway, for the reasons the Migration 133 section gives.
+
 ### `graph_overview.csr_loader`: the rebuild's input substrate
 
 `CTX_GRAPH_OVERVIEW_CSR_LOADER` (default `false`, hot) switches how the rebuild gets its graph into memory. It changes no result — the partition, the modularity and the intra-cluster degrees are byte-identical either way, and that identity is a gate, not a hope.
