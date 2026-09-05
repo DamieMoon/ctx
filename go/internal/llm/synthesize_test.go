@@ -395,15 +395,23 @@ func TestSystemPromptV6_KeepsRefusalSentinel(t *testing.T) {
 
 func TestSelectSystemPrompt_V52(t *testing.T) {
 	s := SynthesisSettings{PromptVersion: PromptVersionV52}
-	if got := selectSystemPrompt(s); got != systemPromptV52 {
+	got, id := selectSystemPrompt(s)
+	if got != systemPromptV52 {
 		t.Errorf("selectSystemPrompt() with PromptVersion=v5.2 = wrong prompt (len %d)", len(got))
+	}
+	if id != promptSynthesisV52 {
+		t.Errorf("identity = %+v, want %+v", id, promptSynthesisV52)
 	}
 }
 
 func TestSelectSystemPrompt_V6Selected(t *testing.T) {
 	s := SynthesisSettings{PromptVersion: PromptVersionV6}
-	if got := selectSystemPrompt(s); got != systemPromptV6 {
+	got, id := selectSystemPrompt(s)
+	if got != systemPromptV6 {
 		t.Errorf("selectSystemPrompt() with PromptVersion=v6 = wrong prompt (len %d)", len(got))
+	}
+	if id != promptSynthesisV6 {
+		t.Errorf("identity = %+v, want %+v", id, promptSynthesisV6)
 	}
 }
 
@@ -414,8 +422,14 @@ func TestSelectSystemPrompt_UnknownFallsBackToV52(t *testing.T) {
 	// should default to V5.2 rather than panic / return an empty string.
 	for _, version := range []string{"v999", ""} {
 		s := SynthesisSettings{PromptVersion: version}
-		if got := selectSystemPrompt(s); got != systemPromptV52 {
+		got, id := selectSystemPrompt(s)
+		if got != systemPromptV52 {
 			t.Errorf("selectSystemPrompt() with PromptVersion=%q must fall back to V5.2, got len %d", version, len(got))
+		}
+		// The identity follows the body, not the setting: a row written under
+		// an unknown version must say v5.2, because v5.2 is what was sent.
+		if id != promptSynthesisV52 {
+			t.Errorf("identity for PromptVersion=%q = %+v, want %+v", version, id, promptSynthesisV52)
 		}
 	}
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/GottZ/ctx/internal/llm"
 	"github.com/GottZ/ctx/internal/llmlog"
 	"github.com/GottZ/ctx/internal/promptguard"
+	"github.com/GottZ/ctx/internal/prompts"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -52,6 +53,12 @@ Types:
 Output JSON: {"verdict":"recurrent|supersedes|none","pattern":"parallel|sequence|weekly|monthly|sessional|version-replacement|none","confidence":0.0-1.0}
 
 Confidence reflects how clearly the chosen verdict applies. When in doubt: "none".`
+
+// promptRecurrence is the identity of the recurrence classifier (E04-5).
+// Version = the date the body arrived (510ac577, Welle 38b) — it is the only
+// commit that has ever touched this text.
+var promptRecurrence = prompts.Register(
+	"dream.recurrenceSystemPrompt", "2026-05-06", "github.com/GottZ/ctx/internal/dream")
 
 // recurrenceVerdict is the parsed Phase-2 LLM response.
 type recurrenceVerdict struct {
@@ -183,7 +190,8 @@ func confirmRecurrence(ctx context.Context, pool *pgxpool.Pool, r *Router, opts 
 	systemPrompt, userPrompt := buildRecurrencePrompt(source, c)
 	required := backends.MaxSensitivity(source.Sensitivity, c.TargetSens)
 
-	entry := newDreamEntry("dream-recurrence", systemPrompt, userPrompt, []string{source.ID, c.TargetID})
+	entry := newDreamEntry("dream-recurrence", systemPrompt, userPrompt, []string{source.ID, c.TargetID},
+		promptRecurrence)
 	defer func() { llmlog.Record(pool, entry.Slimmed(r.Devmode)) }()
 
 	start := time.Now()

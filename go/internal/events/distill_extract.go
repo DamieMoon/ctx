@@ -63,6 +63,7 @@ import (
 	"github.com/GottZ/ctx/internal/distillsource"
 	"github.com/GottZ/ctx/internal/llm"
 	"github.com/GottZ/ctx/internal/promptguard"
+	"github.com/GottZ/ctx/internal/prompts"
 	"github.com/GottZ/ctx/internal/redact"
 	"github.com/GottZ/ctx/internal/sensitivity"
 	"github.com/GottZ/ctx/internal/util"
@@ -501,6 +502,15 @@ const distillSystemPrompt = "You extract verifiable insights from blocks of a re
 	`{"insights":[{"claim":"...","quote":"...","block":"<N>","chunk":<M>,"kind":"finding|decision|state|failure"}]}` +
 	"\n\nUse only these four kinds. Do not add any further field. Report nothing rather than something " +
 	"you cannot quote.\n\n"
+
+// promptDistill is the identity of the extraction body (E04-5). Version = the
+// date the body text last changed (4a3730f7, the C4-R wave that added the
+// wording rule above). It matters more here than anywhere else: the answer
+// this body asks for is decoded with DisallowUnknownFields, so the prompt
+// generation and the parser generation are one fact, and a run whose
+// rej_decode counter moves has to be readable against the prompt it ran under.
+var promptDistill = prompts.Register(
+	"events.distillSystemPrompt", "2026-08-30", "github.com/GottZ/ctx/internal/events")
 
 // distillBuildPrompt renders one call's prompt and reports what the model will
 // actually see.
@@ -1251,6 +1261,7 @@ func (s *Scheduler) distillCall(ctx context.Context, d distillCallOpts, system, 
 		Role:     backends.RoleDigest,
 		Required: backends.SensCredentials,
 		Pipeline: distillPipeline,
+		Prompt:   promptDistill,
 		Tenant:   "",
 		BlockIDs: blockIDs,
 		System:   system,

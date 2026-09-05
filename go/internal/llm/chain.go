@@ -11,6 +11,7 @@ import (
 	"github.com/GottZ/ctx/internal/dispatch"
 	"github.com/GottZ/ctx/internal/httpx"
 	"github.com/GottZ/ctx/internal/llmlog"
+	"github.com/GottZ/ctx/internal/prompts"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -593,6 +594,13 @@ type ChainCall struct {
 	Tenant     string
 	Required   backends.Sensitivity
 	Pipeline   string // llmlog pipeline name, e.g. "query-translate"
+	// Prompt is the identity of the body in System (E04-5): it lands in the
+	// row as metadata.prompt_id/prompt_version, so a month of context_llm_log
+	// can be read back by prompt generation. Every non-test call site sets it
+	// — the AST gate in internal/prompts fails a literal that does not — and
+	// the field is deliberately the IDENTITY, not the version string alone: a
+	// caller cannot stamp a version that belongs to another body.
+	Prompt     prompts.Identity
 	System     string
 	User       string
 	Opts       Options
@@ -658,6 +666,9 @@ func (c ChainCall) Do(ctx context.Context, db *pgxpool.Pool, adm Admission) (*Ch
 
 	entry := newChainEntry(c.Pipeline, err, c.BlockIDs, c.Required, attempts, c.APIKeyID)
 	entry.Metadata = map[string]any{"chain": attempts}
+	// AFTER the never-admitted early return above: a call that never reached
+	// the wire sent no prompt, and the K9 rejection line must not claim one.
+	entry.StampPrompt(c.Prompt)
 	StampServed(&entry, c.Role, served)
 	// Caller policy, not provenance: fires once, after the walk, only when a
 	// backend answered — and reads the model back off the stamped row.

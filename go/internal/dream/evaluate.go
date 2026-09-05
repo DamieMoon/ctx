@@ -12,6 +12,7 @@ import (
 	"github.com/GottZ/ctx/internal/llm"
 	"github.com/GottZ/ctx/internal/llmlog"
 	"github.com/GottZ/ctx/internal/promptguard"
+	"github.com/GottZ/ctx/internal/prompts"
 	"github.com/GottZ/ctx/internal/util"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -60,6 +61,13 @@ Types:
 
 Output a JSON array of {target_id, type, confidence}. Empty [] when no candidate relates. Maximum 5 entries.`
 )
+
+// promptEval is the identity of the relationship classifier (E04-5). Version
+// v5 is the body's OWN word: the comment above is a version log (V5 shipped,
+// V6 measured net-worse on stable gold, V6 reverted), so the row names the
+// generation that log talks about instead of a date nobody has written down.
+var promptEval = prompts.Register(
+	"dream.dreamSystemPrompt", "v5", "github.com/GottZ/ctx/internal/dream")
 
 // DefaultNumPredict is the PACKAGE default for the output cap of the dream
 // chat calls that share DreamOptions (link evaluation + recurrence confirm).
@@ -282,7 +290,7 @@ func evalAttempt(ctx context.Context, pool *pgxpool.Pool, r *Router, req *evalRe
 	// trigger time) captures final state including parse errors that surface
 	// after the LLM call. Reached only past the caller's empty-candidates
 	// early-return, so no zero-duration no-op rows pollute the log.
-	entry := newDreamEntry("dream-eval", req.system, req.user, req.blockIDs)
+	entry := newDreamEntry("dream-eval", req.system, req.user, req.blockIDs, promptEval)
 	// Stamped BEFORE the call, not next to links_capped after it: the cap
 	// fired during retrieval, so the count belongs on the row even when the
 	// eval times out or the answer fails to parse — those are exactly the

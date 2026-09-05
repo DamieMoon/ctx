@@ -28,6 +28,7 @@ import (
 	"unicode"
 
 	"github.com/GottZ/ctx/internal/backends"
+	"github.com/GottZ/ctx/internal/prompts"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -107,6 +108,14 @@ DIRECTION RULES (strict priority):
 Use the WEEKDAY REFERENCE TABLE above to look up dates. Do NOT calculate — just pick LAST or NEXT.
 
 JSON: {"dates":[{"ref":"matched text","date":"YYYY-MM-DD","end":"YYYY-MM-DD or null","dir":"past|future|today|range"}],"query":"original with dates inserted"}`
+
+// promptTemporal is the identity of the temporal-resolver template (E04-5).
+// The %s the template carries is the calendar of the request, not a second
+// body: one text, one identity. Version = the date the template text last
+// changed (82796166, the red/blue hardening pass) — the "V2" in the comment
+// above names the CALENDAR generation, not this prompt.
+var promptTemporal = prompts.Register(
+	"llm.temporalPromptTemplate", "2026-03-30", "github.com/GottZ/ctx/internal/llm")
 
 // weekdayDE maps Go's time.Weekday to German weekday names.
 var weekdayNameDE = [7]string{"Sonntag", "Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag"}
@@ -256,6 +265,7 @@ func NormalizeTemporal(ctx context.Context, db *pgxpool.Pool, bpool *backends.Po
 		Role:       backends.RoleTranslate,
 		Required:   querySens,
 		Pipeline:   "query-temporal",
+		Prompt:     promptTemporal,
 		System:     systemPrompt,
 		User:       query,
 		Opts:       TemporalOptions(0),

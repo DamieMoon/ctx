@@ -141,7 +141,7 @@ func TestBuildPrompt_UntrustedRuleAppearsOncePerPrompt(t *testing.T) {
 // the caller's contract: the augmented prompt is longer than the bare one by
 // exactly the rule (plus the joining space).
 func TestUntrustedRuleIsChargeable(t *testing.T) {
-	bare := selectSystemPrompt(testSettings)
+	bare, _ := selectSystemPrompt(testSettings)
 	withRule := withUntrustedRule(bare)
 
 	if len(withRule) != len(bare)+len(UntrustedSourceRule)+1 {

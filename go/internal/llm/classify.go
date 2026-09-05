@@ -20,6 +20,7 @@ import (
 
 	"github.com/GottZ/ctx/internal/backends"
 	"github.com/GottZ/ctx/internal/promptguard"
+	"github.com/GottZ/ctx/internal/prompts"
 	"github.com/GottZ/ctx/internal/redact"
 	"github.com/GottZ/ctx/internal/util"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -46,6 +47,13 @@ Du bekommst eine Ja/Nein-Frage und den Inhalt eines Blocks.
 Antworte AUSSCHLIESSLICH mit einem JSON-Objekt der Form {"answer": true} oder {"answer": false}.
 Kein anderer Text, keine Begründung, kein Markdown.
 Im Zweifel antworte {"answer": true}.`
+
+// promptClassify is the identity classifySystemPrompt writes into every
+// sensitivity-audit row (E04-5). Version = the date the body text last
+// changed (28b0ec41, the audit's first wave); the body has carried no version
+// of its own.
+var promptClassify = prompts.Register(
+	"llm.classifySystemPrompt", "2026-06-13", "github.com/GottZ/ctx/internal/llm")
 
 // ClassifyOptions returns deterministic sampling for the audit: the answer is
 // one boolean, exploration adds nothing but variance. think comes from the
@@ -176,6 +184,7 @@ func ClassifyBlockBool(ctx context.Context, db *pgxpool.Pool, bpool *backends.Po
 		Required:   backends.SensCredentials,
 		LocalOnly:  true,
 		Pipeline:   "sensitivity-audit",
+		Prompt:     promptClassify,
 		System:     classifySystemPrompt,
 		User:       user,
 		Opts:       ClassifyOptions(0),

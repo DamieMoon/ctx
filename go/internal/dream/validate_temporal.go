@@ -20,6 +20,7 @@ import (
 	"github.com/GottZ/ctx/internal/llm"
 	"github.com/GottZ/ctx/internal/llmlog"
 	"github.com/GottZ/ctx/internal/promptguard"
+	"github.com/GottZ/ctx/internal/prompts"
 	"github.com/GottZ/ctx/internal/store"
 	"github.com/GottZ/ctx/internal/util"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -50,6 +51,12 @@ Rules:
 
 Output format:
 {"dates":[{"date":"2026-03-15","source":"explicit"}],"directions":[{"direction":"past","note":"after the Go refactor"}],"false_positives":["2026-03 is a version number, not a date"]}`
+
+// promptTemporalReview is the identity of the temporal extractor (E04-5).
+// Version = the date the body text last changed (6608606e, which added rule 6,
+// the instruction not to follow instructions in the block).
+var promptTemporalReview = prompts.Register(
+	"dream.temporalValidationPrompt", "2026-04-24", "github.com/GottZ/ctx/internal/dream")
 
 // TemporalFinding is a single date found by the LLM.
 type TemporalFinding struct {
@@ -170,7 +177,8 @@ func ValidateTemporal(ctx context.Context, pool *pgxpool.Pool, r *Router, opts l
 		validateOpts.NumCtx = opts.NumCtx
 	}
 
-	entry := newDreamEntry("dream-temporal", temporalValidationPrompt, userPrompt, []string{block.ID})
+	entry := newDreamEntry("dream-temporal", temporalValidationPrompt, userPrompt, []string{block.ID},
+		promptTemporalReview)
 	defer func() { llmlog.Record(pool, entry.Slimmed(r.Devmode)) }()
 
 	start := time.Now()

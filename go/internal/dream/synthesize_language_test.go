@@ -48,15 +48,23 @@ func TestReportSurfaceByLanguage(t *testing.T) {
 			if strings.Join(gotTags, ",") != strings.Join(c.wantTags, ",") {
 				t.Errorf("tags = %v, want %v", gotTags, c.wantTags)
 			}
-			sys := dailySynthesisPromptFor(c.lang)
+			sys, sysID := dailySynthesisPromptFor(c.lang)
 			if c.wantLegacy {
 				if sys != dailySynthesisSystemPrompt {
 					t.Errorf("legacy language must yield the frozen German prompt, got %q", sys)
+				}
+				// T04-21: the identity follows the branch. Two bodies, two ids —
+				// a row of a localized deployment must not claim the German one.
+				if sysID != promptDailySynthesis {
+					t.Errorf("identity = %+v, want %+v", sysID, promptDailySynthesis)
 				}
 				return
 			}
 			if sys == dailySynthesisSystemPrompt {
 				t.Fatalf("localized language %q must not yield the German prompt", c.lang)
+			}
+			if sysID != promptDailySynthesisIntl {
+				t.Errorf("identity = %+v, want %+v", sysID, promptDailySynthesisIntl)
 			}
 			if !strings.Contains(sys, c.wantInSys) {
 				t.Errorf("prompt lacks %q:\n%s", c.wantInSys, sys)
@@ -73,7 +81,7 @@ func TestLegacyPromptFrozen(t *testing.T) {
 	if dailySynthesisSystemPrompt != want {
 		t.Fatalf("legacy prompt drifted:\ngot  %q\nwant %q", dailySynthesisSystemPrompt, want)
 	}
-	if got := dailySynthesisPromptFor(""); got != want {
+	if got, _ := dailySynthesisPromptFor(""); got != want {
 		t.Fatalf("empty language must serve the legacy prompt, got %q", got)
 	}
 }

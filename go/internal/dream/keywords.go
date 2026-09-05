@@ -22,6 +22,7 @@ import (
 	"github.com/GottZ/ctx/internal/llm"
 	"github.com/GottZ/ctx/internal/llmlog"
 	"github.com/GottZ/ctx/internal/promptguard"
+	"github.com/GottZ/ctx/internal/prompts"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -50,6 +51,12 @@ Rules:
 Example output: ["flash attention","KV cache","prompt eviction","qwen3.5:27b","Ollama keep_alive"]
 
 The response must START with [ and END with ]. An object like {"key":"value"} is WRONG — output a flat array.`
+
+// promptKeywords is the identity of the keyword extractor (E04-5). Version =
+// the date the body text last changed (621b0cda, which reworded rule 1 and
+// appended the START/END sentence against the degenerate answers of #39).
+var promptKeywords = prompts.Register(
+	"dream.keywordSystemPrompt", "2026-08-25", "github.com/GottZ/ctx/internal/dream")
 
 // KeywordsTimeout bounds one LLM keyword-extraction call. Larger than typical
 // extraction latency (~15s) to absorb transient queueing spikes.
@@ -106,13 +113,16 @@ func GenerateKeywords(ctx context.Context, pool *pgxpool.Pool, r *Router, block 
 			keywordSystemPrompt, userPrompt, opts, KeywordsTimeout)
 		duration := time.Since(start)
 
-		entry := newDreamEntry("dream-keywords", keywordSystemPrompt, userPrompt, []string{block.ID})
+		entry := newDreamEntry("dream-keywords", keywordSystemPrompt, userPrompt, []string{block.ID},
+			promptKeywords)
 		entry.Duration = duration
 		entry.Err = err
 		// BEFORE applyChainTelemetry, which writes metadata.chain into whatever
 		// map it finds: the retry counter is this row's own key and must not
-		// depend on which of the two writers creates the map.
-		entry.Metadata = map[string]any{"attempt": attempt}
+		// depend on which of the two writers creates the map. A WRITE and no
+		// longer an assignment (T04-21): the map arrives from newDreamEntry
+		// carrying the prompt identity, and replacing it would drop that again.
+		entry.Metadata["attempt"] = attempt
 		r.applyChainTelemetry(entry, backends.RoleDream, block.Sensitivity, served, resp, attempts, err)
 		if resp != nil {
 			entry.ResponseContent = resp.Message.Content

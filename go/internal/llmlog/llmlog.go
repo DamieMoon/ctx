@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/GottZ/ctx/internal/prompts"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -85,6 +86,33 @@ type Entry struct {
 	// persists as NULL instead of a fake 0 — Duration measures the wire
 	// call, and there was none.
 	NoWireCall bool
+}
+
+// StampPrompt records WHICH prompt body produced this row: metadata.prompt_id
+// and metadata.prompt_version, the two jsonb keys of E04-5 (no column, no
+// migration). It is the ONE place in the tree that writes them, so the two
+// spellings cannot drift apart across the twelve pipelines that stamp.
+//
+// The zero Identity is a no-op rather than an empty pair of keys: a row that
+// carries no prompt (the embed wire row, the K9 rejection line) must say
+// nothing instead of saying "". A pipeline that FORGETS its identity is not
+// caught here but at build time — every llm.ChainCall literal is required to
+// set Prompt, and every registered body is required to be sent, both by the
+// AST gates in internal/prompts.
+//
+// The bodies themselves are slimmed for credentials-class rows (Slimmed
+// below); the identity is not, and must not be: it is telemetry, not content,
+// and a sealed row whose prompt generation is unknowable defeats the reason
+// the seal keeps the telemetry in the first place.
+func (e *Entry) StampPrompt(id prompts.Identity) {
+	if id.ID == "" {
+		return
+	}
+	if e.Metadata == nil {
+		e.Metadata = map[string]any{}
+	}
+	e.Metadata["prompt_id"] = id.ID
+	e.Metadata["prompt_version"] = id.Version
 }
 
 // Slimmed applies the E4/8b body slim: credentials-class rows keep the full

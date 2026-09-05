@@ -22,6 +22,7 @@ import (
 	"github.com/GottZ/ctx/internal/dispatch"
 	"github.com/GottZ/ctx/internal/llm"
 	"github.com/GottZ/ctx/internal/llmlog"
+	"github.com/GottZ/ctx/internal/prompts"
 )
 
 // TestApplyChainTelemetryCarriesProviderTelemetry is the wave's primary probe:
@@ -32,7 +33,7 @@ func TestApplyChainTelemetryCarriesProviderTelemetry(t *testing.T) {
 	cost := 0.42
 	resp := &llm.ChatResponse{CostUSD: &cost, ServedModel: "srv", ProviderRequestID: "r"}
 	served := &backends.Backend{Name: "or", Host: "http://or:1", Model: "pool-model", Locality: "external"}
-	entry := newDreamEntry("dream-eval", "SYS", "USR", []string{"b1"})
+	entry := newDreamEntry("dream-eval", "SYS", "USR", []string{"b1"}, promptEval)
 
 	r.applyChainTelemetry(entry, backends.RoleDream, backends.SensInternal, served, resp, fixtureAttempts(), nil)
 
@@ -57,7 +58,7 @@ func TestApplyChainTelemetryCarriesProviderTelemetry(t *testing.T) {
 func TestApplyChainTelemetryNilResponseLeavesRowUntouched(t *testing.T) {
 	r := telemetryRouter(dispatch.ClassBackground)
 	served := &backends.Backend{Name: "or", Host: "http://or:1", Model: "pool-model", Locality: "external"}
-	entry := newDreamEntry("dream-eval", "SYS", "USR", []string{"b1"})
+	entry := newDreamEntry("dream-eval", "SYS", "USR", []string{"b1"}, promptEval)
 	wireErr := &llm.AdmissionError{Err: dispatch.ErrQueueFull, Backend: "or", Host: "http://or:1", WaitMs: 3}
 
 	r.applyChainTelemetry(entry, backends.RoleDream, backends.SensInternal, served, nil, fixtureAttempts(), wireErr)
@@ -84,12 +85,13 @@ func TestApplyChainTelemetryLocalBackendKeepsEveryRowShape(t *testing.T) {
 		role     string
 		blockIDs []string
 		metadata map[string]any
+		prompt   prompts.Identity
 	}{
-		{"dream-eval", backends.RoleDream, []string{"b1", "b2"}, nil},
-		{"dream-temporal", backends.RoleDream, []string{"b1"}, nil},
-		{"dream-recurrence", backends.RoleDream, []string{"b1", "b2"}, nil},
-		{"dream-daily-synthesis", backends.RoleDigest, nil, nil},
-		{"dream-keywords", backends.RoleDream, []string{"b1"}, map[string]any{"attempt": 2}},
+		{"dream-eval", backends.RoleDream, []string{"b1", "b2"}, nil, promptEval},
+		{"dream-temporal", backends.RoleDream, []string{"b1"}, nil, promptTemporalReview},
+		{"dream-recurrence", backends.RoleDream, []string{"b1", "b2"}, nil, promptRecurrence},
+		{"dream-daily-synthesis", backends.RoleDigest, nil, nil, promptDailySynthesis},
+		{"dream-keywords", backends.RoleDream, []string{"b1"}, map[string]any{"attempt": 2}, promptKeywords},
 	}
 	local := &backends.Backend{Name: "gpu-a", Host: "http://a:1", Model: "qwen", Locality: "local"}
 
@@ -97,12 +99,9 @@ func TestApplyChainTelemetryLocalBackendKeepsEveryRowShape(t *testing.T) {
 		t.Run(tc.pipeline, func(t *testing.T) {
 			build := func(resp *llm.ChatResponse) *llmlog.Entry {
 				r := telemetryRouter(dispatch.ClassBackground)
-				entry := newDreamEntry(tc.pipeline, "SYS", "USR", tc.blockIDs)
-				if tc.metadata != nil {
-					entry.Metadata = map[string]any{}
-					for k, v := range tc.metadata {
-						entry.Metadata[k] = v
-					}
+				entry := newDreamEntry(tc.pipeline, "SYS", "USR", tc.blockIDs, tc.prompt)
+				for k, v := range tc.metadata {
+					entry.Metadata[k] = v
 				}
 				r.applyChainTelemetry(entry, tc.role, backends.SensInternal, local, resp, fixtureAttempts(), nil)
 				return entry
@@ -142,7 +141,7 @@ func TestApplyChainTelemetryStampOrder(t *testing.T) {
 	t.Run("provider overwrites the pool's model", func(t *testing.T) {
 		r := telemetryRouter(dispatch.ClassBackground)
 		served := &backends.Backend{Name: "or", Host: "http://or:1", Model: "pool-model", Locality: "external"}
-		entry := newDreamEntry("dream-eval", "SYS", "USR", []string{"b1"})
+		entry := newDreamEntry("dream-eval", "SYS", "USR", []string{"b1"}, promptEval)
 
 		r.applyChainTelemetry(entry, backends.RoleDream, backends.SensInternal, served,
 			&llm.ChatResponse{ServedModel: "srv"}, fixtureAttempts(), nil)
@@ -158,7 +157,7 @@ func TestApplyChainTelemetryStampOrder(t *testing.T) {
 	t.Run("the K9 fold survives the provider stamp", func(t *testing.T) {
 		r := telemetryRouter(dispatch.ClassBackground)
 		rejErr := &llm.AdmissionError{Err: dispatch.ErrQueueFull, Backend: "gpu", Host: "http://gpu:8089", WaitMs: 33}
-		entry := newDreamEntry("dream-eval", "SYS", "USR", []string{"b1"})
+		entry := newDreamEntry("dream-eval", "SYS", "USR", []string{"b1"}, promptEval)
 		entry.Err = rejErr
 
 		// A never-admitted acquire has no response of its own; the argument is
@@ -174,6 +173,12 @@ func TestApplyChainTelemetryStampOrder(t *testing.T) {
 		}
 		if _, ok := entry.Metadata["provider_request_id"]; ok {
 			t.Error("metadata.provider_request_id on a K9 rejection line")
+		}
+		// T04-21: same argument for the prompt identity. The rejection line is
+		// a call that never reached the wire, so it sent no prompt — a
+		// prompt_id on it would make an unsent body countable in the log.
+		if _, ok := entry.Metadata["prompt_id"]; ok {
+			t.Error("metadata.prompt_id on a K9 rejection line — a call without a wire hop sent no prompt")
 		}
 	})
 }

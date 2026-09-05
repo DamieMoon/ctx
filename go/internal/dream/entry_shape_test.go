@@ -72,8 +72,8 @@ func fixtureAttempts() []llm.ChainAttempt {
 // shared pointer would couple five pipelines that all keep their entry alive
 // until a deferred Record fires.
 func TestNewDreamEntryVersionPointersAreDistinct(t *testing.T) {
-	a := newDreamEntry("dream-eval", "", "", nil)
-	b := newDreamEntry("dream-keywords", "", "", nil)
+	a := newDreamEntry("dream-eval", "", "", nil, promptEval)
+	b := newDreamEntry("dream-keywords", "", "", nil, promptKeywords)
 	if a.DreamVersion == nil || b.DreamVersion == nil {
 		t.Fatal("dream_version must be set on every dream row")
 	}
@@ -93,33 +93,34 @@ func TestDreamRowFixture(t *testing.T) {
 	attempts := fixtureAttempts()
 
 	t.Run("body row (dream-eval)", func(t *testing.T) {
-		entry := newDreamEntry("dream-eval", "SYS", "USR", []string{"b1", "b2"})
+		entry := newDreamEntry("dream-eval", "SYS", "USR", []string{"b1", "b2"}, promptEval)
 		entry.Duration = 5 * time.Second
 		r.applyChainTelemetry(entry, backends.RoleDream, backends.SensInternal, nil, nil, attempts, nil)
 		got := dreamRow(t, entry.Slimmed(false))
-		want := `{"pipeline":"dream-eval","request_system":"SYS","request_user":"USR","block_ids":["b1","b2"],"dream_version":5,"metadata":{"chain":[{"backend":"gpu-a","err_class":"ok","ms":200,"wait_ms":7}]},"attempt":1,"duration_ms":200}`
+		want := `{"pipeline":"dream-eval","request_system":"SYS","request_user":"USR","block_ids":["b1","b2"],"dream_version":5,"metadata":{"chain":[{"backend":"gpu-a","err_class":"ok","ms":200,"wait_ms":7}],"prompt_id":"dream.dreamSystemPrompt","prompt_version":"v5"},"attempt":1,"duration_ms":200}`
 		if got != want {
 			t.Errorf("dream-eval row\n got: %s\nwant: %s", got, want)
 		}
 	})
 
 	t.Run("no block ids (dream-daily-synthesis)", func(t *testing.T) {
-		entry := newDreamEntry("dream-daily-synthesis", "SYS", "USR", nil)
+		entry := newDreamEntry("dream-daily-synthesis", "SYS", "USR", nil, promptDailySynthesis)
 		r.applyChainTelemetry(entry, backends.RoleDigest, backends.SensInternal, nil, nil, attempts, nil)
 		if entry.BlockIDs != nil {
 			t.Fatalf("block_ids = %#v, want nil (NULL column, not an empty array)", entry.BlockIDs)
 		}
 		got := dreamRow(t, entry.Slimmed(false))
-		want := `{"pipeline":"dream-daily-synthesis","request_system":"SYS","request_user":"USR","block_ids":null,"dream_version":5,"metadata":{"chain":[{"backend":"gpu-a","err_class":"ok","ms":200,"wait_ms":7}]},"attempt":1,"duration_ms":200}`
+		want := `{"pipeline":"dream-daily-synthesis","request_system":"SYS","request_user":"USR","block_ids":null,"dream_version":5,"metadata":{"chain":[{"backend":"gpu-a","err_class":"ok","ms":200,"wait_ms":7}],"prompt_id":"dream.dailySynthesisSystemPrompt","prompt_version":"2026-07-31"},"attempt":1,"duration_ms":200}`
 		if got != want {
 			t.Errorf("dream-daily-synthesis row\n got: %s\nwant: %s", got, want)
 		}
 	})
 
 	t.Run("attempt and chain in one map (dream-keywords)", func(t *testing.T) {
-		entry := newDreamEntry("dream-keywords", "SYS", "USR", []string{"b1"})
+		entry := newDreamEntry("dream-keywords", "SYS", "USR", []string{"b1"}, promptKeywords)
 		entry.Duration = 1500 * time.Millisecond
-		entry.Metadata = map[string]any{"attempt": 2}
+		// A write into the map the constructor made, exactly as keywords.go does.
+		entry.Metadata["attempt"] = 2
 		r.applyChainTelemetry(entry, backends.RoleDream, backends.SensInternal, nil, nil, attempts, nil)
 		if entry.Metadata["attempt"] != 2 {
 			t.Errorf("metadata.attempt = %v, want 2 (the retry counter must survive the funnel)", entry.Metadata["attempt"])
@@ -128,7 +129,7 @@ func TestDreamRowFixture(t *testing.T) {
 			t.Error("metadata.chain missing — the funnel must add the walk to the counter's map")
 		}
 		got := dreamRow(t, entry.Slimmed(false))
-		want := `{"pipeline":"dream-keywords","request_system":"SYS","request_user":"USR","block_ids":["b1"],"dream_version":5,"metadata":{"attempt":2,"chain":[{"backend":"gpu-a","err_class":"ok","ms":200,"wait_ms":7}]},"attempt":1,"duration_ms":200}`
+		want := `{"pipeline":"dream-keywords","request_system":"SYS","request_user":"USR","block_ids":["b1"],"dream_version":5,"metadata":{"attempt":2,"chain":[{"backend":"gpu-a","err_class":"ok","ms":200,"wait_ms":7}],"prompt_id":"dream.keywordSystemPrompt","prompt_version":"2026-08-25"},"attempt":1,"duration_ms":200}`
 		if got != want {
 			t.Errorf("dream-keywords row\n got: %s\nwant: %s", got, want)
 		}

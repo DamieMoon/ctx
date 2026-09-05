@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/GottZ/ctx/internal/backends"
+	"github.com/GottZ/ctx/internal/prompts"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -46,6 +47,12 @@ Schreibschutz=Write Guard, Sicherheitstrennung=Scope Isolation,
 Duplikat-Erkennung=Duplicate Detection, Kontextspeicher=Context Store,
 Einbettung=Embedding, Schwellenwert=Threshold, Pflichtfelder=Required Fields,
 Sicherheitskopie=Backup, Wiederherstellung=Recovery, Zugriffsschluessel=API Key`
+
+// promptTranslate is the identity of the DE->EN query translator (E04-5).
+// Version = the date the body text last changed (ebf312da, the Go migration
+// that brought it over from n8n) — it has not been touched since.
+var promptTranslate = prompts.Register(
+	"llm.translationSystemPrompt", "2026-03-28", "github.com/GottZ/ctx/internal/llm")
 
 // safePattern allows only alphanumeric, spaces, hyphens, periods, commas, parentheses.
 var safePattern = regexp.MustCompile(`^[a-zA-Z0-9\s\-.,()!?]+$`)
@@ -110,6 +117,7 @@ func TranslateQuery(ctx context.Context, db *pgxpool.Pool, bpool *backends.Pool,
 		Role:       backends.RoleTranslate,
 		Required:   querySens,
 		Pipeline:   "query-translate",
+		Prompt:     promptTranslate,
 		System:     translationSystemPrompt,
 		User:       query,
 		Opts:       TranslateOptions(0),

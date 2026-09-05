@@ -649,6 +649,7 @@ func ChainCall(ctx context.Context, d Deps, required backends.Sensitivity, syste
 		Role:     backends.RoleDigest,
 		Required: required,
 		Pipeline: Pipeline,
+		Prompt:   promptClusterLabel,
 		System:   system,
 		User:     user,
 		// Temperature near-deterministic (a name is not a creative act) and a

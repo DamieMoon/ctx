@@ -9,6 +9,7 @@ import (
 	"github.com/GottZ/ctx/internal/embedcache"
 	"github.com/GottZ/ctx/internal/llm"
 	"github.com/GottZ/ctx/internal/llmlog"
+	"github.com/GottZ/ctx/internal/prompts"
 )
 
 // Router resolves the dream pipeline's backend chains from the declarative
@@ -242,15 +243,26 @@ func (r *Router) EmbedAdmit() embedcache.Admission {
 // empty array: the daily-synthesis row is about no block at construction time.
 // Duration, error and metadata stay with the caller; applyChainTelemetry adds
 // the walk telemetry once the chain has been walked.
-func newDreamEntry(pipeline, system, user string, blockIDs []string) *llmlog.Entry {
+//
+// prompt is the identity of the body in system (E04-5). It is a PARAMETER and
+// not a lookup keyed on the pipeline name because two of the five stages
+// choose their body at runtime — the daily report by language — and a table
+// keyed on the pipeline would name the wrong one. It is stamped here, at
+// construction, so every dream row carries it from its first line: the
+// metadata map exists from this point on, and the K9/blank fold at the end of
+// applyChainTelemetry is the ONE thing that takes it away again (a row without
+// a wire call sent no prompt).
+func newDreamEntry(pipeline, system, user string, blockIDs []string, prompt prompts.Identity) *llmlog.Entry {
 	dreamVer := int16(Version)
-	return &llmlog.Entry{
+	entry := &llmlog.Entry{
 		Pipeline:      pipeline,
 		RequestSystem: system,
 		RequestUser:   user,
 		BlockIDs:      blockIDs,
 		DreamVersion:  &dreamVer,
 	}
+	entry.StampPrompt(prompt)
+	return entry
 }
 
 // applyChainTelemetry stamps the chained-call provenance onto a dream llmlog

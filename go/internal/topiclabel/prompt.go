@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/GottZ/ctx/internal/promptguard"
+	"github.com/GottZ/ctx/internal/prompts"
 	"github.com/GottZ/ctx/internal/util"
 )
 
@@ -72,6 +73,16 @@ func systemPromptFor(lang, nonce string) string {
 // 2026-08-15); neutral on models that already parse at 1.0.
 const clusterHarden = "\n\nReturn exactly one JSON object with the single key \"label\" and no other keys. " +
 	"Do not add a \"reasoning\", \"explanation\", \"notes\" or any further field."
+
+// promptClusterLabel is the identity of the label instruction (E04-5). It is
+// the one body of the thirteen that is ASSEMBLED rather than declared — five
+// literals, the language name, the guard rule and clusterHarden — so the
+// identity names the function, not a constant. Version = the date the emitted
+// text last changed (206c135c, the clusterHarden promotion); T04-5 rewrote
+// the function around util.PrimaryLanguageSubtag afterwards without moving a
+// byte of what the model receives.
+var promptClusterLabel = prompts.Register(
+	"topiclabel.systemPromptFor", "2026-08-16", "github.com/GottZ/ctx/internal/topiclabel")
 
 // promptCore is everything the model sees about one topic.
 type promptCore struct {

@@ -15,6 +15,7 @@ import (
 	"github.com/GottZ/ctx/internal/llmlog"
 	"github.com/GottZ/ctx/internal/pgxdb"
 	"github.com/GottZ/ctx/internal/promptguard"
+	"github.com/GottZ/ctx/internal/prompts"
 	"github.com/GottZ/ctx/internal/store"
 	"github.com/GottZ/ctx/internal/util"
 	"github.com/jackc/pgx/v5"
@@ -44,6 +45,25 @@ const (
 	legacyReportTag         = "tagesbericht"
 )
 
+// promptDailySynthesis and promptDailySynthesisIntl are the identities of the
+// TWO bodies dailySynthesisPromptFor picks between (E04-5). design/04 Naht 12
+// counts one body here and calls the function a selector "without a body of
+// its own"; measured against the tree that is one short — the non-legacy
+// branch carries a second, English instruction as an inline literal, and a
+// deployment with dream.language set sends it. One identity for two texts
+// would put a wrong prompt_id on every row of such a deployment, which is the
+// exact failure this wave exists to remove, so both are registered.
+//
+// Both carry the date of f7a3f208, the commit that split the surface in two:
+// the German body is byte-frozen since then, and the English one has existed
+// only since then.
+var (
+	promptDailySynthesis = prompts.Register(
+		"dream.dailySynthesisSystemPrompt", "2026-07-31", "github.com/GottZ/ctx/internal/dream")
+	promptDailySynthesisIntl = prompts.Register(
+		"dream.dailySynthesisPromptIntl", "2026-07-31", "github.com/GottZ/ctx/internal/dream")
+)
+
 // isLegacyReportLanguage reports whether lang keeps the pre-config German
 // report surface: unset (the default) or a German tag. This ONE predicate
 // gates title, tag and system prompt together — they are one identity, and a
@@ -60,12 +80,14 @@ func isLegacyReportLanguage(lang string) bool {
 
 // dailySynthesisPromptFor returns the system prompt for the configured
 // language: the byte-frozen German legacy prompt for ""/"de*", else an
-// English instruction naming the target language.
-func dailySynthesisPromptFor(lang string) string {
+// English instruction naming the target language — plus the identity of
+// whichever of the two it returned, so the llmlog row names the text that was
+// actually sent rather than the one this deployment happens not to use.
+func dailySynthesisPromptFor(lang string) (string, prompts.Identity) {
 	if isLegacyReportLanguage(lang) {
-		return dailySynthesisSystemPrompt
+		return dailySynthesisSystemPrompt, promptDailySynthesis
 	}
-	return `Generate a compact daily report (200-400 words) for a knowledge-store system. Write as continuous prose in ` + langName(util.PrimaryLanguageSubtag(lang)) + `. List the main focus areas of the last 24 hours, name new topics, and highlight patterns or anomalies.`
+	return `Generate a compact daily report (200-400 words) for a knowledge-store system. Write as continuous prose in ` + langName(util.PrimaryLanguageSubtag(lang)) + `. List the main focus areas of the last 24 hours, name new topics, and highlight patterns or anomalies.`, promptDailySynthesisIntl
 }
 
 // dailyReportTitleFor returns the block title — half the upsert key, see
@@ -281,13 +303,13 @@ func generateDailyReportWindow(ctx context.Context, pool *pgxpool.Pool, r *Route
 
 	userPrompt := buildDailyPrompt(date, decisions, dreamLinks, structLinks, newBlocks, guardQueue)
 
-	sysPrompt := dailySynthesisPromptFor(r.Language)
+	sysPrompt, sysPromptID := dailySynthesisPromptFor(r.Language)
 	// nil block ids on purpose: the row is about the report block this run is
 	// about to write, and that block does not exist yet — its id lands on the
 	// entry after the write, further down. A nil slice persists as a NULL
 	// block_ids column, an empty one as an empty array; they are not the same
 	// row, so the daily-synthesis entry is constructed WITHOUT the field.
-	entry := newDreamEntry("dream-daily-synthesis", sysPrompt, userPrompt, nil)
+	entry := newDreamEntry("dream-daily-synthesis", sysPrompt, userPrompt, nil, sysPromptID)
 	defer func() { llmlog.Record(pool, entry.Slimmed(r.Devmode)) }()
 
 	start := time.Now()
