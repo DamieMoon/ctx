@@ -109,6 +109,7 @@ func NewRouter(ctx context.Context, pool *pgxpool.Pool, cfgStore *config.Store, 
 	queryHandler := handler.NewQueryHandler(pool, cfgStore, backendPool, quota, blocktypeReg, dispatcher)
 	storeH := handler.NewStoreHandler(pool, cfgStore, blocktypeReg)
 	searchH := handler.NewSearchHandler(pool, cfgStore, blocktypeReg)
+	recentH := handler.NewRecentHandler(pool, cfgStore, blocktypeReg)
 	graphH := handler.NewGraphHandler(pool, cfgStore, blocktypeReg)
 	// W05.5: the ego cache arm reads the snapshot through the scheduler's state
 	// gate (Fresh only, design/05 §4.6). Wiring it does NOT switch anything on —
@@ -245,6 +246,9 @@ func NewRouter(ctx context.Context, pool *pgxpool.Pool, cfgStore *config.Store, 
 		r.Post("/api/store", storeH.HandleStore)
 		// Search — Lightweight FTS (no LLM)
 		r.Post("/api/search", searchH.HandleSearch)
+		// Recent — newest visible blocks (no LLM, no FTS). Same store read as
+		// the MCP recent tool (T03-8b): one statement, two surfaces.
+		r.Post("/api/recent", recentH.HandleRecent)
 		// Graph — scope-filtered k-hop ego subgraph (read-only, no LLM)
 		r.Get("/api/graph/ego", graphH.HandleEgo)
 		// Graph load-all — flat visible-corpus seed (SPA "load all" button)

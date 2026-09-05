@@ -136,9 +136,10 @@ type recentInput struct {
 	Limit    int    `json:"limit,omitempty" jsonschema:"max blocks to return (default 10, max 50)"`
 	Category string `json:"category,omitempty" jsonschema:"filter by category"`
 	// WF T10: opt-in server-side type filters (bind parameters; the recent
-	// surface lives here + the chat ctx_recent tool — there is no REST
-	// /api/recent route). block_roles_exclude is the legacy alias for
-	// types_exclude (seam 17); both present ⇒ union.
+	// surface lives here, on the chat ctx_recent tool and — since T03-8b — on
+	// REST POST /api/recent, whose recentRequest mirrors these fields one for
+	// one). block_roles_exclude is the legacy alias for types_exclude
+	// (seam 17); both present ⇒ union.
 	Types             []string `json:"types,omitempty" jsonschema:"only these block types (e.g. knowledge, audit-trail)"`
 	TypesExclude      []string `json:"types_exclude,omitempty" jsonschema:"exclude these block types"`
 	BlockRolesExclude []string `json:"block_roles_exclude,omitempty" jsonschema:"legacy alias for types_exclude"`
