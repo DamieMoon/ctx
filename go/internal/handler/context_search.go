@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 
@@ -70,6 +71,37 @@ type searchRequest struct {
 	Cluster string `json:"cluster"`
 }
 
+// coreArgs maps the decoded body onto the argument set both search transports
+// share (search_core.go). It is a named function, not an inline literal, so the
+// parity test can hold this mapping against the MCP tool's twin
+// (searchInput.coreArgs) without a database: the one way the two surfaces can
+// still drift is a field one of them forgets to fill, and that is exactly what
+// TestSearchTransportsAgreeOnTheAliasUnion reads.
+//
+// The four parameters are the values the ENVELOPE also needs and the transport
+// therefore computes itself: the effective limit (echoed, and the input of the
+// next-page cursor), compact (echoed), the sanitised cursor, and the C6 flag
+// out of this request's ONE config snapshot.
+func (req searchRequest) coreArgs(limit int, compact bool, after *store.SearchCursor, facetEnabled bool) searchArgs {
+	return searchArgs{
+		Query:             req.Query,
+		Category:          req.Category,
+		Cluster:           req.Cluster,
+		Tags:              req.Tags,
+		Types:             req.Types,
+		TypesExclude:      req.TypesExclude,
+		BlockRolesExclude: req.BlockRolesExclude,
+		Limit:             limit,
+		Compact:           compact,
+		After:             after,
+		// VisibleTypesOnly stays FALSE here: on the browse route `types` is a
+		// pure opt-in bind parameter and retrieval-excluded types stay
+		// browseable (D5). The strict reading belongs to the MCP tool alone.
+		VisibleTypesOnly: false,
+		FacetEnabled:     facetEnabled,
+	}
+}
+
 // HandleSearch processes lightweight search requests (no LLM).
 func (h *SearchHandler) HandleSearch(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -107,10 +139,14 @@ func (h *SearchHandler) HandleSearch(w http.ResponseWriter, r *http.Request) {
 	if req.Compact != nil {
 		compact = *req.Compact
 	}
-	limit := req.Limit
-	if limit <= 0 {
-		limit = 10
-	}
+	// The default (10) is the shared rule of both search surfaces
+	// (defaultSearchLimit); the CAP is not — it stays a REST rule, because the
+	// MCP tool's handler is deliberately left uncapped (E03-2 = B / K28; the
+	// statement builder clamps at 50 for every caller regardless, see
+	// defaultSearchLimit). Both are resolved HERE and not in the core: the
+	// effective limit is echoed in `filters` and decides whether a next-page
+	// cursor exists.
+	limit := defaultSearchLimit(req.Limit)
 	if limit > 50 {
 		limit = 50
 	}
@@ -123,39 +159,40 @@ func (h *SearchHandler) HandleSearch(w http.ResponseWriter, r *http.Request) {
 		after = nil
 	}
 
-	// Cluster facet (C6). Order matters and is load-bearing:
+	// Search through the ONE rule set both transports share (T03-9,
+	// search_core.go): the C6 facet gate, the types_exclude ∪ block_roles_exclude
+	// union and the block-grant resolution live there. The last of the three is
+	// a behaviour change on THIS route and the point of E03-1 = A: /api/search
+	// was the only read surface that passed a literal nil for the grant set, so
+	// a block a tenant had been granted was readable through the MCP tools and
+	// not here. It is affordable because T04-20 bounds the set per request.
 	//
-	//  1. the FLAG first — off ⇒ the field does not exist for this request. A
-	//     validation error in the dark state would be a behaviour change on a
-	//     feature that is supposed to be invisible;
-	//  2. then the FORM, before any DB roundtrip (pattern handler/graph.go
-	//     fullUUIDRe). Without it the value reaches `$n::uuid` and returns
-	//     SQLSTATE 22P02 → a 500 that tells the caller "this was not a handle";
-	//  3. never an existence check. A well-formed handle is ALWAYS a 200 with a
-	//     possibly empty list — unknown, foreign and member-less are one answer,
-	//     otherwise the handle space becomes enumerable and, since handles are
-	//     stable per topic, the NUMBER of foreign topics derivable (§5.7).
-	var clusterFacet *string
-	if cfgSnap.ClusterOps.FacetEnabled && req.Cluster != "" {
-		if !fullUUIDRe.MatchString(req.Cluster) {
-			writeJSON(w, http.StatusBadRequest, map[string]any{
-				"success": false, "error": "cluster must be a full UUID",
-			})
-			return
-		}
-		clusterFacet = &req.Cluster
-	}
-
-	// Search. grantedBlockIDs nil (T40a): /api/search is NOT live-wired for block
-	// grants in T40a (its grant wiring is T40b/a later wave) — nil ⇒ no-op OR-arm.
-	// Type filters (WF T10): types_exclude ∪ block_roles_exclude (legacy alias).
-	typesExclude := unionExcludes(req.TypesExclude, req.BlockRolesExclude)
-	results, err := store.SearchBlocks(ctx, h.pool, h.typeSnapshot(ctx), req.Query, authResult.ReadScopes, req.Category, req.Tags, limit, compact, after, nil, req.Types, typesExclude, clusterFacet)
+	// The C6 flag rides in as a VALUE out of the ONE snapshot taken above — the
+	// core must never take a second one (search_core.go, searchArgs.FacetEnabled).
+	a := req.coreArgs(limit, compact, after, cfgSnap.ClusterOps.FacetEnabled)
+	results, err := executeSearch(ctx, h.pool, h.typeSnapshot(ctx), authResult, a)
 	if err != nil {
-		slog.Error("search: query error", "error", err, "request_id", reqID)
-		writeJSON(w, http.StatusInternalServerError, map[string]any{
-			"success": false, "error": "Internal server error",
-		})
+		var rejected *searchRejected
+		switch {
+		case errors.As(err, &rejected):
+			// Caller error with prose the core holds (today: the malformed facet
+			// handle) — same 400 body this route sent before the core existed.
+			writeJSON(w, http.StatusBadRequest, map[string]any{
+				"success": false, "error": rejected.Error(),
+			})
+		case errors.Is(err, store.ErrTooManyBlockGrants):
+			// T04-20: an over-bound grant set is REFUSED, never quietly cut down
+			// to scope-only; tooManyGrantsMsg is the one prose every read
+			// surface renders for it.
+			writeJSON(w, http.StatusInternalServerError, map[string]any{
+				"success": false, "error": tooManyGrantsMsg,
+			})
+		default:
+			slog.Error("search: query error", "error", err, "request_id", reqID)
+			writeJSON(w, http.StatusInternalServerError, map[string]any{
+				"success": false, "error": "Internal server error",
+			})
+		}
 		return
 	}
 
@@ -182,6 +219,10 @@ func (h *SearchHandler) HandleSearch(w http.ResponseWriter, r *http.Request) {
 	if len(req.Types) > 0 {
 		typesFilter = req.Types
 	}
+	// The EFFECTIVE exclude list, folded by the same method the core binds
+	// (searchArgs.effectiveTypesExclude) — the echo can therefore not claim a
+	// different filter from the one that ran.
+	typesExclude := a.effectiveTypesExclude()
 	var typesExcludeFilter any = nil
 	if len(typesExclude) > 0 {
 		typesExcludeFilter = typesExclude
@@ -199,8 +240,9 @@ func (h *SearchHandler) HandleSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	// The facet is echoed only when it was APPLIED — an unconditional key would
 	// move a byte in the dark state, and a key echoing an ignored value would
-	// claim a filter that did not run.
-	if clusterFacet != nil {
+	// claim a filter that did not run. clusterFacetOf is the same first stage
+	// the core ran; a request that got here passed its form check.
+	if clusterFacet := clusterFacetOf(a.FacetEnabled, a.Cluster); clusterFacet != nil {
 		filters["cluster"] = *clusterFacet
 	}
 

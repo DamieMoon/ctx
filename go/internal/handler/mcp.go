@@ -126,6 +126,46 @@ type searchInput struct {
 	// able to name a type retrieval policy keeps out.
 	Types        []string `json:"types,omitempty" jsonschema:"restrict results to these block types; each name must be a retrieval-visible type (unknown or non-visible name is an error)"`
 	TypesExclude []string `json:"types_exclude,omitempty" jsonschema:"exclude these block types from the results"`
+	// BlockRolesExclude is the documented legacy alias of types_exclude (seam
+	// 17), accepted here since T03-9 (E03-3 = A). Before that this tool was the
+	// ONE surface of the three that dropped the name: REST /api/search unioned
+	// it, the `recent` tool unioned it, and `search` answered a request carrying
+	// it UNFILTERED and without an error — i.e. with more rows than the caller
+	// asked for. Accepting it is purely additive: both names present ⇒ the union
+	// applies (monotone-restrictive, it can never widen), and a caller that
+	// never sends it binds byte-identically to before. Retiring the alias on all
+	// three surfaces is a separate, announced break (E03-3 = C), not this.
+	BlockRolesExclude []string `json:"block_roles_exclude,omitempty" jsonschema:"legacy alias for types_exclude"`
+}
+
+// coreArgs maps the tool's arguments onto the argument set both search
+// transports share (search_core.go). Twin of searchRequest.coreArgs; the parity
+// test holds the two against each other without a database.
+//
+// Limit rides in RAW: the shared default (10) is applied by the core, and this
+// surface deliberately has no cap (E03-2 = B / K28) — a model may fill its own
+// context if it insists.
+func (input searchInput) coreArgs(facetEnabled bool) searchArgs {
+	return searchArgs{
+		Query:             input.Query,
+		Category:          input.Category,
+		Cluster:           input.Cluster,
+		Tags:              input.Tags,
+		Types:             input.Types,
+		TypesExclude:      input.TypesExclude,
+		BlockRolesExclude: input.BlockRolesExclude,
+		Limit:             input.Limit,
+		// The tool always answers compact rows, never paginates (no cursor
+		// argument exists) — both unchanged.
+		Compact: true,
+		After:   nil,
+		// V-W6: `types` CUTS against the caller's retrieval-visible set here,
+		// and an unknown or non-visible name is a tool error. That strictness is
+		// the documented difference to the REST browse route and stays a visible
+		// field rather than a hidden branch (mcp.go searchInput.Types).
+		VisibleTypesOnly: true,
+		FacetEnabled:     facetEnabled,
+	}
 }
 
 type getInput struct {
@@ -301,8 +341,11 @@ func mcpQueryTypesExclude(set *blocktype.Set, cut, explicitExclude []string) []s
 		}
 	}
 	// unionExcludes dedupes and is monotone-restrictive — the same fold the REST
-	// handler runs over types_exclude ∪ block_roles_exclude. The MCP fields get
-	// NO legacy alias of their own.
+	// handler runs over types_exclude ∪ block_roles_exclude. The QUERY tool's
+	// two fields get no legacy alias of their own (the `search` tool took one in
+	// T03-9/E03-3 = A, the retrieval-with-synthesis surface did not: nothing
+	// ever sent the alias here, so adding it would create legacy rather than
+	// keep faith with it).
 	return unionExcludes(explicitExclude, complement)
 }
 
@@ -617,46 +660,33 @@ func mcpSearchHandler(cfg MCPConfig) mcp.ToolHandlerFor[searchInput, any] {
 		if ar == nil { // T07/L7 fail-closed (design/01 §5.4): never fall back to the default tenant
 			return errResult("unauthorized: no resolved tenant identity"), nil, nil
 		}
-		scopes := ar.ReadScopes
+		// The C6 flag out of ONE config snapshot for this call, handed to the
+		// core as a value (search_core.go: the core reads no config, or the
+		// gate would come from a second generation). cfg.Cfg is nil in tests
+		// without config wiring — a nil there means "not configured", which
+		// reads as off, the fail-closed direction for a dark feature.
+		facetEnabled := cfg.Cfg != nil && cfg.Cfg.SnapshotForRequest(ctx).ClusterOps.FacetEnabled
 
-		// V-W6 type filter, ahead of every pool touch: a rejected filter must
-		// not cost a grant lookup or a search statement. The SAME snapshot then
-		// frames the untrusted rows (V-11) — flag and admission to retrieval can
-		// never come from two registry generations.
-		typeSet := cfg.mcpTypeSnapshot(ctx)
-		cut, rejection := resolveMCPVisibleTypes(typeSet, input.Types)
-		if rejection != "" {
-			return errResult(rejection), nil, nil
-		}
-
-		limit := input.Limit
-		if limit <= 0 {
-			limit = 10
-		}
-
-		// C6 facet, same three rules as the REST handler: flag first (off ⇒ the
-		// field does not exist), then form (before the uuid cast), never an
-		// existence check. cfg.Cfg is nil in tests without config wiring — a nil
-		// there means "not configured", which reads as off, the fail-closed
-		// direction for a dark feature.
-		var clusterFacet *string
-		if cfg.Cfg != nil && cfg.Cfg.SnapshotForRequest(ctx).ClusterOps.FacetEnabled && input.Cluster != "" {
-			if !fullUUIDRe.MatchString(input.Cluster) {
-				return errResult("cluster must be a full UUID"), nil, nil
-			}
-			clusterFacet = &input.Cluster
-		}
-
-		grants, err := resolveGrants(ctx, cfg.Pool, ar)
-		if errors.Is(err, store.ErrTooManyBlockGrants) { // T04-20: refuse, never read scope-only
-			return errResult(tooManyGrantsMsg), nil, nil
-		}
-		// cut/TypesExclude ride the store layer's EXISTING type parameters (WF
-		// T10) — the same bind parameters /api/search fills. nil/nil when the
-		// caller named neither field, i.e. the pre-V-W6 call.
-		results, err := store.SearchBlocks(ctx, cfg.Pool, typeSet, input.Query, scopes, input.Category, input.Tags, limit, true, nil, grants, cut, input.TypesExclude, clusterFacet)
+		// One rule set for both search transports (T03-9, search_core.go): the
+		// V-W6 type cut ahead of every pool touch, the C6 facet gate, the
+		// types_exclude ∪ block_roles_exclude union and the grant resolution.
+		// The registry snapshot handed in is the SAME one that frames the
+		// untrusted rows (V-11) — flag and admission to retrieval can never come
+		// from two registry generations.
+		results, err := executeSearch(ctx, cfg.Pool, cfg.mcpTypeSnapshot(ctx), ar, input.coreArgs(facetEnabled))
 		if err != nil {
-			return errResult(fmt.Sprintf("search failed: %v", err)), nil, nil
+			var rejected *searchRejected
+			switch {
+			case errors.As(err, &rejected):
+				// Caller error the core holds the prose for: the V-W6 type
+				// rejections and the malformed facet handle, each with the text
+				// this tool printed before the core existed.
+				return errResult(rejected.Error()), nil, nil
+			case errors.Is(err, store.ErrTooManyBlockGrants): // T04-20: refuse, never read scope-only
+				return errResult(tooManyGrantsMsg), nil, nil
+			default:
+				return errResult(fmt.Sprintf("search failed: %v", err)), nil, nil
+			}
 		}
 
 		data, _ := json.MarshalIndent(results, "", "  ")
