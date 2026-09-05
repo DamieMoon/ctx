@@ -14,11 +14,432 @@ services:
       - "reversed.port=8080"
       - "reversed.ssl=${CTX_SSL_DOMAIN}"
     environment:
+      # ── Contract of this block (generated, wave T05-5) ──────────────────────
+      # Every env-fed registry key appears here exactly once, in registry order
+      # (internal/config, `key`/`env` struct tags). The form ${NAME:-} sets the
+      # variable EMPTY, and empty means "not set" to every reader in the tree
+      # (config.FromEnv, overview.WorkerMemLimitBytes, schemacontract.ResolveMode)
+      # — so the DEFAULT still comes from the registry, never from this file.
+      # Pin a value in .env or through the settings API (`ctx settings set`),
+      # not by writing a literal here: a literal that equals the registry default
+      # is a second source of truth and goes red in
+      # internal/config/compose_surface_test.go. Only two classes of line carry a
+      # value at all — the container wiring (CONTEXT_DB*, LISTEN_ADDR) and four
+      # deliberate deviations from the registry default, each with its reason in
+      # the comment above it.
+      # Regenerate: .project/plan-treeshake-2026-09-03/artefakte/T05-5-compose-env.py
+
+      # ── server.* (8) ──
       CONTEXT_DB: ${CONTEXT_DB}
       CONTEXT_DB_USER: ${CONTEXT_DB_USER}
       CONTEXT_DB_PASSWORD: ${CONTEXT_DB_PASSWORD}
       CONTEXT_DB_HOST: db
       CONTEXT_DB_PORT: 5432
+      CONTEXT_DB_SSLMODE: ${CONTEXT_DB_SSLMODE:-}
+      LISTEN_ADDR: ":8080"
+      CTX_INSTANCE_KIND: ${CTX_INSTANCE_KIND:-}
+
+      # ── dream.* (16) ──
+      # Backend topology — the endpoints themselves (host, protocol, model,
+      # num_ctx, think, API key, per role chat / synthesis / embed / dream /
+      # dream-embed / rerank) — is NOT configured here. It lives as rows in the
+      # backend pool (`context_backends`, migration 053): `ctx backends` on the
+      # CLI, /settings/backends in the web UI, `ctx init` or `ctx backends seed`
+      # on a fresh install. The 29 CTX_{CHAT,CHAT_FALLBACK,EMBED,DREAM,
+      # DREAM_EMBED,RERANK}_* declarations that stood here are retired in
+      # v5.0.0: nothing reads them any more, and leaving them in a .env is
+      # inert. Upgrade path and the reason: docs/operations.md.
+      CTX_DREAM_ENABLED: ${CTX_DREAM_ENABLED:-}
+      CTX_DREAM_IDLE_WAIT: ${CTX_DREAM_IDLE_WAIT:-}
+      CTX_DREAM_PARALLELISM: ${CTX_DREAM_PARALLELISM:-}
+      CTX_DREAM_LANGUAGE: ${CTX_DREAM_LANGUAGE:-}
+      CTX_DREAM_JSON_MODE: ${CTX_DREAM_JSON_MODE:-}
+      CTX_DREAM_LINK_FLOOR_CONFIDENCE: ${CTX_DREAM_LINK_FLOOR_CONFIDENCE:-}
+      CTX_DREAM_TEMPORAL_TIMEOUT: ${CTX_DREAM_TEMPORAL_TIMEOUT:-}
+      CTX_DREAM_CYCLE_TIMEOUT: ${CTX_DREAM_CYCLE_TIMEOUT:-}
+      CTX_DREAM_NUM_PREDICT: ${CTX_DREAM_NUM_PREDICT:-}
+      CTX_DREAM_EVAL_CAP_RETRY_FACTOR: ${CTX_DREAM_EVAL_CAP_RETRY_FACTOR:-}
+      CTX_DREAM_BACKOFF_MODE: ${CTX_DREAM_BACKOFF_MODE:-}
+      CTX_DREAM_BACKOFF_FACTOR: ${CTX_DREAM_BACKOFF_FACTOR:-}
+      CTX_DREAM_BACKOFF_GRACE: ${CTX_DREAM_BACKOFF_GRACE:-}
+      CTX_DREAM_BACKOFF_CAP: ${CTX_DREAM_BACKOFF_CAP:-}
+      CTX_DREAM_BACKOFF_MIN: ${CTX_DREAM_BACKOFF_MIN:-}
+      CTX_DREAM_BACKOFF_INERT_OFFSET: ${CTX_DREAM_BACKOFF_INERT_OFFSET:-}
+
+      # ── rerank.* (3) ──
+      # Reranker (post-RRF re-score). Opt-in since v5.0.0, and the default is
+      # OFF for the same reason the tuples above are gone: whether a reranker
+      # exists is a pool question, and a fresh install has no row of role
+      # rerank. Without such a row the dispatch silently degrades to
+      # LLM-as-judge on the chat model (~80-90s/query — proxy-safe via the
+      # query body-heartbeat, but nobody chose it), so an ON default would sell
+      # a slow path as a feature. The cross-encoder itself earns its keep where
+      # a row does exist: the Wave-3.5 surface-gold counter-probe measured
+      # nDCG@10 +0.164 and MRR +0.169 on judge-annotated answer gold, with
+      # blend 0.5 neutral on latent gold (graph+ce-bw0.5 = best arm on BOTH
+      # gold sets). To use the `ctx-rerank` sidecar below: create a pool row
+      # targeting it (`ctx backends`), then set CTX_RERANK_ENABLED=true.
+      # BLEND_WEIGHT/MAX_DOCS are cross-encoder sweep knobs (quality, not
+      # latency — CPU rerank ~1s/doc is intentionally not a constraint; the
+      # client timeout is sized for 50).
+      CTX_RERANK_ENABLED: ${CTX_RERANK_ENABLED:-}
+      CTX_RERANK_MAX_DOCS: ${CTX_RERANK_MAX_DOCS:-}
+      # BLEND_WEIGHT default 0.5 (not 1.0): the Wave-3 sweep showed pure
+      # cross-encoder (bw1.0) discards the RRF prior and re-ranks latent neighbors
+      # down — and as final arbiter over graph-injected neighbors it is destructive
+      # (R@10 0.715->0.571). bw0.5 keeps RRF/graph and is the only setting that
+      # didn't hurt (graph+ce-bw0.5 R@20 0.811, best overall).
+      CTX_RERANK_BLEND_WEIGHT: ${CTX_RERANK_BLEND_WEIGHT:-0.5}
+
+      # ── graph.* (16) ──
+      # Dream-graph expansion (Wave 1). Post-RRF stage that 1-hop-expands the top
+      # RRF seeds along the positive Dream link types. Default ON since Wave 3: the
+      # only arm that moves the recall ceiling (R@20 0.763 vs 0.625 for every
+      # reorderer; a reorderer structurally cannot surface what RRF didn't return),
+      # ~0s deterministic = zero latency cost. Caveat: the +31% R@10 magnitude is
+      # partly circular (the eval gold is derived from these same Dream links);
+      # the non-circular floor (graph surfaces link-gold RRF never finds) is what
+      # justifies ON. Every value is a runtime knob.
+      CTX_GRAPH_EXPAND_ENABLED: ${CTX_GRAPH_EXPAND_ENABLED:-true}
+      CTX_GRAPH_EXPAND_DIRECTED: ${CTX_GRAPH_EXPAND_DIRECTED:-}
+      CTX_GRAPH_EXPAND_HOP_DEPTH: ${CTX_GRAPH_EXPAND_HOP_DEPTH:-}
+      CTX_GRAPH_EXPAND_SEED_COUNT: ${CTX_GRAPH_EXPAND_SEED_COUNT:-}
+      CTX_GRAPH_EXPAND_SEED_SCORE_FLOOR: ${CTX_GRAPH_EXPAND_SEED_SCORE_FLOOR:-}
+      CTX_GRAPH_EXPAND_PER_SEED_CAP: ${CTX_GRAPH_EXPAND_PER_SEED_CAP:-}
+      CTX_GRAPH_EXPAND_MAX_INJECTED: ${CTX_GRAPH_EXPAND_MAX_INJECTED:-}
+      CTX_GRAPH_EXPAND_MIN_CONFIDENCE: ${CTX_GRAPH_EXPAND_MIN_CONFIDENCE:-}
+      CTX_GRAPH_EXPAND_MIN_CONFIDENCE_RECURRENT: ${CTX_GRAPH_EXPAND_MIN_CONFIDENCE_RECURRENT:-}
+      CTX_GRAPH_EXPAND_BOOST_WEIGHT: ${CTX_GRAPH_EXPAND_BOOST_WEIGHT:-}
+      CTX_GRAPH_EXPAND_HUB_DAMPING: ${CTX_GRAPH_EXPAND_HUB_DAMPING:-}
+      CTX_GRAPH_EXPAND_WEIGHT_TOPICAL: ${CTX_GRAPH_EXPAND_WEIGHT_TOPICAL:-}
+      CTX_GRAPH_EXPAND_WEIGHT_FACTUAL: ${CTX_GRAPH_EXPAND_WEIGHT_FACTUAL:-}
+      CTX_GRAPH_EXPAND_WEIGHT_CAUSAL: ${CTX_GRAPH_EXPAND_WEIGHT_CAUSAL:-}
+      CTX_GRAPH_EXPAND_WEIGHT_RECURRENT: ${CTX_GRAPH_EXPAND_WEIGHT_RECURRENT:-}
+      CTX_GRAPH_EXPAND_NEW_PLACEMENT_FRAC: ${CTX_GRAPH_EXPAND_NEW_PLACEMENT_FRAC:-}
+
+      # ── graph_overview.* (22) ──
+      # Graph overview "landkarte" (F5-W6): the Louvain cluster-supergraph rebuild
+      # job (gonum, offline in the scheduler) + GET /api/graph/overview. ENABLED
+      # gates BOTH the job and the endpoint (off ⇒ 404). REBUILD_INTERVAL takes
+      # seconds (default 6h); RESOLUTION is the Louvain γ (higher ⇒ more, smaller
+      # clusters). First build runs at boot when ENABLED and the tables are empty.
+      #
+      # Declared COMPLETELY here since wave W6 (Cluster-Topic-Map). The block
+      # used to carry three of the group's keys — leaving out MAX_NODES and
+      # REBUILD_TIMEOUT, i.e. exactly the two liveness guards that have to be
+      # reachable FIRST at scale. A knob the container cannot receive is not a
+      # knob.
+      CTX_GRAPH_OVERVIEW_ENABLED: ${CTX_GRAPH_OVERVIEW_ENABLED:-}
+      CTX_GRAPH_OVERVIEW_REBUILD_INTERVAL: ${CTX_GRAPH_OVERVIEW_REBUILD_INTERVAL:-}
+      CTX_GRAPH_OVERVIEW_RESOLUTION: ${CTX_GRAPH_OVERVIEW_RESOLUTION:-}
+      # MAX_NODES is the load-bearing liveness cap (parse-strict): past ~200k
+      # nodes Louvain hits a convergence wall, and a node set beyond the cap
+      # skips the rebuild fail-safe rather than hanging it (0 = uncapped).
+      # REBUILD_TIMEOUT bounds one run; the worker child is SIGKILLed on expiry.
+      CTX_GRAPH_OVERVIEW_MAX_NODES: ${CTX_GRAPH_OVERVIEW_MAX_NODES:-}
+      CTX_GRAPH_OVERVIEW_REBUILD_TIMEOUT: ${CTX_GRAPH_OVERVIEW_REBUILD_TIMEOUT:-}
+      # TOMBSTONE_RETENTION (seconds, 45 d) is the window in which a dead topic
+      # can still be re-attached to a re-appearing community — the batch-import
+      # guard. 0 switches the re-attach off (fresh identities, never a wrong
+      # revival). The purge of expired tombstones reads the same key.
+      CTX_GRAPH_OVERVIEW_TOMBSTONE_RETENTION: ${CTX_GRAPH_OVERVIEW_TOMBSTONE_RETENTION:-}
+      CTX_GRAPH_OVERVIEW_RUN_RETENTION: ${CTX_GRAPH_OVERVIEW_RUN_RETENTION:-}
+      CTX_GRAPH_OVERVIEW_CSR_LOADER: ${CTX_GRAPH_OVERVIEW_CSR_LOADER:-}
+      # ── Achse 04 (Skalen-Pfad): Substrat, Engine, Guards ─────────────────
+      #
+      # ENGINE waehlt den Rechenkern: gonum (Default) oder ctx (der eigene
+      # Kern). Die Umschaltung ist ein EINMALIGER, GLOBALER Partitionsbruch —
+      # jede cluster_id wird neu vergeben — und gehoert an einen angekuendigten
+      # Release-Schnitt mit vorher erhoehtem TOMBSTONE_RETENTION, nicht in ein
+      # beilaeufiges Deploy. Ein unbekannter Wert ist ein BOOT-Fehler, nie ein
+      # stiller Fallback.
+      #
+      # Die Engine waehlt ausserdem den Knoten-Cap-KEY: MAX_NODES gilt fuer
+      # gonum, MAX_NODES_CTX fuer den eigenen Kern. Bei engine=ctx ist der Cap
+      # nur noch Not-Aus; tragender Guard ist dann TIME_BUDGET (Sekunden), das
+      # die RECHENPHASE begrenzt und sauber abbricht, statt das Kind zu killen.
+      #
+      # CSR_LOADER schaltet das Eingabe-Substrat um (ergebnisgleich, deutlich
+      # speicherguenstiger); engine=ctx impliziert es ohnehin. REFINE
+      # garantiert zusammenhaengende Communities und wirkt nur bei engine=ctx.
+      # v4.31.0 (UD-03-04, Board-Entscheid A2 2026-08-05): eigener Louvain/Leiden-Kern
+      # als Live-Engine — Release-gebündelte Umschaltung, tombstone_retention deckt
+      # den einmaligen Partitionsbruch (Grabstein-Gate >=80 % Re-Attach).
+      CTX_GRAPH_OVERVIEW_ENGINE: ${CTX_GRAPH_OVERVIEW_ENGINE:-ctx}
+      CTX_GRAPH_OVERVIEW_TIME_BUDGET: ${CTX_GRAPH_OVERVIEW_TIME_BUDGET:-}
+      CTX_GRAPH_OVERVIEW_MAX_NODES_CTX: ${CTX_GRAPH_OVERVIEW_MAX_NODES_CTX:-}
+      CTX_GRAPH_OVERVIEW_REFINE: ${CTX_GRAPH_OVERVIEW_REFINE:-}
+      CTX_GRAPH_OVERVIEW_DELTA_PERSIST: ${CTX_GRAPH_OVERVIEW_DELTA_PERSIST:-}
+      CTX_GRAPH_OVERVIEW_COMPONENT_SPLIT: ${CTX_GRAPH_OVERVIEW_COMPONENT_SPLIT:-}
+      # WORKER_MEM_LIMIT deckelt den Heap des Rebuild-KINDES (Bytes, 0 = aus).
+      # Default aus, und das ist Absicht: der heutige Rechenpfad hat am
+      # 200k-Cap eine gemessene Spitze von ~423 MB — ein zu klein gewaehltes
+      # Limit macht aus einem Speicher-SCHUTZ ein Speicher-VERBOT und friert
+      # die Karte dauerhaft ein. Wert gegen peak_rss_kb aus graph_overview_run
+      # waehlen; UD-02-04 nennt ~60 % des Container-Limits als Startpunkt.
+      # Das Kind liest die Variable AUCH direkt aus der geerbten Umgebung, um
+      # sich zu deckeln, bevor es Optionen hat.
+      CTX_GRAPH_OVERVIEW_WORKER_MEM_LIMIT: ${CTX_GRAPH_OVERVIEW_WORKER_MEM_LIMIT:-}
+      # Topic labelling (wave W6): the LLM half of the cluster names, over the
+      # digest role. LABEL_ENABLED ships ON — unlike the rebuild gate — because
+      # what keeps a small install quiet is LABEL_MIN_TOPICS, not an off switch:
+      # below that many living topics per scope nothing is labelled at all, and
+      # the deterministic fallback already names every topic. Language follows
+      # CTX_DREAM_LANGUAGE (one language knob per corpus). LABEL_BATCH is the cap
+      # per TICK across all scopes of the tenant served, LABEL_PROMPT_MAX_TITLES
+      # a declared token budget. LABEL_CREDENTIALS_FALLBACK_ONLY is the opt-in
+      # third hardening stage — the scan over the finished label and the echo
+      # gate are unconditional, this one keeps credentials cores out of the model
+      # path entirely.
+      CTX_GRAPH_OVERVIEW_LABEL_ENABLED: ${CTX_GRAPH_OVERVIEW_LABEL_ENABLED:-}
+      CTX_GRAPH_OVERVIEW_LABEL_INTERVAL: ${CTX_GRAPH_OVERVIEW_LABEL_INTERVAL:-}
+      CTX_GRAPH_OVERVIEW_LABEL_BATCH: ${CTX_GRAPH_OVERVIEW_LABEL_BATCH:-}
+      CTX_GRAPH_OVERVIEW_LABEL_MIN_TOPICS: ${CTX_GRAPH_OVERVIEW_LABEL_MIN_TOPICS:-}
+      CTX_GRAPH_OVERVIEW_LABEL_PROMPT_MAX_TITLES: ${CTX_GRAPH_OVERVIEW_LABEL_PROMPT_MAX_TITLES:-}
+      CTX_GRAPH_OVERVIEW_LABEL_CREDENTIALS_FALLBACK_ONLY: ${CTX_GRAPH_OVERVIEW_LABEL_CREDENTIALS_FALLBACK_ONLY:-}
+      CTX_GRAPH_OVERVIEW_LABEL_TIMEOUT: ${CTX_GRAPH_OVERVIEW_LABEL_TIMEOUT:-}
+
+      # ── root_map.* (9) ──
+      # Root map (Achse 02, wave W-D): the cluster-per-line map that replaces
+      # the block-per-line topic map. Written at the overview-rebuild cycle
+      # under the title root-map-<scope>, category index, sensitivity internal,
+      # capped at BUDGET_BYTES — the renderer MEASURES and stops, so the budget
+      # is the deckel, never the target. ENABLED ships OFF: the wave is a no-op
+      # deploy until it is flipped. COUNT_TIMEOUT caps the only O(corpus) step
+      # (the coverage denominator); on expiry the map drops the denominator
+      # instead of estimating it. LABEL_BUDGET (0 = the rendered row budget)
+      # caps the LLM label requests once axis 01 puts labels on the read path.
+      # The three SUPER_* knobs steer the meta-cluster level (W-F) and are
+      # declared here without a consumer, so no later wave has to touch this
+      # block again (K6). Durations are bare seconds.
+      CTX_ROOT_MAP_ENABLED: ${CTX_ROOT_MAP_ENABLED:-}
+      CTX_ROOT_MAP_BUDGET_BYTES: ${CTX_ROOT_MAP_BUDGET_BYTES:-}
+      CTX_ROOT_MAP_SMALL_CLUSTER_MAX: ${CTX_ROOT_MAP_SMALL_CLUSTER_MAX:-}
+      CTX_ROOT_MAP_FOOTER_RESERVE_BYTES: ${CTX_ROOT_MAP_FOOTER_RESERVE_BYTES:-}
+      CTX_ROOT_MAP_COUNT_TIMEOUT: ${CTX_ROOT_MAP_COUNT_TIMEOUT:-}
+      CTX_ROOT_MAP_LABEL_BUDGET: ${CTX_ROOT_MAP_LABEL_BUDGET:-}
+      CTX_ROOT_MAP_SUPER_ENABLED: ${CTX_ROOT_MAP_SUPER_ENABLED:-}
+      CTX_ROOT_MAP_SUPER_MIN_RESOLUTION: ${CTX_ROOT_MAP_SUPER_MIN_RESOLUTION:-}
+      CTX_ROOT_MAP_SUPER_MAX_NODES: ${CTX_ROOT_MAP_SUPER_MAX_NODES:-}
+
+      # ── digest.* (1) ──
+      # Linear topic map (one line per BLOCK — 80 KB today, ~113 MB at 10M).
+      # full = today's behaviour byte for byte (the shipped default: retiring the
+      # old map is an operational step after the root map has proven itself, not
+      # a deploy side effect) · stub = the map becomes a ~300 B pointer to
+      # root-map-<scope>, so consumers searching for it still learn where to look
+      # · off = no digest write at all, the block stays as it is. An unknown
+      # value falls back to full and says so in the log.
+      CTX_DIGEST_MODE: ${CTX_DIGEST_MODE:-}
+
+      # ── graph_cache.* (10) ──
+      CTX_GRAPH_CACHE_ENABLED: ${CTX_GRAPH_CACHE_ENABLED:-}
+      CTX_GRAPH_CACHE_REBUILD_INTERVAL: ${CTX_GRAPH_CACHE_REBUILD_INTERVAL:-}
+      CTX_GRAPH_CACHE_DEBOUNCE_WINDOW: ${CTX_GRAPH_CACHE_DEBOUNCE_WINDOW:-}
+      CTX_GRAPH_CACHE_MIN_REBUILD_INTERVAL: ${CTX_GRAPH_CACHE_MIN_REBUILD_INTERVAL:-}
+      CTX_GRAPH_CACHE_MAX_PENDING_AGE: ${CTX_GRAPH_CACHE_MAX_PENDING_AGE:-}
+      CTX_GRAPH_CACHE_MAX_STALENESS: ${CTX_GRAPH_CACHE_MAX_STALENESS:-}
+      CTX_GRAPH_CACHE_FAILED_THRESHOLD: ${CTX_GRAPH_CACHE_FAILED_THRESHOLD:-}
+      CTX_GRAPH_CACHE_DEGREE_WALK_BUDGET: ${CTX_GRAPH_CACHE_DEGREE_WALK_BUDGET:-}
+      CTX_GRAPH_CACHE_SERVE_EGO: ${CTX_GRAPH_CACHE_SERVE_EGO:-}
+      CTX_GRAPH_CACHE_SERVE_EXPAND: ${CTX_GRAPH_CACHE_SERVE_EXPAND:-}
+
+      # ── cluster.* (21) ──
+      # Cluster consumption (Achse 03, wave C0): turns the Louvain clusters from
+      # an output-only endpoint into a retrieval signal, a graph citizen and a
+      # facet. The whole surface ships DARK — every gate below is false/0 and
+      # arming one is a deliberate data flip after its wave landed. Declared
+      # here COMPLETELY and in one place (K6) so no later wave has to touch the
+      # compose block again; a knob the container cannot receive is not a knob,
+      # which is exactly the gap the three-of-five CTX_GRAPH_OVERVIEW_* block
+      # above still has. Ranking knobs (first group) are tenant-overridable,
+      # wire/ops knobs (second group) are global-only. Durations are bare
+      # seconds. SIZE_DAMPING ships ON: without it a mega cluster wins nearly
+      # every query at scale (live Heavy-Tail: median 6 vs max 133 members).
+      CTX_CLUSTER_ENABLED: ${CTX_CLUSTER_ENABLED:-}
+      CTX_CLUSTER_SEED_COUNT: ${CTX_CLUSTER_SEED_COUNT:-}
+      CTX_CLUSTER_TOP_CLUSTERS: ${CTX_CLUSTER_TOP_CLUSTERS:-}
+      CTX_CLUSTER_MIN_SHARE: ${CTX_CLUSTER_MIN_SHARE:-}
+      CTX_CLUSTER_BOOST_WEIGHT: ${CTX_CLUSTER_BOOST_WEIGHT:-}
+      CTX_CLUSTER_SIZE_DAMPING: ${CTX_CLUSTER_SIZE_DAMPING:-}
+      CTX_CLUSTER_CENTROID_ENABLED: ${CTX_CLUSTER_CENTROID_ENABLED:-}
+      CTX_CLUSTER_CENTROID_WEIGHT: ${CTX_CLUSTER_CENTROID_WEIGHT:-}
+      CTX_CLUSTER_CENTROID_TOP_K: ${CTX_CLUSTER_CENTROID_TOP_K:-}
+      CTX_CLUSTER_INJECT_MAX: ${CTX_CLUSTER_INJECT_MAX:-}
+      CTX_CLUSTER_MAX_STALENESS: ${CTX_CLUSTER_MAX_STALENESS:-}
+      CTX_CLUSTER_EGO_ANNOTATE: ${CTX_CLUSTER_EGO_ANNOTATE:-}
+      CTX_CLUSTER_EGO_ANNOTATE_MAX_NODES: ${CTX_CLUSTER_EGO_ANNOTATE_MAX_NODES:-}
+      CTX_CLUSTER_FACET_ENABLED: ${CTX_CLUSTER_FACET_ENABLED:-}
+      CTX_CLUSTER_ROUTE_ENABLED: ${CTX_CLUSTER_ROUTE_ENABLED:-}
+      CTX_CLUSTER_CENTROID_BUILD: ${CTX_CLUSTER_CENTROID_BUILD:-}
+      CTX_CLUSTER_CENTROID_TIMEOUT: ${CTX_CLUSTER_CENTROID_TIMEOUT:-}
+      CTX_CLUSTER_CENTROID_BATCH: ${CTX_CLUSTER_CENTROID_BATCH:-}
+      CTX_CLUSTER_CENTROID_WORK_MEM: ${CTX_CLUSTER_CENTROID_WORK_MEM:-}
+      CTX_CLUSTER_CENTROID_ANN_THRESHOLD: ${CTX_CLUSTER_CENTROID_ANN_THRESHOLD:-}
+      CTX_CLUSTER_CENTROID_EF_SEARCH: ${CTX_CLUSTER_CENTROID_EF_SEARCH:-}
+
+      # ── query.* (7) ──
+      CTX_SCORE_THRESHOLD: ${CTX_SCORE_THRESHOLD:-}
+      CTX_CONFIDENT_THRESHOLD: ${CTX_CONFIDENT_THRESHOLD:-}
+      CTX_PROMPT_VERSION: ${CTX_PROMPT_VERSION:-}
+      CTX_TIMEZONE: ${CTX_TIMEZONE:-}
+      CTX_RATE_LIMIT_WRITE: ${CTX_RATE_LIMIT_WRITE:-}
+      CTX_RATE_LIMIT_READ: ${CTX_RATE_LIMIT_READ:-}
+      CTX_SEMANTIC_FLOOR: ${CTX_SEMANTIC_FLOOR:-}
+
+      # ── scheduler.* (2) ──
+      # Scheduler ReadScopes (comma-separated). Background guard/digest/dream
+      # operate on these scopes. Default = v1.x backwards-compat. v2.0.0 M045
+      # dropped chk_scope, so any scope name is valid (no schema validation).
+      # work-Scope abgebaut (User-Entscheid 2026-08-06): Daten archiviert (W-H),
+      # Keys deaktiviert, Isolations-Tests laufen auf 'isotest' (test.sh).
+      CTX_READ_SCOPES: ${CTX_READ_SCOPES:-private,shared}
+      # Age after which the background janitor NULLs context_llm_log prompt/
+      # response bodies (telemetry row survives — Body-NULLing, not a chunk
+      # drop; audit stays lossless). 0 = keep bodies forever (no retention).
+      CTX_LLMLOG_RETENTION_DAYS: ${CTX_LLMLOG_RETENTION_DAYS:-}
+
+      # ── events.* (6) ──
+      CTX_EVENTS_TICK_INTERVAL: ${CTX_EVENTS_TICK_INTERVAL:-}
+      CTX_EVENTS_QUEUE_STATS_INTERVAL: ${CTX_EVENTS_QUEUE_STATS_INTERVAL:-}
+      CTX_EVENTS_PING_INTERVAL: ${CTX_EVENTS_PING_INTERVAL:-}
+      CTX_EVENTS_MAX_CONNECTIONS: ${CTX_EVENTS_MAX_CONNECTIONS:-}
+      CTX_EVENTS_DB_STATS_INTERVAL: ${CTX_EVENTS_DB_STATS_INTERVAL:-}
+      CTX_EVENTS_LLMCALL_COALESCE_THRESHOLD: ${CTX_EVENTS_LLMCALL_COALESCE_THRESHOLD:-}
+
+      # ── project.* (6) ──
+      CTX_PROJECT_SYNC_RATE_LIMIT: ${CTX_PROJECT_SYNC_RATE_LIMIT:-}
+      CTX_PROJECT_SYNC_MAX_CONCURRENT: ${CTX_PROJECT_SYNC_MAX_CONCURRENT:-}
+      CTX_PROJECT_EVENTS_MAX_CONNECTIONS: ${CTX_PROJECT_EVENTS_MAX_CONNECTIONS:-}
+      CTX_PROJECT_EVENTS_FLUSH_INTERVAL: ${CTX_PROJECT_EVENTS_FLUSH_INTERVAL:-}
+      CTX_PROJECT_EVENTS_PING_INTERVAL: ${CTX_PROJECT_EVENTS_PING_INTERVAL:-}
+      CTX_PROJECT_EVENTS_COALESCE_THRESHOLD: ${CTX_PROJECT_EVENTS_COALESCE_THRESHOLD:-}
+
+      # ── webhook.* (2) ──
+      CTX_WEBHOOK_RATE_LIMIT: ${CTX_WEBHOOK_RATE_LIMIT:-}
+      CTX_WEBHOOK_RETENTION: ${CTX_WEBHOOK_RETENTION:-}
+
+      # ── llmlog.* (1) ──
+      CTX_LLMLOG_MAX_LIMIT: ${CTX_LLMLOG_MAX_LIMIT:-}
+
+      # ── webchat.* (9) ──
+      # Web-chat harness (F6). ENABLED gates POST /api/chat/stream + the session
+      # routes (off ⇒ 404). The integer budgets cap one turn; CONCURRENT_TURNS
+      # is the per-home_scope semaphore (429 above it) that bounds turn frequency
+      # on the single llama.cpp slot. SESSION_RETENTION takes a duration suffix
+      # (h/d/w/m/y); 0 = keep sessions forever (the janitor stays off).
+      CTX_WEBCHAT_ENABLED: ${CTX_WEBCHAT_ENABLED:-}
+      CTX_WEBCHAT_MAX_ITERATIONS: ${CTX_WEBCHAT_MAX_ITERATIONS:-}
+      CTX_WEBCHAT_MAX_TOKENS: ${CTX_WEBCHAT_MAX_TOKENS:-}
+      CTX_WEBCHAT_COMPLETION_BUDGET: ${CTX_WEBCHAT_COMPLETION_BUDGET:-}
+      CTX_WEBCHAT_TOOL_RESULT_MAX_CHARS: ${CTX_WEBCHAT_TOOL_RESULT_MAX_CHARS:-}
+      CTX_WEBCHAT_HISTORY_BUDGET_CHARS: ${CTX_WEBCHAT_HISTORY_BUDGET_CHARS:-}
+      CTX_WEBCHAT_LLM_TIMEOUT: ${CTX_WEBCHAT_LLM_TIMEOUT:-}
+      CTX_WEBCHAT_CONCURRENT_TURNS: ${CTX_WEBCHAT_CONCURRENT_TURNS:-}
+      CTX_WEBCHAT_SESSION_RETENTION: ${CTX_WEBCHAT_SESSION_RETENTION:-}
+
+      # ── writes.* (2) ──
+      CTX_WRITES_CONFIRM_TTL: ${CTX_WRITES_CONFIRM_TTL:-}
+      CTX_WRITES_CONFIRM_RETENTION: ${CTX_WRITES_CONFIRM_RETENTION:-}
+
+      # ── dispatch.* (9) ──
+      CTX_DISPATCH_ENABLED: ${CTX_DISPATCH_ENABLED:-}
+      CTX_DISPATCH_BACKGROUND_QUEUE_MAX: ${CTX_DISPATCH_BACKGROUND_QUEUE_MAX:-}
+      CTX_DISPATCH_INTERACTIVE_QUEUE_PER_PRINCIPAL: ${CTX_DISPATCH_INTERACTIVE_QUEUE_PER_PRINCIPAL:-}
+      CTX_DISPATCH_INTERACTIVE_QUEUE_PER_TENANT: ${CTX_DISPATCH_INTERACTIVE_QUEUE_PER_TENANT:-}
+      CTX_DISPATCH_INTERACTIVE_QUEUE_MAX: ${CTX_DISPATCH_INTERACTIVE_QUEUE_MAX:-}
+      CTX_DISPATCH_LEASE_REAP_GRACE: ${CTX_DISPATCH_LEASE_REAP_GRACE:-}
+      CTX_DISPATCH_LEASE_MAX_AGE: ${CTX_DISPATCH_LEASE_MAX_AGE:-}
+      CTX_DISPATCH_PREEMPT_RELEASE_TIMEOUT: ${CTX_DISPATCH_PREEMPT_RELEASE_TIMEOUT:-}
+      CTX_DISPATCH_BACKGROUND_AGING_AFTER: ${CTX_DISPATCH_BACKGROUND_AGING_AFTER:-}
+
+      # ── contract.* (2) ──
+      CTX_CONTRACT_MODE: ${CTX_CONTRACT_MODE:-}
+      CTX_CONTRACT_RECHECK_INTERVAL: ${CTX_CONTRACT_RECHECK_INTERVAL:-}
+
+      # ── status.* (1) ──
+      CTX_STATUS_CHANNEL_PROBE_INTERVAL: ${CTX_STATUS_CHANNEL_PROBE_INTERVAL:-}
+
+      # ── embed_backfill.* (4) ──
+      CTX_EMBED_BACKFILL_SYNC_CAP: ${CTX_EMBED_BACKFILL_SYNC_CAP:-}
+      CTX_EMBED_BACKFILL_MAX_TOKENS: ${CTX_EMBED_BACKFILL_MAX_TOKENS:-}
+      CTX_EMBED_BACKFILL_BACKOFF_BASE: ${CTX_EMBED_BACKFILL_BACKOFF_BASE:-}
+      CTX_EMBED_BACKFILL_BACKOFF_CAP: ${CTX_EMBED_BACKFILL_BACKOFF_CAP:-}
+
+      # ── embed_migration.* (7) ──
+      CTX_EMBED_MIGRATION_BATCH_PER_CYCLE: ${CTX_EMBED_MIGRATION_BATCH_PER_CYCLE:-}
+      CTX_EMBED_MIGRATION_MAX_TOKENS: ${CTX_EMBED_MIGRATION_MAX_TOKENS:-}
+      CTX_EMBED_MIGRATION_BACKOFF_BASE: ${CTX_EMBED_MIGRATION_BACKOFF_BASE:-}
+      CTX_EMBED_MIGRATION_BACKOFF_CAP: ${CTX_EMBED_MIGRATION_BACKOFF_CAP:-}
+      CTX_EMBED_MIGRATION_VERIFY_SAMPLE_N: ${CTX_EMBED_MIGRATION_VERIFY_SAMPLE_N:-}
+      CTX_EMBED_MIGRATION_VERIFY_OVERLAP_K: ${CTX_EMBED_MIGRATION_VERIFY_OVERLAP_K:-}
+      CTX_EMBED_MIGRATION_VERIFY_OVERLAP_SAMPLES: ${CTX_EMBED_MIGRATION_VERIFY_OVERLAP_SAMPLES:-}
+
+      # ── recall_check.* (13) ──
+      CTX_RECALL_CHECK_ENABLED: ${CTX_RECALL_CHECK_ENABLED:-}
+      CTX_RECALL_CHECK_INTERVAL: ${CTX_RECALL_CHECK_INTERVAL:-}
+      CTX_RECALL_CHECK_OFFPEAK_HOUR: ${CTX_RECALL_CHECK_OFFPEAK_HOUR:-}
+      CTX_RECALL_CHECK_K_LIST: ${CTX_RECALL_CHECK_K_LIST:-}
+      CTX_RECALL_CHECK_QUERIES: ${CTX_RECALL_CHECK_QUERIES:-}
+      CTX_RECALL_CHECK_STRATA_BOUNDS: ${CTX_RECALL_CHECK_STRATA_BOUNDS:-}
+      CTX_RECALL_CHECK_EXACT_BUDGET_MS: ${CTX_RECALL_CHECK_EXACT_BUDGET_MS:-}
+      CTX_RECALL_CHECK_EXACT_TOUCH_BUDGET: ${CTX_RECALL_CHECK_EXACT_TOUCH_BUDGET:-}
+      CTX_RECALL_CHECK_LEG_TIMEOUT_MS: ${CTX_RECALL_CHECK_LEG_TIMEOUT_MS:-}
+      CTX_RECALL_CHECK_PARK_MAX_MS: ${CTX_RECALL_CHECK_PARK_MAX_MS:-}
+      CTX_RECALL_CHECK_EF_SEARCH: ${CTX_RECALL_CHECK_EF_SEARCH:-}
+      CTX_RECALL_CHECK_EPSILON: ${CTX_RECALL_CHECK_EPSILON:-}
+      CTX_RECALL_CHECK_RETENTION_DAYS: ${CTX_RECALL_CHECK_RETENTION_DAYS:-}
+
+      # ── retrieval.* (5) ──
+      CTX_RETRIEVAL_SELECTOR_ENABLED: ${CTX_RETRIEVAL_SELECTOR_ENABLED:-}
+      CTX_RETRIEVAL_SELECTOR_EXACT_MAX: ${CTX_RETRIEVAL_SELECTOR_EXACT_MAX:-}
+      CTX_RETRIEVAL_SELECTOR_GREY_MAX: ${CTX_RETRIEVAL_SELECTOR_GREY_MAX:-}
+      CTX_RETRIEVAL_SELECTOR_GREY_SCAN_TUPLES: ${CTX_RETRIEVAL_SELECTOR_GREY_SCAN_TUPLES:-}
+      CTX_RETRIEVAL_SELECTOR_STATS_TTL: ${CTX_RETRIEVAL_SELECTOR_STATS_TTL:-}
+
+      # ── distill.* (35) ──
+      # ── distill.* (36) ──
+      CTX_DISTILL_ENABLED: ${CTX_DISTILL_ENABLED:-}
+      CTX_DISTILL_SOURCE_PATH: ${CTX_DISTILL_SOURCE_PATH:-}
+      CTX_DISTILL_SOURCE_LABEL: ${CTX_DISTILL_SOURCE_LABEL:-}
+      CTX_DISTILL_CTX_ENABLED: ${CTX_DISTILL_CTX_ENABLED:-}
+      CTX_DISTILL_CTX_SOURCE_LABEL: ${CTX_DISTILL_CTX_SOURCE_LABEL:-}
+      CTX_DISTILL_CTX_QUIET_FOR: ${CTX_DISTILL_CTX_QUIET_FOR:-}
+      CTX_DISTILL_CTX_SESSION_HORIZON: ${CTX_DISTILL_CTX_SESSION_HORIZON:-}
+      CTX_DISTILL_INTERVAL: ${CTX_DISTILL_INTERVAL:-}
+      CTX_DISTILL_SESSION_QUIET_FOR: ${CTX_DISTILL_SESSION_QUIET_FOR:-}
+      CTX_DISTILL_MAX_SESSIONS_PER_RUN: ${CTX_DISTILL_MAX_SESSIONS_PER_RUN:-}
+      CTX_DISTILL_CONCURRENCY: ${CTX_DISTILL_CONCURRENCY:-}
+      CTX_DISTILL_ROWS_PER_READ: ${CTX_DISTILL_ROWS_PER_READ:-}
+      CTX_DISTILL_MIN_ROW_RUNES: ${CTX_DISTILL_MIN_ROW_RUNES:-}
+      CTX_DISTILL_MAX_ROW_RUNES: ${CTX_DISTILL_MAX_ROW_RUNES:-}
+      CTX_DISTILL_ROWS_PER_CALL: ${CTX_DISTILL_ROWS_PER_CALL:-}
+      CTX_DISTILL_DRYRUN_DIR: ${CTX_DISTILL_DRYRUN_DIR:-}
+      CTX_DISTILL_INITIAL_BACKFILL_ROWS: ${CTX_DISTILL_INITIAL_BACKFILL_ROWS:-}
+      CTX_DISTILL_CALL_TIMEOUT: ${CTX_DISTILL_CALL_TIMEOUT:-}
+      CTX_DISTILL_NUM_PREDICT: ${CTX_DISTILL_NUM_PREDICT:-}
+      CTX_DISTILL_SCOPE: ${CTX_DISTILL_SCOPE:-}
+      CTX_DISTILL_CATEGORY: ${CTX_DISTILL_CATEGORY:-}
+      CTX_DISTILL_BLOCK_TYPE: ${CTX_DISTILL_BLOCK_TYPE:-}
+      CTX_DISTILL_CHECKPOINT_CATEGORY: ${CTX_DISTILL_CHECKPOINT_CATEGORY:-}
+      CTX_DISTILL_MAX_BLOCK_RUNES: ${CTX_DISTILL_MAX_BLOCK_RUNES:-}
+      CTX_DISTILL_MAX_BLOCKS_PER_ROOT: ${CTX_DISTILL_MAX_BLOCKS_PER_ROOT:-}
+      CTX_DISTILL_BLOCK_SENSITIVITY: ${CTX_DISTILL_BLOCK_SENSITIVITY:-}
+      CTX_DISTILL_NOVELTY_FLOOR: ${CTX_DISTILL_NOVELTY_FLOOR:-}
+      CTX_DISTILL_SPEND_WINDOW: ${CTX_DISTILL_SPEND_WINDOW:-}
+      CTX_DISTILL_SPEND_MAX_CALLS: ${CTX_DISTILL_SPEND_MAX_CALLS:-}
+      CTX_DISTILL_SPEND_MAX_GPU_SECONDS: ${CTX_DISTILL_SPEND_MAX_GPU_SECONDS:-}
+      CTX_DISTILL_SPEND_BACKOFF: ${CTX_DISTILL_SPEND_BACKOFF:-}
+      CTX_DISTILL_BREAKER_FAILURES: ${CTX_DISTILL_BREAKER_FAILURES:-}
+      CTX_DISTILL_BREAKER_COOLDOWN: ${CTX_DISTILL_BREAKER_COOLDOWN:-}
+      CTX_DISTILL_RETENTION_DAYS: ${CTX_DISTILL_RETENTION_DAYS:-}
+      CTX_DISTILL_SEEN_RETENTION_DAYS: ${CTX_DISTILL_SEEN_RETENTION_DAYS:-}
+
+      # ── env-only names (deliberately NOT in the config registry) ──
+      # These have no settings key and no registry default: they are read
+      # straight from the environment, so a .env value only reaches the
+      # daemon through a declaration here. Their prose below says why each
+      # one cannot live in the DB-backed settings layer.
       # Sealbox master key (env-only by design — the key that unseals DB rows
       # can never itself live in the DB). _PREV only while a §3.6 rotation
       # sweep is pending. Without this declaration the secrets API answers
@@ -51,234 +472,6 @@ services:
       # (comma-separated exact URIs; loopback is always allowed by rule).
       CTX_CANONICAL_ISSUER: ${CTX_CANONICAL_ISSUER:-https://${CTX_HOSTNAME}}
       CTX_OAUTH_REDIRECT_EXTRA: ${CTX_OAUTH_REDIRECT_EXTRA:-}
-      # Backend topology — the endpoints themselves (host, protocol, model,
-      # num_ctx, think, API key, per role chat / synthesis / embed / dream /
-      # dream-embed / rerank) — is NOT configured here. It lives as rows in the
-      # backend pool (`context_backends`, migration 053): `ctx backends` on the
-      # CLI, /settings/backends in the web UI, `ctx init` or `ctx backends seed`
-      # on a fresh install. The 29 CTX_{CHAT,CHAT_FALLBACK,EMBED,DREAM,
-      # DREAM_EMBED,RERANK}_* declarations that stood here are retired in
-      # v5.0.0: nothing reads them any more, and leaving them in a .env is
-      # inert. Upgrade path and the reason: docs/operations.md.
-      CTX_DREAM_ENABLED: ${CTX_DREAM_ENABLED:-false}
-      CTX_DREAM_PARALLELISM: ${CTX_DREAM_PARALLELISM:-1}
-      # Reranker (post-RRF re-score). Opt-in since v5.0.0, and the default is
-      # OFF for the same reason the tuples above are gone: whether a reranker
-      # exists is a pool question, and a fresh install has no row of role
-      # rerank. Without such a row the dispatch silently degrades to
-      # LLM-as-judge on the chat model (~80-90s/query — proxy-safe via the
-      # query body-heartbeat, but nobody chose it), so an ON default would sell
-      # a slow path as a feature. The cross-encoder itself earns its keep where
-      # a row does exist: the Wave-3.5 surface-gold counter-probe measured
-      # nDCG@10 +0.164 and MRR +0.169 on judge-annotated answer gold, with
-      # blend 0.5 neutral on latent gold (graph+ce-bw0.5 = best arm on BOTH
-      # gold sets). To use the `ctx-rerank` sidecar below: create a pool row
-      # targeting it (`ctx backends`), then set CTX_RERANK_ENABLED=true.
-      # BLEND_WEIGHT/MAX_DOCS are cross-encoder sweep knobs (quality, not
-      # latency — CPU rerank ~1s/doc is intentionally not a constraint; the
-      # client timeout is sized for 50).
-      CTX_RERANK_ENABLED: ${CTX_RERANK_ENABLED:-false}
-      CTX_RERANK_MAX_DOCS: ${CTX_RERANK_MAX_DOCS:-50}
-      # BLEND_WEIGHT default 0.5 (not 1.0): the Wave-3 sweep showed pure
-      # cross-encoder (bw1.0) discards the RRF prior and re-ranks latent neighbors
-      # down — and as final arbiter over graph-injected neighbors it is destructive
-      # (R@10 0.715->0.571). bw0.5 keeps RRF/graph and is the only setting that
-      # didn't hurt (graph+ce-bw0.5 R@20 0.811, best overall).
-      CTX_RERANK_BLEND_WEIGHT: ${CTX_RERANK_BLEND_WEIGHT:-0.5}
-      # Dream-graph expansion (Wave 1). Post-RRF stage that 1-hop-expands the top
-      # RRF seeds along the positive Dream link types. Default ON since Wave 3: the
-      # only arm that moves the recall ceiling (R@20 0.763 vs 0.625 for every
-      # reorderer; a reorderer structurally cannot surface what RRF didn't return),
-      # ~0s deterministic = zero latency cost. Caveat: the +31% R@10 magnitude is
-      # partly circular (the eval gold is derived from these same Dream links);
-      # the non-circular floor (graph surfaces link-gold RRF never finds) is what
-      # justifies ON. Every value is a runtime knob.
-      CTX_GRAPH_EXPAND_ENABLED: ${CTX_GRAPH_EXPAND_ENABLED:-true}
-      CTX_GRAPH_EXPAND_DIRECTED: ${CTX_GRAPH_EXPAND_DIRECTED:-true}
-      CTX_GRAPH_EXPAND_HOP_DEPTH: ${CTX_GRAPH_EXPAND_HOP_DEPTH:-1}
-      CTX_GRAPH_EXPAND_SEED_COUNT: ${CTX_GRAPH_EXPAND_SEED_COUNT:-5}
-      CTX_GRAPH_EXPAND_SEED_SCORE_FLOOR: ${CTX_GRAPH_EXPAND_SEED_SCORE_FLOOR:-0.5}
-      CTX_GRAPH_EXPAND_PER_SEED_CAP: ${CTX_GRAPH_EXPAND_PER_SEED_CAP:-3}
-      CTX_GRAPH_EXPAND_MAX_INJECTED: ${CTX_GRAPH_EXPAND_MAX_INJECTED:-10}
-      CTX_GRAPH_EXPAND_MIN_CONFIDENCE: ${CTX_GRAPH_EXPAND_MIN_CONFIDENCE:-0.75}
-      CTX_GRAPH_EXPAND_MIN_CONFIDENCE_RECURRENT: ${CTX_GRAPH_EXPAND_MIN_CONFIDENCE_RECURRENT:-0.8}
-      CTX_GRAPH_EXPAND_BOOST_WEIGHT: ${CTX_GRAPH_EXPAND_BOOST_WEIGHT:-0.20}
-      CTX_GRAPH_EXPAND_HUB_DAMPING: ${CTX_GRAPH_EXPAND_HUB_DAMPING:-true}
-      CTX_GRAPH_EXPAND_WEIGHT_TOPICAL: ${CTX_GRAPH_EXPAND_WEIGHT_TOPICAL:-0.5}
-      CTX_GRAPH_EXPAND_WEIGHT_FACTUAL: ${CTX_GRAPH_EXPAND_WEIGHT_FACTUAL:-0.9}
-      CTX_GRAPH_EXPAND_WEIGHT_CAUSAL: ${CTX_GRAPH_EXPAND_WEIGHT_CAUSAL:-0.9}
-      CTX_GRAPH_EXPAND_WEIGHT_RECURRENT: ${CTX_GRAPH_EXPAND_WEIGHT_RECURRENT:-1.0}
-      CTX_GRAPH_EXPAND_NEW_PLACEMENT_FRAC: ${CTX_GRAPH_EXPAND_NEW_PLACEMENT_FRAC:-0.6}
-      # Graph overview "landkarte" (F5-W6): the Louvain cluster-supergraph rebuild
-      # job (gonum, offline in the scheduler) + GET /api/graph/overview. ENABLED
-      # gates BOTH the job and the endpoint (off ⇒ 404). REBUILD_INTERVAL takes
-      # seconds (default 6h); RESOLUTION is the Louvain γ (higher ⇒ more, smaller
-      # clusters). First build runs at boot when ENABLED and the tables are empty.
-      #
-      # Declared COMPLETELY here since wave W6 (Cluster-Topic-Map). The block
-      # used to carry three of the group's keys — leaving out MAX_NODES and
-      # REBUILD_TIMEOUT, i.e. exactly the two liveness guards that have to be
-      # reachable FIRST at scale. A knob the container cannot receive is not a
-      # knob.
-      CTX_GRAPH_OVERVIEW_ENABLED: ${CTX_GRAPH_OVERVIEW_ENABLED:-false}
-      CTX_GRAPH_OVERVIEW_REBUILD_INTERVAL: ${CTX_GRAPH_OVERVIEW_REBUILD_INTERVAL:-21600}
-      CTX_GRAPH_OVERVIEW_RESOLUTION: ${CTX_GRAPH_OVERVIEW_RESOLUTION:-1.0}
-      # MAX_NODES is the load-bearing liveness cap (parse-strict): past ~200k
-      # nodes Louvain hits a convergence wall, and a node set beyond the cap
-      # skips the rebuild fail-safe rather than hanging it (0 = uncapped).
-      # REBUILD_TIMEOUT bounds one run; the worker child is SIGKILLed on expiry.
-      CTX_GRAPH_OVERVIEW_MAX_NODES: ${CTX_GRAPH_OVERVIEW_MAX_NODES:-200000}
-      CTX_GRAPH_OVERVIEW_REBUILD_TIMEOUT: ${CTX_GRAPH_OVERVIEW_REBUILD_TIMEOUT:-900}
-      # TOMBSTONE_RETENTION (seconds, 45 d) is the window in which a dead topic
-      # can still be re-attached to a re-appearing community — the batch-import
-      # guard. 0 switches the re-attach off (fresh identities, never a wrong
-      # revival). The purge of expired tombstones reads the same key.
-      CTX_GRAPH_OVERVIEW_TOMBSTONE_RETENTION: ${CTX_GRAPH_OVERVIEW_TOMBSTONE_RETENTION:-3888000}
-      # Topic labelling (wave W6): the LLM half of the cluster names, over the
-      # digest role. LABEL_ENABLED ships ON — unlike the rebuild gate — because
-      # what keeps a small install quiet is LABEL_MIN_TOPICS, not an off switch:
-      # below that many living topics per scope nothing is labelled at all, and
-      # the deterministic fallback already names every topic. Language follows
-      # CTX_DREAM_LANGUAGE (one language knob per corpus). LABEL_BATCH is the cap
-      # per TICK across all scopes of the tenant served, LABEL_PROMPT_MAX_TITLES
-      # a declared token budget. LABEL_CREDENTIALS_FALLBACK_ONLY is the opt-in
-      # third hardening stage — the scan over the finished label and the echo
-      # gate are unconditional, this one keeps credentials cores out of the model
-      # path entirely.
-      CTX_GRAPH_OVERVIEW_LABEL_ENABLED: ${CTX_GRAPH_OVERVIEW_LABEL_ENABLED:-true}
-      CTX_GRAPH_OVERVIEW_LABEL_INTERVAL: ${CTX_GRAPH_OVERVIEW_LABEL_INTERVAL:-3600}
-      CTX_GRAPH_OVERVIEW_LABEL_BATCH: ${CTX_GRAPH_OVERVIEW_LABEL_BATCH:-200}
-      CTX_GRAPH_OVERVIEW_LABEL_MIN_TOPICS: ${CTX_GRAPH_OVERVIEW_LABEL_MIN_TOPICS:-10}
-      CTX_GRAPH_OVERVIEW_LABEL_PROMPT_MAX_TITLES: ${CTX_GRAPH_OVERVIEW_LABEL_PROMPT_MAX_TITLES:-24}
-      CTX_GRAPH_OVERVIEW_LABEL_CREDENTIALS_FALLBACK_ONLY: ${CTX_GRAPH_OVERVIEW_LABEL_CREDENTIALS_FALLBACK_ONLY:-false}
-      # ── Achse 04 (Skalen-Pfad): Substrat, Engine, Guards ─────────────────
-      #
-      # ENGINE waehlt den Rechenkern: gonum (Default) oder ctx (der eigene
-      # Kern). Die Umschaltung ist ein EINMALIGER, GLOBALER Partitionsbruch —
-      # jede cluster_id wird neu vergeben — und gehoert an einen angekuendigten
-      # Release-Schnitt mit vorher erhoehtem TOMBSTONE_RETENTION, nicht in ein
-      # beilaeufiges Deploy. Ein unbekannter Wert ist ein BOOT-Fehler, nie ein
-      # stiller Fallback.
-      #
-      # Die Engine waehlt ausserdem den Knoten-Cap-KEY: MAX_NODES gilt fuer
-      # gonum, MAX_NODES_CTX fuer den eigenen Kern. Bei engine=ctx ist der Cap
-      # nur noch Not-Aus; tragender Guard ist dann TIME_BUDGET (Sekunden), das
-      # die RECHENPHASE begrenzt und sauber abbricht, statt das Kind zu killen.
-      #
-      # CSR_LOADER schaltet das Eingabe-Substrat um (ergebnisgleich, deutlich
-      # speicherguenstiger); engine=ctx impliziert es ohnehin. REFINE
-      # garantiert zusammenhaengende Communities und wirkt nur bei engine=ctx.
-      # v4.31.0 (UD-03-04, Board-Entscheid A2 2026-08-05): eigener Louvain/Leiden-Kern
-      # als Live-Engine — Release-gebündelte Umschaltung, tombstone_retention deckt
-      # den einmaligen Partitionsbruch (Grabstein-Gate >=80 % Re-Attach).
-      CTX_GRAPH_OVERVIEW_ENGINE: ${CTX_GRAPH_OVERVIEW_ENGINE:-ctx}
-      CTX_GRAPH_OVERVIEW_TIME_BUDGET: ${CTX_GRAPH_OVERVIEW_TIME_BUDGET:-600}
-      CTX_GRAPH_OVERVIEW_MAX_NODES_CTX: ${CTX_GRAPH_OVERVIEW_MAX_NODES_CTX:-5000000}
-      CTX_GRAPH_OVERVIEW_CSR_LOADER: ${CTX_GRAPH_OVERVIEW_CSR_LOADER:-false}
-      CTX_GRAPH_OVERVIEW_REFINE: ${CTX_GRAPH_OVERVIEW_REFINE:-true}
-      CTX_GRAPH_OVERVIEW_RUN_RETENTION: ${CTX_GRAPH_OVERVIEW_RUN_RETENTION:-7776000}
-      # WORKER_MEM_LIMIT deckelt den Heap des Rebuild-KINDES (Bytes, 0 = aus).
-      # Default aus, und das ist Absicht: der heutige Rechenpfad hat am
-      # 200k-Cap eine gemessene Spitze von ~423 MB — ein zu klein gewaehltes
-      # Limit macht aus einem Speicher-SCHUTZ ein Speicher-VERBOT und friert
-      # die Karte dauerhaft ein. Wert gegen peak_rss_kb aus graph_overview_run
-      # waehlen; UD-02-04 nennt ~60 % des Container-Limits als Startpunkt.
-      # Das Kind liest die Variable AUCH direkt aus der geerbten Umgebung, um
-      # sich zu deckeln, bevor es Optionen hat.
-      CTX_GRAPH_OVERVIEW_WORKER_MEM_LIMIT: ${CTX_GRAPH_OVERVIEW_WORKER_MEM_LIMIT:-0}
-      CTX_GRAPH_OVERVIEW_COMPONENT_SPLIT: ${CTX_GRAPH_OVERVIEW_COMPONENT_SPLIT:-true}
-      CTX_GRAPH_OVERVIEW_DELTA_PERSIST: ${CTX_GRAPH_OVERVIEW_DELTA_PERSIST:-true}
-      # Cluster consumption (Achse 03, wave C0): turns the Louvain clusters from
-      # an output-only endpoint into a retrieval signal, a graph citizen and a
-      # facet. The whole surface ships DARK — every gate below is false/0 and
-      # arming one is a deliberate data flip after its wave landed. Declared
-      # here COMPLETELY and in one place (K6) so no later wave has to touch the
-      # compose block again; a knob the container cannot receive is not a knob,
-      # which is exactly the gap the three-of-five CTX_GRAPH_OVERVIEW_* block
-      # above still has. Ranking knobs (first group) are tenant-overridable,
-      # wire/ops knobs (second group) are global-only. Durations are bare
-      # seconds. SIZE_DAMPING ships ON: without it a mega cluster wins nearly
-      # every query at scale (live Heavy-Tail: median 6 vs max 133 members).
-      CTX_CLUSTER_ENABLED: ${CTX_CLUSTER_ENABLED:-false}
-      CTX_CLUSTER_SEED_COUNT: ${CTX_CLUSTER_SEED_COUNT:-10}
-      CTX_CLUSTER_TOP_CLUSTERS: ${CTX_CLUSTER_TOP_CLUSTERS:-2}
-      CTX_CLUSTER_MIN_SHARE: ${CTX_CLUSTER_MIN_SHARE:-0.25}
-      CTX_CLUSTER_BOOST_WEIGHT: ${CTX_CLUSTER_BOOST_WEIGHT:-0.12}
-      CTX_CLUSTER_SIZE_DAMPING: ${CTX_CLUSTER_SIZE_DAMPING:-true}
-      CTX_CLUSTER_CENTROID_ENABLED: ${CTX_CLUSTER_CENTROID_ENABLED:-false}
-      CTX_CLUSTER_CENTROID_WEIGHT: ${CTX_CLUSTER_CENTROID_WEIGHT:-0.5}
-      CTX_CLUSTER_CENTROID_TOP_K: ${CTX_CLUSTER_CENTROID_TOP_K:-3}
-      CTX_CLUSTER_INJECT_MAX: ${CTX_CLUSTER_INJECT_MAX:-0}
-      CTX_CLUSTER_MAX_STALENESS: ${CTX_CLUSTER_MAX_STALENESS:-86400}
-      CTX_CLUSTER_EGO_ANNOTATE: ${CTX_CLUSTER_EGO_ANNOTATE:-false}
-      CTX_CLUSTER_EGO_ANNOTATE_MAX_NODES: ${CTX_CLUSTER_EGO_ANNOTATE_MAX_NODES:-500}
-      CTX_CLUSTER_FACET_ENABLED: ${CTX_CLUSTER_FACET_ENABLED:-false}
-      CTX_CLUSTER_ROUTE_ENABLED: ${CTX_CLUSTER_ROUTE_ENABLED:-false}
-      CTX_CLUSTER_CENTROID_BUILD: ${CTX_CLUSTER_CENTROID_BUILD:-false}
-      CTX_CLUSTER_CENTROID_TIMEOUT: ${CTX_CLUSTER_CENTROID_TIMEOUT:-300}
-      CTX_CLUSTER_CENTROID_BATCH: ${CTX_CLUSTER_CENTROID_BATCH:-500}
-      CTX_CLUSTER_CENTROID_WORK_MEM: ${CTX_CLUSTER_CENTROID_WORK_MEM:-256MB}
-      CTX_CLUSTER_CENTROID_ANN_THRESHOLD: ${CTX_CLUSTER_CENTROID_ANN_THRESHOLD:-5000}
-      CTX_CLUSTER_CENTROID_EF_SEARCH: ${CTX_CLUSTER_CENTROID_EF_SEARCH:-100}
-      # Root map (Achse 02, wave W-D): the cluster-per-line map that replaces
-      # the block-per-line topic map. Written at the overview-rebuild cycle
-      # under the title root-map-<scope>, category index, sensitivity internal,
-      # capped at BUDGET_BYTES — the renderer MEASURES and stops, so the budget
-      # is the deckel, never the target. ENABLED ships OFF: the wave is a no-op
-      # deploy until it is flipped. COUNT_TIMEOUT caps the only O(corpus) step
-      # (the coverage denominator); on expiry the map drops the denominator
-      # instead of estimating it. LABEL_BUDGET (0 = the rendered row budget)
-      # caps the LLM label requests once axis 01 puts labels on the read path.
-      # The three SUPER_* knobs steer the meta-cluster level (W-F) and are
-      # declared here without a consumer, so no later wave has to touch this
-      # block again (K6). Durations are bare seconds.
-      CTX_ROOT_MAP_ENABLED: ${CTX_ROOT_MAP_ENABLED:-false}
-      CTX_ROOT_MAP_BUDGET_BYTES: ${CTX_ROOT_MAP_BUDGET_BYTES:-15360}
-      CTX_ROOT_MAP_SMALL_CLUSTER_MAX: ${CTX_ROOT_MAP_SMALL_CLUSTER_MAX:-2}
-      CTX_ROOT_MAP_FOOTER_RESERVE_BYTES: ${CTX_ROOT_MAP_FOOTER_RESERVE_BYTES:-512}
-      CTX_ROOT_MAP_COUNT_TIMEOUT: ${CTX_ROOT_MAP_COUNT_TIMEOUT:-5}
-      CTX_ROOT_MAP_LABEL_BUDGET: ${CTX_ROOT_MAP_LABEL_BUDGET:-0}
-      CTX_ROOT_MAP_SUPER_ENABLED: ${CTX_ROOT_MAP_SUPER_ENABLED:-false}
-      CTX_ROOT_MAP_SUPER_MIN_RESOLUTION: ${CTX_ROOT_MAP_SUPER_MIN_RESOLUTION:-0.2}
-      CTX_ROOT_MAP_SUPER_MAX_NODES: ${CTX_ROOT_MAP_SUPER_MAX_NODES:-20000}
-      # Linear topic map (one line per BLOCK — 80 KB today, ~113 MB at 10M).
-      # full = today's behaviour byte for byte (the shipped default: retiring the
-      # old map is an operational step after the root map has proven itself, not
-      # a deploy side effect) · stub = the map becomes a ~300 B pointer to
-      # root-map-<scope>, so consumers searching for it still learn where to look
-      # · off = no digest write at all, the block stays as it is. An unknown
-      # value falls back to full and says so in the log.
-      CTX_DIGEST_MODE: ${CTX_DIGEST_MODE:-full}
-      CTX_RATE_LIMIT_WRITE: ${CTX_RATE_LIMIT_WRITE:-100}
-      CTX_RATE_LIMIT_READ: ${CTX_RATE_LIMIT_READ:-0}
-      CTX_TIMEZONE: ${CTX_TIMEZONE:-}
-      CTX_SCORE_THRESHOLD: ${CTX_SCORE_THRESHOLD:-0.001}
-      CTX_CONFIDENT_THRESHOLD: ${CTX_CONFIDENT_THRESHOLD:-0.008}
-      # Scheduler ReadScopes (comma-separated). Background guard/digest/dream
-      # operate on these scopes. Default = v1.x backwards-compat. v2.0.0 M045
-      # dropped chk_scope, so any scope name is valid (no schema validation).
-      # work-Scope abgebaut (User-Entscheid 2026-08-06): Daten archiviert (W-H),
-      # Keys deaktiviert, Isolations-Tests laufen auf 'isotest' (test.sh).
-      CTX_READ_SCOPES: ${CTX_READ_SCOPES:-private,shared}
-      # Age after which the background janitor NULLs context_llm_log prompt/
-      # response bodies (telemetry row survives — Body-NULLing, not a chunk
-      # drop; audit stays lossless). 0 = keep bodies forever (no retention).
-      CTX_LLMLOG_RETENTION_DAYS: ${CTX_LLMLOG_RETENTION_DAYS:-90}
-      # Web-chat harness (F6). ENABLED gates POST /api/chat/stream + the session
-      # routes (off ⇒ 404). The integer budgets cap one turn; CONCURRENT_TURNS
-      # is the per-home_scope semaphore (429 above it) that bounds turn frequency
-      # on the single llama.cpp slot. SESSION_RETENTION takes a duration suffix
-      # (h/d/w/m/y); 0 = keep sessions forever (the janitor stays off).
-      CTX_WEBCHAT_ENABLED: ${CTX_WEBCHAT_ENABLED:-true}
-      CTX_WEBCHAT_MAX_ITERATIONS: ${CTX_WEBCHAT_MAX_ITERATIONS:-6}
-      CTX_WEBCHAT_MAX_TOKENS: ${CTX_WEBCHAT_MAX_TOKENS:-2048}
-      CTX_WEBCHAT_COMPLETION_BUDGET: ${CTX_WEBCHAT_COMPLETION_BUDGET:-8192}
-      CTX_WEBCHAT_TOOL_RESULT_MAX_CHARS: ${CTX_WEBCHAT_TOOL_RESULT_MAX_CHARS:-8000}
-      CTX_WEBCHAT_HISTORY_BUDGET_CHARS: ${CTX_WEBCHAT_HISTORY_BUDGET_CHARS:-60000}
-      CTX_WEBCHAT_LLM_TIMEOUT: ${CTX_WEBCHAT_LLM_TIMEOUT:-900}
-      CTX_WEBCHAT_CONCURRENT_TURNS: ${CTX_WEBCHAT_CONCURRENT_TURNS:-1}
-      CTX_WEBCHAT_SESSION_RETENTION: ${CTX_WEBCHAT_SESSION_RETENTION:-0}
-      LISTEN_ADDR: ":8080"
     networks:
       - n8nintern
     depends_on:

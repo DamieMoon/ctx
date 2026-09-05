@@ -5,7 +5,11 @@
 // what makes that claim checkable:
 //
 //   (i)  TestClusterRegistryContract    — all 21 keys, key/env/default/mut/tenancy
-//   (ii) TestClusterComposeDeclaresEvery — every key reaches the container
+//   (ii) reachability — every key reaches the container. Held by
+//        TestComposeDeclaresEveryRegistryKey (compose_surface_test.go) since
+//        wave T05-5: that gate covers the whole registry and therefore these
+//        21 keys strictly, so the cluster-only copy that stood here was a
+//        second place saying the same thing.
 //
 // Gate (iii) of the wave brief ("/api/query golden byte-identical") needs no
 // test of its own: C0 has no consumer, so the whole `-short` suite IS the
@@ -13,8 +17,6 @@
 package config
 
 import (
-	"bufio"
-	"os"
 	"strings"
 	"testing"
 )
@@ -147,63 +149,4 @@ func TestClusterDefaultsAreOffAndDecided(t *testing.T) {
 	if got := c.ClusterOps.CentroidTimeout; got.Minutes() != 5 {
 		t.Errorf("cluster.centroid_timeout = %v, want 5m (bare seconds)", got)
 	}
-}
-
-// TestClusterComposeDeclaresEveryKey is gate (ii): a knob that the container
-// cannot receive is not a knob. The documented legacy class is exactly this
-// failure — docker-compose.yml declares only 3 of the 5 graph_overview.* env
-// vars, so max_nodes/rebuild_timeout are unreachable through compose. Those
-// two stay untouched here (K14: they belong to W-D); this gate holds the NEW
-// namespace to the standard the old one missed.
-func TestClusterComposeDeclaresEveryKey(t *testing.T) {
-	declared := ctxServiceEnvNames(t)
-	for _, want := range clusterKeys {
-		if !declared[want.env] {
-			t.Errorf("%s: %s missing from the ctx service environment: block — the key is unreachable through compose",
-				want.key, want.env)
-		}
-	}
-}
-
-// ctxServiceEnvNames returns the env var names declared in the `ctx` service's
-// `environment:` block of the repo-root docker-compose.yml. Line-scanned on
-// purpose: pulling in a YAML dependency for one block would promote an
-// indirect module to a direct one, and the block is a flat map of scalars.
-func ctxServiceEnvNames(t *testing.T) map[string]bool {
-	t.Helper()
-	const path = "../../../docker-compose.yml" // go/internal/config -> repo root
-	f, err := os.Open(path)
-	if err != nil {
-		t.Fatalf("open %s: %v (the compose gate needs the repo root checkout)", path, err)
-	}
-	defer f.Close() //nolint:errcheck // read-only
-
-	names := map[string]bool{}
-	inCtx, inEnv := false, false
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		line := sc.Text()
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
-			continue
-		}
-		indent := len(line) - len(strings.TrimLeft(line, " "))
-		switch {
-		case indent == 2: // a service name
-			inCtx, inEnv = trimmed == "ctx:", false
-		case indent == 4 && inCtx: // a service-level key
-			inEnv = trimmed == "environment:"
-		case indent >= 6 && inCtx && inEnv:
-			if name, _, ok := strings.Cut(trimmed, ":"); ok {
-				names[strings.TrimSpace(name)] = true
-			}
-		}
-	}
-	if err := sc.Err(); err != nil {
-		t.Fatalf("scan %s: %v", path, err)
-	}
-	if len(names) == 0 {
-		t.Fatalf("no environment names found in the ctx service block of %s — the scanner lost the block", path)
-	}
-	return names
 }
