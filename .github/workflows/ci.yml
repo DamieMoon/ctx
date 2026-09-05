@@ -91,6 +91,18 @@ jobs:
           go install golang.org/x/tools/cmd/deadcode@v0.49.0
           bash "$GITHUB_WORKSPACE/deadcode.sh"
 
+      # T02-13: die zweite Ratsche. Derselbe Lauf OHNE `-test` beantwortet die
+      # andere Frage — welche Produktions-Symbole leben nur, weil ein Test sie
+      # ruft (Klasse T). Eigene Policy-Datei go/deadcode-testonly-allow.txt,
+      # jede Zeile mit Grund, blockierend in beide Richtungen wie oben. Der
+      # Schritt steht bewusst HINTER dem ersten: der testonly-Lauf subtrahiert
+      # go/deadcode-allow.txt, und diese Subtraktion ist nur exakt, solange das
+      # erste Gate grün ist. Kein eigenes `go install` — das Binary von oben ist
+      # dasselbe, und ein zweiter Pin könnte auseinanderlaufen.
+      - name: deadcode test-only ratchet
+        run: |
+          bash "$GITHUB_WORKSPACE/deadcode.sh" testonly
+
       # Beobachtung, kein Gate: dupl misst Klon-Masse und schreibt sie in die
       # Job-Summary. `if: always()` liefert die Zahl auch dann, wenn ein Gate
       # davor rot war — gerade dann ist sie interessant. `|| true`, weil dupl

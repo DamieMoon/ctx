@@ -169,6 +169,14 @@ fi
 # Missing tool means a hint, never a block: whoever pushes without deadcode
 # installed still gets the CI verdict. deadcode.sh itself refuses to report ok
 # without running when CI is set, so the CI side cannot go silently green.
+#
+# T02-13 added the second mode: the same script without `-test` against
+# go/deadcode-testonly-allow.txt (class T — production symbols alive only
+# because a test calls them). Both modes run here, in this order, because the
+# testonly run subtracts the with-tests allowlist and that subtraction is only
+# exact while the first gate is green. The second run costs ~5 s warm (the
+# package graph is already loaded, so it is well under the first one) — that is
+# the whole added latency of this gate, once per release push.
 if command -v deadcode >/dev/null 2>&1; then
     if ! bash "$(git rev-parse --show-toplevel)/deadcode.sh"; then
         echo ""
@@ -177,8 +185,16 @@ if command -v deadcode >/dev/null 2>&1; then
         echo ""
         exit 1
     fi
+    if ! bash "$(git rev-parse --show-toplevel)/deadcode.sh" testonly; then
+        echo ""
+        echo "pre-push: deadcode test-only ratchet failed — cut the symbol, or"
+        echo "  add a line with a reason to go/deadcode-testonly-allow.txt."
+        echo "  Bypass: git push --no-verify"
+        echo ""
+        exit 1
+    fi
 else
-    echo "pre-push: deadcode not found, skipping the allowlist gate (CI enforces it)."
+    echo "pre-push: deadcode not found, skipping both allowlist gates (CI enforces them)."
     echo "  install: go install golang.org/x/tools/cmd/deadcode@v0.49.0"
 fi
 

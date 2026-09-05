@@ -1,0 +1,220 @@
+# deadcode-testonly-Allowlist — die Policy hinter `../deadcode.sh testonly` (Welle T02-13).
+#
+# Klasse T: Produktions-Symbole, die NUR leben, weil ein Test sie ruft. Der Lauf
+# OHNE `-test` findet sie; die erste Liste (deadcode-allow.txt) wird davon
+# subtrahiert, damit kein Symbol in zwei Dateien geführt wird.
+#
+# Format wie in deadcode-allow.txt — eine Zeile je Symbol, TAB-getrennt,
+# LC_ALL=C sortiert, Vergleichsschlüssel sind Feld 1 und 2:
+#
+#   <pfad-relativ-zu-go><TAB><symbol><TAB># <grund>
+#
+# Das Gate blockiert in BEIDE Richtungen: ein neues test-only-Symbol ohne Zeile
+# ist rot, und eine Zeile, deren Symbol wieder einen Produktions-Aufrufer hat,
+# ebenfalls — dann gehört die Zeile gelöscht, sonst wächst die Liste zum Deckel.
+#
+# Die Ratsche fasst nur Funktionen und Methoden. Package-level Vars, Konstanten
+# und Typen, die ausschließlich ein Test nutzt, sieht weder deadcode (meldet nur
+# Funktionen) noch der unused-Linter (zählt Test-Nutzung als Nutzung und schweigt
+# über exportierte Namen) — gemessen in T02-13, nicht angenommen. Für diese Klasse
+# gibt es kein Gate; sie fällt beim Lesen auf oder gar nicht.
+#
+# Wiederkehrende Gründe (Einzelfälle tragen ihren eigenen):
+#
+#   wartet: E01-1 C (W03-4)   hermes-Arm — gebaut, nie verdrahtet: sein einziger
+#                             Produktions-Importeur ist der eigene Adapter, der selbst
+#                             unerreichbar ist. Der Schnitt gehört der hermes-Lane.
+#   wartet: E01-2 C (C2-12)   das Gen-1-Gate (W01-1) in derived und seine DB-Hälfte in
+#                             store/resolve_sources.go. Achtung: das Paket derived IST
+#                             verdrahtet (10 Produktions-Importeure) — es wartet nur diese
+#                             Hälfte, die Prod bisher ausschließlich in Kommentaren nennt.
+#   K24 dauerhaft             Registry-Fassaden, die es per Entscheid bleiben sollen.
+#   E02-3 A                   Test-Fassade, bewusst behalten (Entscheid E02-3).
+#   testdb                    dauerhafte Test-Infrastruktur, kein Wartezustand: das Paket
+#                             trägt //go:build integration und hat 0 Produktions-Importeure.
+#
+# Eine spätere Welle, die eines dieser Symbole schneidet, nimmt seine Zeile hier
+# im selben Commit mit.
+cmd/ctxd/overviewworker_priority_linux.go	ioprioGet	# Prod setzt nur (IOPRIO_SET); die Rücklese-Hälfte der Prioritätsprobe, priority_linux_test.go:164/167
+internal/armsweep/report.go	ReadReportBody	# Schreib-Hälfte WriteReport ist prod; den Leser braucht nur das Determinismus-Gate, 7x in 4 *_test.go
+internal/armsweep/shadow.go	GateInstanceKind	# Prod nutzt seit X-W3a StampInstanceKind+CheckInstanceKind (commands.go:202/206); Kombiform nur im Test
+internal/cli/kanban.go	newAsciiBoardModel	# Test-Konstruktor: erzwingt termenv.Ascii für das SGR-freie View()-Golden, kanban_test.go 4 Aufrufe
+internal/config/envonly.go	EnvOnlyServerNames	# Zubringer des Env-only-Gates envonly_test.go:94/170/192; die Map ist Daten, Prod liest sie nie
+internal/config/envscan.go	EnvNameRef.String	# Stringer nur implizit über %s in envonly_test.go:138 und cmd/envnames_test.go:181 (Gate-Fehlertexte)
+internal/config/envscan.go	ScanEnvNames	# AST-Scanner beider Env-Zäune; 5 Aufrufe in envonly_test.go + cmd/envnames_test.go, kein Prod-Leser
+internal/config/envscan.go	WithNamePattern	# Einzige Option von ScanEnvNames; nur der Tooling-Zaun cmd/envnames_test.go:174/190 setzt ein Muster
+internal/config/envscan.go	envNameRefs	# Nur Aufrufer ScanEnvNames:106, das selbst nur Tests bedient — fällt mit ihm, nicht vor ihm
+internal/config/envscan.go	nonTestGoFiles	# Aufrufer ScanEnvNames:97 (test-only) plus contractmode_pin_test.go:94 — der Prod-Pfad endet vorher
+internal/config/load.go	Defaults	# K24 dauerhaft: einzige exportierte Form der Registry-Defaults, 11 Aufrufe in 9 Testdateien
+internal/config/registry.go	EnvVars	# K24 dauerhaft: Key/Env-Vertrag (F2), 42 Referenzen in 25 Testdateien halten die Env-Hygiene
+internal/derived/citegate.go	CiteGate	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/citegate.go	Verdict.SourcesCovered	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/citegate.go	distinctSources	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/citegate.go	failG0	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/citegate.go	failG1	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/citegate.go	failG2	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/citegate.go	failG3	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/citegate.go	failG4	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/citegate.go	failG5	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/citegate.go	failG6	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/citegate.go	failG7	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/citegate.go	newRejects	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/citegate.go	screenClaim	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/citegate.go	sensitiveTitles	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/echo.go	echoIndex.empty	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/echo.go	echoIndex.hit	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/echo.go	gramKey	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/echo.go	hasNoWordBoundaries	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/echo.go	newEchoIndex	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/echo.go	normalizeEcho	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/echo.go	substantialPair	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/metadata.go	StripReserved	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/provenance.go	SourceDigest	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/render.go	HeadRunes	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/render.go	RenderBlock	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/render.go	ShortID	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/render.go	clampRunes	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/render.go	headLine	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/render.go	metricsLine	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/render.go	safeLine	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/render.go	sourceLine	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/report.go	GateReport.String	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/report.go	Report	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/report.go	judge	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/report.go	median	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/report.go	quantile	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/report.go	rejectLine	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/report.go	share	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/report.go	verdictWord	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/schema.go	DecodeResponse	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/schema.go	decodeClaim	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/validate.go	NewSourceFacts	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/validate.go	SourceFacts.FlooredMax	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/validate.go	SourceFacts.ForeignOrUnknown	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/validate.go	SourceFacts.IsUntrusted	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/validate.go	SourceFacts.Len	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/validate.go	SourceFacts.MissingInScope	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/validate.go	SourceFacts.SensitivityOf	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/validate.go	SourceFacts.StratumOf	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/validate.go	Validate	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/validate.go	Violation	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/validate.go	ViolationError.Error	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/validate.go	checkAnchor	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/validate.go	checkClaims	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/validate.go	checkContract	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/validate.go	checkCoverage	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/validate.go	checkFactsCoverDeclared	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/validate.go	checkGenerator	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/validate.go	checkRejects	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/validate.go	checkSensitivity	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/validate.go	checkSources	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/validate.go	checkStrata	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/validate.go	checkUntrusted	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/derived/validate.go	fail	# wartet: E01-2 C (C2-12) — Gen-1-Gate (W01-1); das Paket ist verdrahtet, diese Hälfte nicht
+internal/dispatch/policy.go	DefaultSettings	# Prod verdrahtet events.DispatchSettings (main.go:624); Registry-Spiegel für 133 Testaufrufe
+internal/distillsource/hermesadapter/hermesadapter.go	New	# wartet: E01-1 C (W03-4) — hermes-Arm; einziger Importeur ist sein eigener Adapter, nie verdrahtet
+internal/distillsource/hermesadapter/hermesadapter.go	adapter.Close	# wartet: E01-1 C (W03-4) — hermes-Arm; einziger Importeur ist sein eigener Adapter, nie verdrahtet
+internal/distillsource/hermesadapter/hermesadapter.go	adapter.HasNew	# wartet: E01-1 C (W03-4) — hermes-Arm; einziger Importeur ist sein eigener Adapter, nie verdrahtet
+internal/distillsource/hermesadapter/hermesadapter.go	adapter.Head	# wartet: E01-1 C (W03-4) — hermes-Arm; einziger Importeur ist sein eigener Adapter, nie verdrahtet
+internal/distillsource/hermesadapter/hermesadapter.go	adapter.Label	# wartet: E01-1 C (W03-4) — hermes-Arm; einziger Importeur ist sein eigener Adapter, nie verdrahtet
+internal/distillsource/hermesadapter/hermesadapter.go	adapter.QuietFor	# wartet: E01-1 C (W03-4) — hermes-Arm; einziger Importeur ist sein eigener Adapter, nie verdrahtet
+internal/distillsource/hermesadapter/hermesadapter.go	adapter.Read	# wartet: E01-1 C (W03-4) — hermes-Arm; einziger Importeur ist sein eigener Adapter, nie verdrahtet
+internal/distillsource/hermesadapter/hermesadapter.go	adapter.Sessions	# wartet: E01-1 C (W03-4) — hermes-Arm; einziger Importeur ist sein eigener Adapter, nie verdrahtet
+internal/distillsource/hermesadapter/hermesadapter.go	headCap	# wartet: E01-1 C (W03-4) — hermes-Arm; einziger Importeur ist sein eigener Adapter, nie verdrahtet
+internal/distillsource/hermesadapter/hermesadapter.go	mapErr	# wartet: E01-1 C (W03-4) — hermes-Arm; einziger Importeur ist sein eigener Adapter, nie verdrahtet
+internal/dream/evaluate.go	DreamOptions	# Kein-Config-Kurzform von DreamOptionsFor(0); Prod reicht cfg.Dream.NumPredict durch, 8 Testnutzer
+internal/dream/evaluate.go	EvaluateRelationships	# Prod läuft über evaluateRelationships(capped) dream.go:406; die capped=0-Hülle rufen nur Tests
+internal/evalscore/diversity.go	AlphaNDCG	# Nur diversity_test.go; α-nDCG-Instrument der pausierten B-Lane (Wissens-Ebenen design/05:1083)
+internal/evalscore/diversity.go	SRecallAtK	# Nutzer rrf/derived_displacement_w01m2_integration_test.go:550; B-Lane-Instrument (design/05:1083)
+internal/evalscore/diversity.go	alphaGain	# Nur über AlphaNDCG erreichbar (:172/:199), das selbst test-only ist — kein eigener Testaufrufer
+internal/evalscore/diversity.go	distinctFacets	# Nur Aufrufer AlphaNDCG:108, das selbst test-only ist — kein eigener Testaufrufer
+internal/evalscore/diversity.go	idealAlphaDCG	# Nur Aufrufer AlphaNDCG:109, das selbst test-only ist — kein eigener Testaufrufer
+internal/evalscore/diversity.go	rankedAlphaDCG	# Nur Aufrufer AlphaNDCG:113, das selbst test-only ist — kein eigener Testaufrufer
+internal/evalscore/diversity.go	serveFacets	# Nur über rankedAlphaDCG:173/idealAlphaDCG:207 unter AlphaNDCG — kein eigener Testaufrufer
+internal/events/distill_block.go	distillShardOrdinal	# Prod nutzt die Basis-Form distillShardOrdinalFrom (:1742, W-L1 #6); den Wrapper nur 5 Tests
+internal/events/scheduler.go	Scheduler.backgroundTenantScopes	# Live-Pipeline liest backgroundTenantsFn direkt; Projektion nur für tenant_iteration_integration_test.go
+internal/goldset/generate_slices.go	AcceptGeneratedQuery	# Nur slices_test.go:19/41/55: bool-Fassade über InspectGeneratedQuery, das cmd/ctx-goldset/slices.go:72 ruft
+internal/goldset/judge.go	JudgeGates	# Nur judge_test.go:421: Kopie-Getter auf judgeGates; Prod liest die Var direkt (judge.go:666, calibrate.go:453)
+internal/goldset/pool.go	PooledCase.Key	# Nur pool_test.go (13 Stellen); Prod schlüsselt über die gleichnamigen PoolEntry.Key und Case.Key
+internal/goldset/sheet.go	ForbiddenSheetFields	# Nur draw_c34a_test.go:254: Kopie-Getter der Blinding-Blacklist; sheet.go:175 liest die Var direkt
+internal/graphcache/snapshot.go	sortedMembership	# Permanenter Vergleichsarm zu mapMembership (snapshot.go:383); nur export_test.go:91 für Bench und Arm-Gleichheit
+internal/graphcache/validate.go	checkOrdering	# Nur export_test.go:72 (CheckOrdering): CSR-Ordnungsinvariante gegen den unsortierten Fixture-Seam
+internal/graphcache/validate.go	checkRangeOrder	# Einziger Aufrufer ist checkOrdering (validate.go:103/108), das selbst nur über export_test.go:72 lebt
+internal/handler/manage_table.go	actionTier	# Nur Tier-Gate-Tests (action_tier_gate_test.go:156 u. a.); Prod gated über enforceManageActionTier
+internal/handler/manage_table.go	actionTierExplicit	# Prod-Referenz nur im toten actionTier:272; 11 Aufrufe in action_tier_gate_test.go pinnen die Tier-Tabelle
+internal/hermesstate/content.go	decodeContent	# wartet: E01-1 C (W03-4) — hermes-Arm; einziger Importeur ist sein eigener Adapter, nie verdrahtet
+internal/hermesstate/content.go	foldText	# wartet: E01-1 C (W03-4) — hermes-Arm; einziger Importeur ist sein eigener Adapter, nie verdrahtet
+internal/hermesstate/content.go	stripNUL	# wartet: E01-1 C (W03-4) — hermes-Arm; einziger Importeur ist sein eigener Adapter, nie verdrahtet
+internal/hermesstate/content.go	writePart	# wartet: E01-1 C (W03-4) — hermes-Arm; einziger Importeur ist sein eigener Adapter, nie verdrahtet
+internal/hermesstate/hermesstate.go	Open	# wartet: E01-1 C (W03-4) — hermes-Arm; einziger Importeur ist sein eigener Adapter, nie verdrahtet
+internal/hermesstate/hermesstate.go	Source.Close	# wartet: E01-1 C (W03-4) — hermes-Arm; einziger Importeur ist sein eigener Adapter, nie verdrahtet
+internal/hermesstate/hermesstate.go	Source.Label	# wartet: E01-1 C (W03-4) — hermes-Arm; einziger Importeur ist sein eigener Adapter, nie verdrahtet
+internal/hermesstate/hermesstate.go	Source.Path	# wartet: E01-1 C (W03-4) — hermes-Arm; einziger Importeur ist sein eigener Adapter, nie verdrahtet
+internal/hermesstate/hermesstate.go	Source.Plan	# wartet: E01-1 C (W03-4) — hermes-Arm; einziger Importeur ist sein eigener Adapter, nie verdrahtet
+internal/hermesstate/hermesstate.go	Source.Strategy	# wartet: E01-1 C (W03-4) — hermes-Arm; einziger Importeur ist sein eigener Adapter, nie verdrahtet
+internal/hermesstate/hermesstate.go	Source.assertPlan	# wartet: E01-1 C (W03-4) — hermes-Arm; einziger Importeur ist sein eigener Adapter, nie verdrahtet
+internal/hermesstate/hermesstate.go	Source.assertPlans	# wartet: E01-1 C (W03-4) — hermes-Arm; einziger Importeur ist sein eigener Adapter, nie verdrahtet
+internal/hermesstate/hermesstate.go	Source.checkHardening	# wartet: E01-1 C (W03-4) — hermes-Arm; einziger Importeur ist sein eigener Adapter, nie verdrahtet
+internal/hermesstate/hermesstate.go	Source.checkSchemaTypes	# wartet: E01-1 C (W03-4) — hermes-Arm; einziger Importeur ist sein eigener Adapter, nie verdrahtet
+internal/hermesstate/hermesstate.go	Source.chooseStrategy	# wartet: E01-1 C (W03-4) — hermes-Arm; einziger Importeur ist sein eigener Adapter, nie verdrahtet
+internal/hermesstate/hermesstate.go	Source.explain	# wartet: E01-1 C (W03-4) — hermes-Arm; einziger Importeur ist sein eigener Adapter, nie verdrahtet
+internal/hermesstate/hermesstate.go	Source.findSessionIDIndex	# wartet: E01-1 C (W03-4) — hermes-Arm; einziger Importeur ist sein eigener Adapter, nie verdrahtet
+internal/hermesstate/hermesstate.go	Source.hint	# wartet: E01-1 C (W03-4) — hermes-Arm; einziger Importeur ist sein eigener Adapter, nie verdrahtet
+internal/hermesstate/hermesstate.go	Source.indexColumns	# wartet: E01-1 C (W03-4) — hermes-Arm; einziger Importeur ist sein eigener Adapter, nie verdrahtet
+internal/hermesstate/hermesstate.go	Source.verify	# wartet: E01-1 C (W03-4) — hermes-Arm; einziger Importeur ist sein eigener Adapter, nie verdrahtet
+internal/hermesstate/hermesstate.go	buildDSN	# wartet: E01-1 C (W03-4) — hermes-Arm; einziger Importeur ist sein eigener Adapter, nie verdrahtet
+internal/hermesstate/hermesstate.go	classify	# wartet: E01-1 C (W03-4) — hermes-Arm; einziger Importeur ist sein eigener Adapter, nie verdrahtet
+internal/hermesstate/read.go	Source.GlobalMaxID	# wartet: E01-1 C (W03-4) — hermes-Arm; einziger Importeur ist sein eigener Adapter, nie verdrahtet
+internal/hermesstate/read.go	Source.HasNewArchived	# wartet: E01-1 C (W03-4) — hermes-Arm; einziger Importeur ist sein eigener Adapter, nie verdrahtet
+internal/hermesstate/read.go	Source.MaxCompactedID	# wartet: E01-1 C (W03-4) — hermes-Arm; einziger Importeur ist sein eigener Adapter, nie verdrahtet
+internal/hermesstate/read.go	Source.QuietFor	# wartet: E01-1 C (W03-4) — hermes-Arm; einziger Importeur ist sein eigener Adapter, nie verdrahtet
+internal/hermesstate/read.go	Source.Sessions	# wartet: E01-1 C (W03-4) — hermes-Arm; einziger Importeur ist sein eigener Adapter, nie verdrahtet
+internal/hermesstate/read.go	Source.ToolRows	# wartet: E01-1 C (W03-4) — hermes-Arm; einziger Importeur ist sein eigener Adapter, nie verdrahtet
+internal/hermesstate/read.go	Source.WatermarkFrom	# wartet: E01-1 C (W03-4) — hermes-Arm; einziger Importeur ist sein eigener Adapter, nie verdrahtet
+internal/hermesstate/read.go	Source.hasNewSQL	# wartet: E01-1 C (W03-4) — hermes-Arm; einziger Importeur ist sein eigener Adapter, nie verdrahtet
+internal/hermesstate/read.go	Source.toolRowsSQL	# wartet: E01-1 C (W03-4) — hermes-Arm; einziger Importeur ist sein eigener Adapter, nie verdrahtet
+internal/hermesstate/read.go	ToolRow.Time	# wartet: E01-1 C (W03-4) — hermes-Arm; einziger Importeur ist sein eigener Adapter, nie verdrahtet
+internal/hermesstate/read.go	rootOf	# wartet: E01-1 C (W03-4) — hermes-Arm; einziger Importeur ist sein eigener Adapter, nie verdrahtet
+internal/hermesstate/read.go	unixFloat	# wartet: E01-1 C (W03-4) — hermes-Arm; einziger Importeur ist sein eigener Adapter, nie verdrahtet
+internal/llm/temporal.go	TemporalToEmbedPrefix	# FUND T02-13: exportierte Fläche ohne Prod-Verdrahtung, nur temporal_test.go — Schnitt-Kandidat, Owner offen
+internal/louvain/quality.go	ARI	# Kennzahl von Gate S4-G2; nur louvain_test.go:169, components_test.go:120, overview/louvain_bench_test.go
+internal/louvain/refine.go	DisconnectedCommunities	# Messgröße von Gate S5-G1; nur refine_test.go:53/61/112, der Rebuild schreibt sie noch nicht ins Journal
+internal/promptguard/promptguard.go	Canonicalize	# Nonce zu Null-Nonce für den Fixture-Determinismus der Prompt-Golden; 26 Aufrufe in 8 _test.go
+internal/prompts/prompts.go	All	# Nur prompts_test.go:52/85/125: Registry-Vollständigkeit und Sortierung; Prod stempelt über Register
+internal/prompts/prompts.go	Lookup	# Nur prompts_test.go:103 und completeness_test.go:534/611: ID-zu-Identity-Probe der Registry-Gates
+internal/recall/recall.go	RunOnce	# Default-Hooks-Fassade; Prod ruft RunOnceWithHooks (events/recall_check.go:174), Test degradation_it:79
+internal/rrf/fts.go	BuildORQuery	# OR-Arm bewusst aus (query.go:882-885, queryOR=""), Reaktivierung ab 10k Blöcken; 11 Fälle in fts_test.go
+internal/rrf/graph.go	GraphExpand	# Report-lose Fassade; Prod fährt GraphExpandCached, 14 Testaufrufe (graph_test.go:303 u. a.) halten sie
+internal/rrf/graph.go	GraphExpandWithReport	# Prod-Referenz nur im toten GraphExpand:238; Prod dispatcht direkt, Test graph_budget_test.go:137
+internal/rrf/graph.go	fuseNeighbors	# rep=nil-Fassade über fuseNeighborsReport (Prod: graph.go:454); 13 Fuse-Fälle in graph_test.go u. a.
+internal/schemacontract/diff.go	Diff	# Signatur laut design/03 §4.1 verbindlich; Prod ruft diffDetailed, Nullbeweis in diff_test.go:58
+internal/schemacontract/recheck.go	CheckRunCountForTest	# Test-only-Accessor auf den Single-Flight-Zähler; Doc sagt es (recheck.go:73), contract_integration_test.go:63
+internal/store/api_keys.go	CreateApiKey	# E02-3 A: Fixture-Fassade über insertApiKeyTx; 73 Aufrufe in 44 Testdateien, Prod mintet über den Tx-Kern
+internal/store/graph.go	EgoGraph	# Cache-lose Fassade über EgoGraphCached (Prod-Pfad); 59 Aufrufe in 12 Integrationstests als SQL-Orakel
+internal/store/graph.go	takeHop	# Legacy-Fassade über takeHopMerged (Prod: graph.go:336); graph_test.go:105 ff. pinnt die alte Trunkierung
+internal/store/project_sync.go	SetProjectSyncCursor	# Prod schreibt nur MergeProjectSyncCursor (forge/sync.go:355/436/498); Set nur project_sync_it:117
+internal/store/resolve_sources.go	ResolveSources	# wartet: E01-2 C (C2-12) — DB-Hälfte des Gen-1-Vertrags (resolve_sources.go:202), Aufrufer fehlt
+internal/store/resolve_sources.go	SourceSet.Facts	# wartet: E01-2 C (C2-12) — DB-Hälfte des Gen-1-Vertrags (resolve_sources.go:202), Aufrufer fehlt
+internal/store/resolve_sources.go	SourceSet.FlooredMax	# wartet: E01-2 C (C2-12) — DB-Hälfte des Gen-1-Vertrags (resolve_sources.go:202), Aufrufer fehlt
+internal/store/resolve_sources.go	SourceSet.ForeignOrUnknown	# wartet: E01-2 C (C2-12) — DB-Hälfte des Gen-1-Vertrags (resolve_sources.go:202), Aufrufer fehlt
+internal/store/resolve_sources.go	SourceSet.Len	# wartet: E01-2 C (C2-12) — DB-Hälfte des Gen-1-Vertrags (resolve_sources.go:202), Aufrufer fehlt
+internal/store/resolve_sources.go	SourceSet.MissingInScope	# wartet: E01-2 C (C2-12) — DB-Hälfte des Gen-1-Vertrags (resolve_sources.go:202), Aufrufer fehlt
+internal/store/resolve_sources.go	SourceSet.ResolvedIDs	# wartet: E01-2 C (C2-12) — DB-Hälfte des Gen-1-Vertrags (resolve_sources.go:202), Aufrufer fehlt
+internal/store/resolve_sources.go	SourceSet.Scope	# wartet: E01-2 C (C2-12) — DB-Hälfte des Gen-1-Vertrags (resolve_sources.go:202), Aufrufer fehlt
+internal/store/resolve_sources.go	SourceSet.Sources	# wartet: E01-2 C (C2-12) — DB-Hälfte des Gen-1-Vertrags (resolve_sources.go:202), Aufrufer fehlt
+internal/store/resolve_sources.go	SourceSet.UntrustedCount	# wartet: E01-2 C (C2-12) — DB-Hälfte des Gen-1-Vertrags (resolve_sources.go:202), Aufrufer fehlt
+internal/store/resolve_sources.go	SourceSet.readFound	# wartet: E01-2 C (C2-12) — DB-Hälfte des Gen-1-Vertrags (resolve_sources.go:202), Aufrufer fehlt
+internal/store/resolve_sources.go	classifyRest	# wartet: E01-2 C (C2-12) — DB-Hälfte des Gen-1-Vertrags (resolve_sources.go:202), Aufrufer fehlt
+internal/store/tenant.go	CreateTenant	# E02-3 A: Pool-Wrapper um CreateTenantTx (Prod-Bootstrap); 16 Aufrufe in 9 Integrationstests
+internal/testdb/setup.go	SetupTestDB	# testdb: integration-getaggtes Container-/Template-DB-Setup, 393 Test-Importeure, 0 Prod
+internal/testdb/setup.go	SetupTestDBUpTo	# testdb: integration-getaggtes Container-/Template-DB-Setup, 393 Test-Importeure, 0 Prod
+internal/testdb/setup.go	SetupTestDBUpToWithDSN	# testdb: integration-getaggtes Container-/Template-DB-Setup, 393 Test-Importeure, 0 Prod
+internal/testdb/setup.go	SetupTestDBWithDSN	# testdb: integration-getaggtes Container-/Template-DB-Setup, 393 Test-Importeure, 0 Prod
+internal/testdb/setup.go	buildShared	# testdb: integration-getaggtes Container-/Template-DB-Setup, 393 Test-Importeure, 0 Prod
+internal/testdb/setup.go	dsnForDB	# testdb: integration-getaggtes Container-/Template-DB-Setup, 393 Test-Importeure, 0 Prod
+internal/testdb/setup.go	ensureShared	# testdb: integration-getaggtes Container-/Template-DB-Setup, 393 Test-Importeure, 0 Prod
+internal/testdb/setup.go	newDatabase	# testdb: integration-getaggtes Container-/Template-DB-Setup, 393 Test-Importeure, 0 Prod
+internal/testdb/setup.go	prepareDatabase	# testdb: integration-getaggtes Container-/Template-DB-Setup, 393 Test-Importeure, 0 Prod
+internal/util/strings.go	TruncateRunes	# Prod nutzt TruncateRunesSuffix; TruncateRunes nur in strings_test.go:51/75 plus zwei Kommentar-Verweisen
+migrations/fold.go	IsFolded	# Prod iteriert Folded() (store/migrations.go:268, check.go:164); IsFolded nur in fold_test.go:84/87
+migrations/fold.go	Section	# Nur Tests lesen Migrations-SQL über Section (fold_test.go:34 + 33 Integrationstests); Runner nutzt FS

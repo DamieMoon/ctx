@@ -80,6 +80,7 @@ bash eval.sh                        # 47 eval tests (baseline regression)
 bash eval.sh --update-baseline      # Set a new baseline
 bash eval.sh --no-warmup            # Skip the unscored warm-up pass (development runs)
 bash deadcode.sh                    # Unreachable-code gate against go/deadcode-allow.txt
+bash deadcode.sh testonly           # Test-only ratchet against go/deadcode-testonly-allow.txt
 cd go && go test ./... -short       # Go unit tests
 ```
 
@@ -98,6 +99,19 @@ linter in `.golangci.yml`, whose form of the same doctrine is a
 `//nolint:unused // <reason>` at the declaration. Note that the lint run of CI and
 `.hooks/pre-commit` is **tag-less**, so a symbol read only from an
 `//go:build integration` file reads as unused and needs such a line.
+
+**Second ratchet: `bash deadcode.sh testonly`.** Same package set, same doctrine,
+one flag less — the run without `-test` answers the other question: which
+production symbols are alive *only* because a test calls them (class T). Its
+policy file is `go/deadcode-testonly-allow.txt`, one line per symbol with a
+mandatory reason, blocking in both directions. The testonly run subtracts
+`go/deadcode-allow.txt` from its findings, so no symbol is ever carried in two
+files; that subtraction is exact only while the first gate is green, which is why
+CI and `.hooks/pre-push` run the two modes in that order. The ratchet reaches
+**functions and methods only**: a package-level var, const or type used solely
+from a `_test.go` shows up in neither tool — `deadcode` reports funcs, and
+`unused` counts a use from a test as a use and stays silent on exported
+identifiers. That class has no gate; measured, not assumed (T02-13).
 
 `eval.sh` fires every query **twice**: an unscored warm-up pass, then the scored
 pass. That is the old "run it twice, score run 2" rule moved into the script, and

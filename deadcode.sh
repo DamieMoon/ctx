@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #
 # ctx — deadcode allowlist gate
-# Usage: ./deadcode.sh
+# Usage: ./deadcode.sh [with-tests|testonly]
 #
 # Compares the reachability analysis of golang.org/x/tools/cmd/deadcode against
-# go/deadcode-allow.txt. Two failure directions, both blocking:
+# an allowlist. Two failure directions, both blocking, in every mode:
 #
 #   * a symbol that is unreachable but NOT in the allowlist  -> cut it, or write
 #     a line with a reason (the reason column is mandatory, so "keeping it" is a
@@ -12,9 +12,30 @@
 #   * an allowlist line whose symbol became reachable again  -> delete the line.
 #     Without this direction an allowlist only ever grows and turns into a lid.
 #
-# deadcode is structurally blind to constants, vars, types and struct fields;
-# that class is covered by the `unused` linter in .golangci.yml, whose escape
-# hatch is `//nolint:unused // <reason>` — same doctrine, other tool.
+# Two modes, two questions, two policy files:
+#
+#   with-tests (default)  deadcode -test  vs go/deadcode-allow.txt
+#                         "is anything dead even when the tests are counted?"
+#   testonly              deadcode        vs go/deadcode-testonly-allow.txt
+#                         "which production symbols are alive ONLY because a
+#                          test calls them?" (class T)
+#
+# The testonly run subtracts the with-tests allowlist from its own findings, so
+# a symbol is never carried in both files: everything dead WITH the tests is by
+# definition also dead without them, and that class already has its line and its
+# reason in the first list. Subtracting the FILE (not a second deadcode run) is
+# exact because the with-tests gate blocks in both directions — whenever it is
+# green, its allowlist and its findings are the same set, and when it is red the
+# push/CI stops at that gate anyway.
+#
+# deadcode is structurally blind to constants, vars, types and struct fields; it
+# reports functions and methods only (measured in T02-13: a package-level var, a
+# const and a type, each used solely by a _test.go, do not show up — the same
+# file's func and method do). The `unused` linter in .golangci.yml does not close
+# that gap for the test-only class either: it counts a use from a _test.go as a
+# use and stays silent on exported identifiers. So class T is enforced here for
+# functions and methods, and NOT enforced anywhere for vars, consts and types —
+# a deliberate, documented limit rather than an assumed cover.
 #
 # ctx — Your AI's save game. By GottZ (github.com/GottZ/ctx/graphs/contributors)
 
@@ -25,16 +46,24 @@ cd "$SCRIPT_DIR/go"
 # The package set is hard-wired, never taken from the caller: deadcode reports
 # per-package reachability, so `deadcode ./internal/armsweep/` alone flags nine
 # symbols whose callers live in cmd/ — a fehlalarm generator. Modes are a closed
-# list for the same reason; T02-13 adds `without-tests` here (a second flag set
-# against a second allowlist), it does not open the script up to arguments.
+# list for the same reason: a mode is a flag set plus a policy file, chosen here,
+# it does not open the script up to arguments.
 MODE="${1:-with-tests}"
 case "$MODE" in
     with-tests)
+        LABEL="deadcode-gate"
         DEADCODE_FLAGS=(-test -tags=integration)
         ALLOW_SRC="deadcode-allow.txt"
+        SUBTRACT_SRC=""
+        ;;
+    testonly)
+        LABEL="deadcode-testonly-gate"
+        DEADCODE_FLAGS=(-tags=integration)
+        ALLOW_SRC="deadcode-testonly-allow.txt"
+        SUBTRACT_SRC="deadcode-allow.txt"
         ;;
     *)
-        echo "deadcode-gate: unknown mode '$MODE' (known: with-tests)" >&2
+        echo "deadcode-gate: unknown mode '$MODE' (known: with-tests, testonly)" >&2
         echo "  the package set is not configurable — see the comment above." >&2
         exit 2
         ;;
@@ -43,19 +72,19 @@ esac
 PKGS=(./cmd/... ./internal/... ./migrations/...)
 
 if ! command -v deadcode >/dev/null 2>&1; then
-    echo "deadcode-gate: deadcode not found in PATH."
+    echo "$LABEL: deadcode not found in PATH."
     echo "  install: go install golang.org/x/tools/cmd/deadcode@v0.49.0"
     if [[ -n "${CI:-}" ]]; then
         # In CI a missing tool must not pass as a green gate — CI is the
         # authority (the local hook is only the early warning).
-        echo "deadcode-gate: CI is set — refusing to report ok without running." >&2
+        echo "$LABEL: CI is set — refusing to report ok without running." >&2
         exit 1
     fi
     exit 0
 fi
 
-RAW="$(mktemp)"; IST="$(mktemp)"; ALLOW="$(mktemp)"
-trap 'rm -f "$RAW" "$IST" "$ALLOW"' EXIT
+RAW="$(mktemp)"; IST="$(mktemp)"; ALLOW="$(mktemp)"; SUB="$(mktemp)"; KEEP="$(mktemp)"
+trap 'rm -f "$RAW" "$IST" "$ALLOW" "$SUB" "$KEEP"' EXIT
 
 # deadcode runs on its OWN line with a redirection, never inside a pipe: under
 # `set -o pipefail` a clean tree makes the downstream grep exit 1 and the gate
@@ -75,6 +104,18 @@ deadcode "${DEADCODE_FLAGS[@]}" "${PKGS[@]}" > "$RAW"
     | sed 's/^\([^:]*\):[0-9]*:[0-9]*: unreachable func: /\1\t/' \
     | LC_ALL=C sort -u > "$IST"
 
+# testonly mode only: subtract the with-tests allowlist from the findings, so no
+# symbol is carried in two policy files (see the header for why the file, not a
+# second run, is the exact subtrahend). Both sides are LC_ALL=C-sorted keys of
+# two fields, which is what comm needs. `|| true` for the same reason as below:
+# an allowlist of comments only is a legal state, not a script death.
+if [[ -n "$SUBTRACT_SRC" ]]; then
+    { grep -v '^[[:space:]]*\(#\|$\)' "$SUBTRACT_SRC" || true; } \
+        | cut -f1,2 | LC_ALL=C sort -u > "$SUB"
+    comm -23 "$IST" "$SUB" > "$KEEP"
+    cat "$KEEP" > "$IST"
+fi
+
 # Comparison key is field 1 + field 2 (path + symbol); the reason column is not
 # part of it, and no line number is either — otherwise every shift inside a file
 # would redden the gate.
@@ -87,7 +128,7 @@ GONE="$(comm -13 "$IST" "$ALLOW")"
 RC=0
 
 if [[ -n "$NEW" ]]; then
-    echo "deadcode-gate: NEW unreachable symbol(s) not in the allowlist:"
+    echo "$LABEL: NEW unreachable symbol(s) not in the allowlist:"
     printf '%s\n' "$NEW" | sed 's/^/  /'
     echo ""
     echo "  Either cut the symbol, or add a line to go/$ALLOW_SRC:"
@@ -96,13 +137,13 @@ if [[ -n "$NEW" ]]; then
 fi
 
 if [[ -n "$GONE" ]]; then
-    echo "deadcode-gate: allowlist entr(ies) no longer unreachable — delete the line:"
+    echo "$LABEL: allowlist entr(ies) no longer unreachable — delete the line:"
     printf '%s\n' "$GONE" | sed 's/^/  /'
     RC=1
 fi
 
 if [[ $RC -eq 0 ]]; then
-    echo "deadcode-gate: ok ($(wc -l < "$ALLOW" | tr -d ' ') entries, all allowlisted)"
+    echo "$LABEL: ok ($(wc -l < "$ALLOW" | tr -d ' ') entries, all allowlisted)"
 fi
 
 exit $RC
