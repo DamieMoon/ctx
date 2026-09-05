@@ -150,13 +150,3 @@ func TestResolveBlockID_MinPrefixLenSentinel(t *testing.T) {
 		t.Errorf("MinIDPrefixLen = %d, want 8 (security-relevant default)", MinIDPrefixLen)
 	}
 }
-
-// --- Integration test skeletons for DB-dependent functions ---.
-
-func TestHashNOOPCheck_RequiresDB(t *testing.T) {
-	t.Skip("requires database connection")
-	// Test: identical content hash returns existing block ID.
-	// Test: different content returns empty string.
-	// Test: archived block is not returned.
-	// Test: wrong scope/category/title returns empty.
-}
