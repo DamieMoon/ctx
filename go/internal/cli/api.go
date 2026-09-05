@@ -3,13 +3,16 @@
 // old `ctx manage <action>` raw reach no longer covers them. `ctx api` restores
 // script-level access to EVERY route from day one: it signs the request with the
 // key from config, sends the (optional) JSON body verbatim, prints the response
-// JSON, and — like the other REST-shaped commands — maps a success:false
-// envelope to exit code 1 instead of the PrintJSON-and-exit-0 trap.
+// JSON, and maps a success:false envelope to exit code 1.
 //
 //	ctx api GET  /api/project
 //	ctx api POST /api/project '{"identity":"manual:x","scope":"x"}'
 //	echo '{"display_name":"X"}' | ctx api PATCH /api/project/<id>
 //	ctx api DELETE /api/project/<id>
+//
+// runRawRequest below is also what `ctx manage` runs (E03-10 B): the short form
+// for the manage actions keeps its spelling, but there is one code path, one
+// wire shape and one exit contract behind both.
 
 package cli
 
@@ -71,41 +74,35 @@ func apiCmd(getClient func() (*Client, error)) *cobra.Command {
 				body = json.RawMessage(raw)
 			}
 
-			c, err := getClient()
-			if err != nil {
-				return err
-			}
-			resp, _, err := c.Do(method, path, body)
-			if err != nil {
-				return err
-			}
-			// Exit code follows the envelope, not the HTTP status: a body that has
-			// no {success} field (rare on this surface) still prints and exits 0.
-			if err := checkAPIEnvelope(resp); err != nil {
-				return err
-			}
-			PrintJSON(resp)
-			return nil
+			return runRawRequest(getClient, method, path, body)
 		},
 	}
 }
 
-// checkAPIEnvelope maps a success:false envelope to a command error (exit 1). A
-// response WITHOUT a success field (e.g. a bare array or /health) is not an
-// error — it prints and exits 0.
-func checkAPIEnvelope(resp []byte) error {
-	var env struct {
-		Success *bool  `json:"success"`
-		Error   string `json:"error"`
+// runRawRequest is the raw-passthrough half of the CLI: one signed request to a
+// caller-chosen route, the response JSON on stdout, the envelope contract on the
+// exit code. `ctx api` and `ctx manage` both end here, so the two cannot drift
+// apart in wire shape, output or exit code (E03-10 B).
+//
+// The mode is envelopeOptional because the CALLER picks the route: a body
+// without a success field (a bare array, /health) is a legitimate answer here,
+// unlike on the typed commands.
+//
+// The response is printed BEFORE the envelope decides the exit code — the order
+// this file has documented since day one ("prints the response JSON; a
+// success:false envelope exits 1", docs/cli.md) but did not implement: it used
+// to swallow the body of a failed call. Now a script gets both the answer and a
+// non-zero exit, and `ctx manage` can inherit the same shape without losing the
+// bytes its callers already parse.
+func runRawRequest(getClient func() (*Client, error), method, path string, body any) error {
+	c, err := getClient()
+	if err != nil {
+		return err
 	}
-	if err := json.Unmarshal(resp, &env); err != nil {
-		return nil //nolint:nilerr // non-envelope body: print as-is, exit 0
+	resp, _, err := c.Do(method, path, body)
+	if err != nil {
+		return err
 	}
-	if env.Success != nil && !*env.Success {
-		if env.Error == "" {
-			return fmt.Errorf("request failed: %s", truncateForError(resp))
-		}
-		return fmt.Errorf("%s", env.Error)
-	}
-	return nil
+	PrintJSON(resp)
+	return checkEnvelope(resp, envelopeOptional)
 }

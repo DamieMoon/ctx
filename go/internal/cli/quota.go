@@ -98,7 +98,7 @@ func runQuotaGet(getClient func() (*Client, error), data json.RawMessage) error 
 	if err != nil {
 		return err
 	}
-	if err := checkSettingsEnvelope(resp); err != nil {
+	if err := checkEnvelope(resp, envelopeRequired); err != nil {
 		return err
 	}
 	return renderQuota(resp)
@@ -113,7 +113,7 @@ func runQuotaSet(getClient func() (*Client, error), data json.RawMessage) error 
 	if err != nil {
 		return err
 	}
-	if err := checkSettingsEnvelope(resp); err != nil {
+	if err := checkEnvelope(resp, envelopeRequired); err != nil {
 		return err
 	}
 	return renderQuota(resp)

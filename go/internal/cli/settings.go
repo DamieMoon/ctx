@@ -7,9 +7,11 @@
 //
 // Every subcommand parses the response envelope: success:false (422
 // validation, 409 mutability, 403 non-admin, 404 unknown key) reaches stderr
-// with exit code 1 — these commands must not inherit the PrintJSON-and-exit-0
-// trap of the older endpoint commands, because settings writes feed scripts
-// and CI gates that branch on the exit code.
+// with exit code 1, because settings writes feed scripts and CI gates that
+// branch on the exit code. Since T03-13 that is no longer a property of THESE
+// commands — checkEnvelope (envelope.go) is the one contract every command
+// shares, and the PrintJSON-and-exit-0 trap the header used to warn about is
+// gone from the tree.
 
 package cli
 
@@ -23,13 +25,6 @@ import (
 
 	"github.com/spf13/cobra"
 )
-
-// settingsEnvelope is the shared success/error frame of all settings
-// responses; the payload fields stay raw for per-command parsing.
-type settingsEnvelope struct {
-	Success bool   `json:"success"`
-	Error   string `json:"error"`
-}
 
 // settingRow mirrors the server's settingView wire shape.
 type settingRow struct {
@@ -52,31 +47,6 @@ type settingAuditRow struct {
 	ActorLabel *string         `json:"actor_label"`
 	Via        string          `json:"via"`
 	CreatedAt  string          `json:"created_at"`
-}
-
-// checkSettingsEnvelope surfaces an API-level failure as a command error
-// (cobra: stderr + exit 1). The raw body is the error detail — the server
-// messages are already caller-ready ("validation: …", "… is restart-only").
-func checkSettingsEnvelope(resp []byte) error {
-	var env settingsEnvelope
-	if err := json.Unmarshal(resp, &env); err != nil {
-		return fmt.Errorf("unparseable response: %s", truncateForError(resp))
-	}
-	if !env.Success {
-		if env.Error == "" {
-			return fmt.Errorf("request failed: %s", truncateForError(resp))
-		}
-		return fmt.Errorf("%s", env.Error)
-	}
-	return nil
-}
-
-func truncateForError(resp []byte) string {
-	s := strings.TrimSpace(string(resp))
-	if len(s) > 300 {
-		s = s[:300] + "…"
-	}
-	return s
 }
 
 // toJSONValue wraps a CLI argument as the PUT body value: literal JSON
@@ -170,7 +140,7 @@ func runSettingsList(getClient func() (*Client, error)) error {
 	if err != nil {
 		return err
 	}
-	if err := checkSettingsEnvelope(resp); err != nil {
+	if err := checkEnvelope(resp, envelopeRequired); err != nil {
 		return err
 	}
 	return renderOrJSON(resp, func(resp []byte) error {
@@ -218,7 +188,7 @@ func runSettingsGet(getClient func() (*Client, error), key string) error {
 	if err != nil {
 		return err
 	}
-	if err := checkSettingsEnvelope(resp); err != nil {
+	if err := checkEnvelope(resp, envelopeRequired); err != nil {
 		return err
 	}
 	return renderOrJSON(resp, func(resp []byte) error {
@@ -285,7 +255,7 @@ func runSettingsSet(getClient func() (*Client, error), key, value string, confir
 	if err != nil {
 		return err
 	}
-	if err := checkSettingsEnvelope(resp); err != nil {
+	if err := checkEnvelope(resp, envelopeRequired); err != nil {
 		return err
 	}
 	return renderOrJSON(resp, func(resp []byte) error {
@@ -322,7 +292,7 @@ func runSettingsUnset(getClient func() (*Client, error), key string) error {
 	if err != nil {
 		return err
 	}
-	if err := checkSettingsEnvelope(resp); err != nil {
+	if err := checkEnvelope(resp, envelopeRequired); err != nil {
 		return err
 	}
 	return renderOrJSON(resp, func(resp []byte) error {

@@ -321,17 +321,6 @@ func captureStdout(t *testing.T, fn func()) string {
 	return buf.String()
 }
 
-// ── checkAPIEnvelope ──────────────────────────────────────────────────────────.
-
-func TestCheckAPIEnvelope(t *testing.T) {
-	if err := checkAPIEnvelope([]byte(`{"success":true,"projects":[]}`)); err != nil {
-		t.Errorf("success:true ⇒ %v, want nil", err)
-	}
-	if err := checkAPIEnvelope([]byte(`{"success":false,"error":"nope"}`)); err == nil || err.Error() != "nope" {
-		t.Errorf("success:false ⇒ %v, want \"nope\"", err)
-	}
-	// A non-envelope body (no success field) is not an error.
-	if err := checkAPIEnvelope([]byte(`{"status":"ok"}`)); err != nil {
-		t.Errorf("no-success body ⇒ %v, want nil", err)
-	}
-}
+// The envelope contract that used to be pinned here (TestCheckAPIEnvelope) now
+// lives in envelope_test.go, together with the other mode and the command
+// inventory — one contract, one test file.

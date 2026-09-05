@@ -104,7 +104,7 @@ func runSecretsList(getClient func() (*Client, error)) error {
 	if err != nil {
 		return err
 	}
-	if err := checkSettingsEnvelope(resp); err != nil {
+	if err := checkEnvelope(resp, envelopeRequired); err != nil {
 		return err
 	}
 	return renderOrJSON(resp, func(resp []byte) error {
@@ -145,7 +145,7 @@ func runSecretsPut(getClient func() (*Client, error), name, value string) error 
 	if err != nil {
 		return err
 	}
-	if err := checkSettingsEnvelope(resp); err != nil {
+	if err := checkEnvelope(resp, envelopeRequired); err != nil {
 		return err
 	}
 	return renderOrJSON(resp, func(resp []byte) error {
@@ -172,7 +172,7 @@ func runSecretsRm(getClient func() (*Client, error), name string) error {
 	if err != nil {
 		return err
 	}
-	if err := checkSettingsEnvelope(resp); err != nil {
+	if err := checkEnvelope(resp, envelopeRequired); err != nil {
 		return err
 	}
 	return renderOrJSON(resp, func(resp []byte) error {

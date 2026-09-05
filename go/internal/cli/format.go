@@ -53,8 +53,11 @@ func PrintJSON(data []byte) {
 // stand hand-written at 38 places.
 //
 // render is only called on a TTY; its error is the command's error. A renderer
-// that cannot parse the response prints the raw JSON itself and returns nil,
-// exactly as the hand-written branches did.
+// that cannot decode the response prints the raw JSON itself and then returns
+// the decoder's error — so a malformed answer ends the command non-zero on a
+// terminal too, and the operator still sees the bytes that caused it. (The
+// sentence here used to claim those renderers return nil; they do not, and
+// never did.)
 func renderOrJSON(resp []byte, render func(resp []byte) error) error {
 	if !StdoutIsTTY() {
 		PrintJSON(resp)

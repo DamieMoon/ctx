@@ -97,7 +97,7 @@ func tenantManage(getClient func() (*Client, error), body map[string]any) ([]byt
 	if err != nil {
 		return nil, err
 	}
-	if err := checkSettingsEnvelope(resp); err != nil {
+	if err := checkEnvelope(resp, envelopeRequired); err != nil {
 		return nil, err
 	}
 	return resp, nil

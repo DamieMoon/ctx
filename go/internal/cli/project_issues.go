@@ -14,8 +14,8 @@
 // The verb for a state change is `status` (masterplan K15), NOT `state`/`move`.
 //
 // Every server call parses the {success,…} envelope: success:false reaches
-// stderr with exit code 1 (the checkSettingsEnvelope contract) — these commands
-// feed scripts, so they must not inherit the PrintJSON-and-exit-0 trap. TTY:
+// stderr with exit code 1 (checkEnvelope, envelope.go — the contract every
+// command shares since T03-13). These commands feed scripts. TTY:
 // tables / human lines; pipe: the raw server JSON (stable shapes, golden-pinned).
 //
 // SECURITY (§5.4): issue/comment TITLES, BODIES and LABELS are attacker-controlled
@@ -264,7 +264,7 @@ func runIssuesSync(getClient func() (*Client, error), project string, status boo
 	if err != nil {
 		return err
 	}
-	if err := checkSettingsEnvelope(resp); err != nil {
+	if err := checkEnvelope(resp, envelopeRequired); err != nil {
 		return err
 	}
 	return renderOrJSON(resp, func(resp []byte) error {
@@ -412,7 +412,7 @@ func runIssuesListFiltered(_ *cobra.Command, getClient func() (*Client, error), 
 	if err != nil {
 		return err
 	}
-	if err := checkSettingsEnvelope(resp); err != nil {
+	if err := checkEnvelope(resp, envelopeRequired); err != nil {
 		return err
 	}
 	return renderOrJSON(resp, func(resp []byte) error {
@@ -445,7 +445,7 @@ func runIssuesShow(getClient func() (*Client, error), project, blockID string) e
 	if err != nil {
 		return err
 	}
-	if err := checkSettingsEnvelope(resp); err != nil {
+	if err := checkEnvelope(resp, envelopeRequired); err != nil {
 		return err
 	}
 	return renderOrJSON(resp, func(resp []byte) error {
@@ -485,7 +485,7 @@ func runIssuesCreate(getClient func() (*Client, error), project, title, content,
 	if err != nil {
 		return err
 	}
-	if err := checkSettingsEnvelope(resp); err != nil {
+	if err := checkEnvelope(resp, envelopeRequired); err != nil {
 		return err
 	}
 	return printCreatedIssue(resp, "issue")
@@ -508,7 +508,7 @@ func runIssuesComment(getClient func() (*Client, error), project, blockID, conte
 	if err != nil {
 		return err
 	}
-	if err := checkSettingsEnvelope(resp); err != nil {
+	if err := checkEnvelope(resp, envelopeRequired); err != nil {
 		return err
 	}
 	return printCreatedIssue(resp, "comment")
@@ -524,13 +524,13 @@ func runIssuesStatus(getClient func() (*Client, error), project, blockID, status
 		return err
 	}
 	// PATCH {status}: an out-of-policy transition is a 422 with a {success:false,
-	// error} envelope — checkSettingsEnvelope maps it to exit 1 + the reason.
+	// error} envelope — checkEnvelope maps it to exit 1 + the reason.
 	resp, _, err := c.Do(http.MethodPatch, "/api/project/"+pid+"/issues/"+url.PathEscape(blockID),
 		map[string]any{"status": status})
 	if err != nil {
 		return err
 	}
-	if err := checkSettingsEnvelope(resp); err != nil {
+	if err := checkEnvelope(resp, envelopeRequired); err != nil {
 		return err
 	}
 	return renderOrJSON(resp, func(resp []byte) error {

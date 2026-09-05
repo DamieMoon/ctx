@@ -6,6 +6,7 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -75,9 +76,9 @@ func RegisterCommands(root *cobra.Command) {
 // the zero value cobra already used).
 //
 // The response goes out through PrintJSON unconditionally — these commands have
-// no human rendering, on a TTY or piped. That is also why the envelope check is
-// NOT here: `success:false` handling for these eleven is one change at one
-// place, and it belongs to the wave that owns the exit-code contract (T03-13).
+// no human rendering, on a TTY or piped. The envelope check sits right behind
+// it, so all eleven carry the exit contract from one line without any of them
+// losing the bytes a pipe already reads (T03-13).
 func simpleCmd(
 	use string,
 	aliases []string,
@@ -100,8 +101,11 @@ func simpleCmd(
 			if err != nil {
 				return err
 			}
+			// Print FIRST, then let the envelope decide the exit code: a failed
+			// call must keep the bytes a pipe already relied on (`| jq`), so
+			// only the exit code and stderr are new.
 			PrintJSON(resp)
-			return nil
+			return checkEnvelope(resp, envelopeRequired)
 		},
 	}
 }
@@ -143,20 +147,28 @@ func queryCmd(getClient func() (*Client, error)) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// Both branches read the envelope, but they print differently: --json
+			// keeps emitting the raw answer (that was its contract, and a script
+			// reading stdout must not lose it) and only gains the exit code; the
+			// human branch has never rendered a failed answer and still does not.
+			envErr := checkEnvelope(resp, envelopeRequired)
 
 			if jsonOutput {
 				PrintJSON(resp)
-				return nil
+				return envErr
 			}
 
+			// The raw-body fallback stays IN FRONT of the envelope error: a
+			// response that is not JSON at all has always been dumped to stdout
+			// with the decoder's complaint, and that is still the more useful
+			// answer than a truncated echo on stderr.
 			var result queryResult
 			if err := json.Unmarshal(resp, &result); err != nil {
 				PrintJSON(resp) // Fallback to raw JSON on parse error.
 				return err
 			}
-
-			if !result.Success {
-				return fmt.Errorf("query failed: %s", result.Error)
+			if envErr != nil {
+				return envErr
 			}
 
 			// Formatted output: answer + sources.
@@ -174,9 +186,9 @@ func queryCmd(getClient func() (*Client, error)) *cobra.Command {
 	return cmd
 }
 
+// queryResult is the RENDERING half of the query response; the {success,error}
+// frame is read by checkEnvelope off the raw bytes, so it is not repeated here.
 type queryResult struct {
-	Success    bool   `json:"success"`
-	Error      string `json:"error"`
 	Answer     string `json:"answer"`
 	Confidence string `json:"confidence"`
 	Sources    []struct {
@@ -275,7 +287,7 @@ func saveCmd(getClient func() (*Client, error)) *cobra.Command {
 				return err
 			}
 			PrintJSON(resp)
-			return nil
+			return checkEnvelope(resp, envelopeRequired)
 		},
 	}
 	cmd.Flags().BoolVar(&shared, "shared", false, "Set scope to shared (the default tenant's shared layer, not cross-tenant)")
@@ -340,7 +352,7 @@ func searchCmd(getClient func() (*Client, error)) *cobra.Command {
 				return err
 			}
 			PrintJSON(resp)
-			return nil
+			return checkEnvelope(resp, envelopeRequired)
 		},
 	}
 }
@@ -480,12 +492,8 @@ func guardListRunOpts(getClient func() (*Client, error), opts *guardListOpts) er
 		return nil //nolint:nilerr // raw response already printed above
 	}
 
-	if success, _ := data["success"].(bool); !success {
-		errMsg, _ := data["error"].(string)
-		if errMsg == "" {
-			errMsg = "unknown"
-		}
-		return fmt.Errorf("error: %s", errMsg)
+	if err := checkEnvelope(resp, envelopeRequired); err != nil {
+		return err
 	}
 
 	blocks, _ := data["blocks"].([]any)
@@ -554,12 +562,8 @@ func guardStatsCmd(getClient func() (*Client, error)) *cobra.Command {
 				return nil //nolint:nilerr // raw response already printed above
 			}
 
-			if success, _ := d["success"].(bool); !success {
-				errMsg, _ := d["error"].(string)
-				if errMsg == "" {
-					errMsg = "unknown"
-				}
-				return fmt.Errorf("error: %s", errMsg)
+			if err := checkEnvelope(resp, envelopeRequired); err != nil {
+				return err
 			}
 
 			fmtVal := func(key string) any {
@@ -653,12 +657,8 @@ func guardResolveCmd(getClient func() (*Client, error)) *cobra.Command {
 				return nil //nolint:nilerr // raw response already printed above
 			}
 
-			if success, _ := d["success"].(bool); !success {
-				errMsg, _ := d["error"].(string)
-				if errMsg == "" {
-					errMsg = "unknown"
-				}
-				return fmt.Errorf("error: %s", errMsg)
+			if err := checkEnvelope(resp, envelopeRequired); err != nil {
+				return err
 			}
 
 			if resolved, ok := d["resolved"].(map[string]any); ok && resolved != nil {
@@ -695,17 +695,16 @@ func manageCmd(getClient func() (*Client, error)) *cobra.Command {
 	return &cobra.Command{
 		Use:     "manage <action> [id] [data-json]",
 		Aliases: []string{"m"},
-		Short:   "Raw manage endpoint",
-		Long:    "Direct access to the context-manage endpoint with arbitrary action/id/data.",
+		Short:   "Raw manage endpoint (short form of `ctx api POST /api/manage`)",
+		Long: "Direct access to the context-manage endpoint with arbitrary action/id/data.\n" +
+			"This is the short spelling of `ctx api POST /api/manage '{\"action\":…}'` and\n" +
+			"runs the same code path: same request, same output, same exit contract —\n" +
+			"a success:false envelope prints the JSON and exits 1 with the reason.",
 		Example: `  ctx manage update <id> '{"tags":["a","b"]}'
-  ctx manage stats`,
+  ctx manage stats
+  ctx api POST /api/manage '{"action":"stats"}'   # the long form`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := getClient()
-			if err != nil {
-				return err
-			}
-
 			body := map[string]any{
 				"action": args[0],
 			}
@@ -725,12 +724,10 @@ func manageCmd(getClient func() (*Client, error)) *cobra.Command {
 				}
 			}
 
-			resp, err := c.Post("manage", body)
-			if err != nil {
-				return err
-			}
-			PrintJSON(resp)
-			return nil
+			// The same call `ctx api POST /api/manage` makes — Post(endpoint) and
+			// Do(method, "/api/"+endpoint) build the identical URL, headers and
+			// body, so the two spellings are one request on the wire (E03-10 B).
+			return runRawRequest(getClient, http.MethodPost, "/api/manage", body)
 		},
 	}
 }
@@ -816,13 +813,18 @@ func dreamStatsRun(getClient func() (*Client, error)) error {
 	}
 	// Human-readable summary on an interactive terminal; machine-readable JSON
 	// when piped/redirected so scripts and `| jq` keep working unchanged.
+	//
+	// The envelope of the STATS call decides the exit code, and it decides it
+	// last: both branches print what they always printed (a failed answer used
+	// to render as a zero-filled summary and exit 0), and the second, optional
+	// mode call still goes out, so neither stdout nor the wire moves.
 	if StdoutIsTTY() {
 		fmt.Print(renderDreamStatsHuman(merged))
-		return nil
+		return checkEnvelope(statsRaw, envelopeRequired)
 	}
 	out, _ := json.MarshalIndent(merged, "", "  ")
 	fmt.Println(string(out))
-	return nil
+	return checkEnvelope(statsRaw, envelopeRequired)
 }
 
 func dreamReviewCmd(getClient func() (*Client, error)) *cobra.Command {
@@ -874,12 +876,8 @@ func dreamResolveCmd(getClient func() (*Client, error)) *cobra.Command {
 				return nil //nolint:nilerr // raw response already printed above
 			}
 
-			if success, _ := d["success"].(bool); !success {
-				errMsg, _ := d["error"].(string)
-				if errMsg == "" {
-					errMsg = "unknown"
-				}
-				return fmt.Errorf("error: %s", errMsg)
+			if err := checkEnvelope(resp, envelopeRequired); err != nil {
+				return err
 			}
 
 			resolved, _ := d["resolved"].(map[string]any)
@@ -954,7 +952,7 @@ func dreamThrottleCmd(getClient func() (*Client, error)) *cobra.Command {
 				return err
 			}
 			PrintJSON(resp)
-			return nil
+			return checkEnvelope(resp, envelopeRequired)
 		},
 	}
 }
@@ -1007,19 +1005,17 @@ func mcpAddCmd(getClient func() (*Client, error)) *cobra.Command {
 				return err
 			}
 			var result struct {
-				Success      bool     `json:"success"`
 				ClientID     string   `json:"client_id"`
 				ClientSecret string   `json:"client_secret"`
 				Label        string   `json:"label"`
 				RedirectURIs []string `json:"redirect_uris"`
-				Error        string   `json:"error"`
 			}
 			if err := json.Unmarshal(resp, &result); err != nil {
 				PrintJSON(resp)
 				return err
 			}
-			if !result.Success {
-				return fmt.Errorf("failed: %s", result.Error)
+			if err := checkEnvelope(resp, envelopeRequired); err != nil {
+				return err
 			}
 
 			fmt.Printf("MCP Client registered: %s\n\n", result.Label)
@@ -1057,8 +1053,15 @@ func mcpListRun(getClient func() (*Client, error)) error {
 	if err != nil {
 		return err
 	}
+	// The ONE place where this wave changes stdout as well as the exit code, and
+	// deliberately: a failure printed "No MCP clients registered." and exited 0,
+	// so an empty list and a rejected request were the same output. That line
+	// was a false statement, not a machine contract worth preserving — the check
+	// runs before the renderer, and the reason goes to stderr instead.
+	if err := checkEnvelope(resp, envelopeRequired); err != nil {
+		return err
+	}
 	var result struct {
-		Success bool `json:"success"`
 		Clients []struct {
 			ClientID  string `json:"client_id"`
 			Label     string `json:"label"`
@@ -1171,21 +1174,19 @@ func keysCreateCmd(getClient func() (*Client, error)) *cobra.Command {
 				return err
 			}
 			var result struct {
-				Success       bool     `json:"success"`
 				ID            string   `json:"id"`
 				Label         string   `json:"label"`
 				HomeScope     string   `json:"home_scope"`
 				AllowedScopes []string `json:"allowed_scopes"`
 				WriteScopes   []string `json:"write_scopes"`
 				ApiKey        string   `json:"api_key"`
-				Error         string   `json:"error"`
 			}
 			if err := json.Unmarshal(resp, &result); err != nil {
 				PrintJSON(resp)
 				return err
 			}
-			if !result.Success {
-				return fmt.Errorf("failed: %s", result.Error)
+			if err := checkEnvelope(resp, envelopeRequired); err != nil {
+				return err
 			}
 			fmt.Printf("API Key created: %s\n\n", result.Label)
 			fmt.Printf("  id:             %s\n", result.ID)
@@ -1223,9 +1224,13 @@ func keysListRun(getClient func() (*Client, error)) error {
 	if err != nil {
 		return err
 	}
+	// Same trap and the same deliberate stdout change as mcpListRun: a 403 used
+	// to read as "No API keys provisioned." and exit 0.
+	if err := checkEnvelope(resp, envelopeRequired); err != nil {
+		return err
+	}
 	var result struct {
-		Success bool `json:"success"`
-		Keys    []struct {
+		Keys []struct {
 			ID            string   `json:"id"`
 			Label         string   `json:"label"`
 			HomeScope     string   `json:"home_scope"`

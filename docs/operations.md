@@ -489,6 +489,40 @@ The `create` disk pre-flight statfs's the ctx container's own root filesystem (`
 
 **Container memory limit.** The `ctx` service ships with a 512 MiB cgroup limit (`deploy.resources.limits.memory`). That is stage 1 of a declared ladder tied to corpus scale: the overview rebuild's in-process compute path measures ~254 MB at the current 200k-node cap, so the previous 256M limit sat directly on the OOM edge — `graph_overview.max_nodes` guards the CPU wall, not memory. Later stages (≥1G at 1M nodes, ≥2–4G toward the 10M target, plus the worker child budget) are design decisions of the Skalen-Pfad axis, not tuning suggestions; raise the limit with the corpus, not preemptively. Migrations run at boot in order. Since migration 108 every applied migration is pinned by a sha256 checksum in `_migrations.checksum`; rows from before 108 (and M031+-style self-record rows) are stamped by an idempotent boot backfill. The backfill attests the embedded file *as shipped in the running binary*, not the historic apply — editing an already-applied migration file surfaces as a `migration_integrity` drift once the schema-contract check (Achse 03) lands. Since v5 the first 113 versions have no file of their own any more (see [the migration baseline](#the-migration-baseline-001113-ship-as-one-file) below); their checksums come from the folded chain instead, and the drift check compares against those with the same severity it always had. Rolling the multi-tenant line out to a running deployment (migrating the production DB from 057 across the 058–068 chain) is a separate operational step; the single-tenant default tenant keeps every path byte-identical until tenants are provisioned — see [multi-tenancy](multi-tenancy.md#self-service-onboarding-v411).
 
+### CLI rollout: the envelope exit-code contract (v5.15.0)
+
+**Release note.** v5.15.0 changes what the `ctx` CLI does with a failed call. Two dozen command paths used to print the server's `{"success":false,…}` answer to stdout and exit **0**; they now exit **1** with the reason on stderr. The response is still printed to stdout first, so `ctx stats | jq` and every other pipe keeps its bytes — only the exit code and stderr are new. Success paths are byte-identical. The affected commands are `stats`, `categories`, `get`, `delete`, `list-meta`, `digest`, `save`, `search`, `query --json`, `manage`, `dream` / `dream stats` / `dream review` / `dream enable` / `dream disable` / `dream throttle`, `mcp` / `mcp list`, `mcp delete`, `keys` / `keys list`, `keys delete` and all three `block-grant` verbs. Two of them also change their output, and only those two: `ctx keys list` and `ctx mcp list` answered a `403` with *"No API keys provisioned."* / *"No MCP clients registered."*, which is now the server's reason on stderr instead. `ctx health` (no envelope on `GET /health`) and the silently degrading hook surfaces (`brief`, `persist`, `statusline`, `ingest`) are unchanged, as is `ctx contract` with its own 0/1/2/3 scale. `ctx api` keeps its exit codes and now prints the failed response body its documentation always promised. The full table is in [the CLI reference](cli.md#exit-codes-one-contract-for-every-command).
+
+**This is a server-independent change.** The wire contract did not move: an old CLI against a new server and a new CLI against an old server both behave exactly as before the upgrade, apart from the exit code the new CLI produces locally. There is no ordering requirement between updating the daemon and updating a host.
+
+**Rollout, per host.** The CLI is a release asset, not part of the container, so each host that has `ctx` installed updates on its own schedule:
+
+```bash
+ASSET="ctx-$(uname -s | tr A-Z a-z)-$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')"
+ctx version                       # what this host runs today
+curl -fsSL "https://github.com/GottZ/ctx/releases/latest/download/$ASSET" -o /usr/local/bin/ctx
+chmod +x /usr/local/bin/ctx
+ctx version                       # confirm the hop
+```
+
+Run `ctx version` on **every** host before and after, and note which hosts are on which side — a mixed fleet is fine, but a script that was written against exit 0 fails only on the hosts that already hopped.
+
+**What to check before you update a host.** Anything that calls `ctx` and does not want to stop on a failure: `set -e` shell scripts, cron jobs, git hooks, CI steps, `backup.d` hooks. The commands above now propagate a failure where they used to swallow it — that is the point of the change, but a script that ran daily *through* a `403` will now stop. Grep for them:
+
+```bash
+grep -rn 'ctx \(stats\|save\|search\|get\|delete\|digest\|manage\|list-meta\|query\)' /etc/cron.d /etc/crontab ~/bin /usr/local/bin
+```
+
+Sonde of 2026-09-05 on the maintainer's own fleet: no consumer of the old exit-0 behaviour found locally, on `spark` or on `home`; `herbert` was not checked.
+
+**Rollback** is a re-download of the previous asset — the binary carries no state and writes no schema:
+
+```bash
+ASSET="ctx-$(uname -s | tr A-Z a-z)-$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')"
+curl -fsSL "https://github.com/GottZ/ctx/releases/download/v5.14.0/$ASSET" -o /usr/local/bin/ctx
+chmod +x /usr/local/bin/ctx
+```
+
 ### The migration baseline: 001–113 ship as one file
 
 v5 requires the v4.x hop (see [migration 133](#migration-133-the-backend-tuple-rows-are-deleted--and-the-upgrade-hop-that-has-to-come-first) below), so every database that reaches it through the supported path has already applied migrations 001–132. That made the first 112 files dead weight on the upgrade path and pure setup cost on the fresh-install path, and v5 replaces them with a single `113_baseline.sql`. The chain is 21 files instead of 132; nothing about what a database ends up containing changed.

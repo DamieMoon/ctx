@@ -331,7 +331,7 @@ func backendsStepPool(c *Client) ([]backendRow, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := checkSettingsEnvelope(resp); err != nil {
+	if err := checkEnvelope(resp, envelopeRequired); err != nil {
 		return nil, fmt.Errorf("pool read failed: %w", err)
 	}
 	var payload struct {
@@ -463,7 +463,7 @@ func probeBackendRow(c *Client, row backendRow) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if err := checkSettingsEnvelope(resp); err != nil {
+	if err := checkEnvelope(resp, envelopeRequired); err != nil {
 		return false, err
 	}
 	var out struct {

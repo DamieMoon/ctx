@@ -24,9 +24,9 @@
 // source, are authoritative from the file.
 //
 // Every server call parses the {success,…} envelope: success:false reaches
-// stderr with exit code 1 (the checkSettingsEnvelope contract) — these commands
-// must not inherit the PrintJSON-and-exit-0 trap, `ctx project` output feeds
-// scripts.
+// stderr with exit code 1 (checkEnvelope, envelope.go) — `ctx project` output
+// feeds scripts, and since T03-13 that contract is the whole CLI's, not this
+// file's.
 
 package cli
 
@@ -435,7 +435,7 @@ func runProjectList(getClient func() (*Client, error)) error {
 	if err != nil {
 		return err
 	}
-	if err := checkSettingsEnvelope(resp); err != nil {
+	if err := checkEnvelope(resp, envelopeRequired); err != nil {
 		return err
 	}
 	return renderOrJSON(resp, func(resp []byte) error {
@@ -524,7 +524,7 @@ func lookupByIdentity(c *Client, identity string) ([]projectRow, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := checkSettingsEnvelope(resp); err != nil {
+	if err := checkEnvelope(resp, envelopeRequired); err != nil {
 		return nil, err
 	}
 	var payload struct {

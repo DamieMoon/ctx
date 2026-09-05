@@ -431,7 +431,7 @@ func requireServerAdminForSeed(c *Client) error {
 	if err != nil {
 		return err
 	}
-	if err := checkSettingsEnvelope(resp); err != nil {
+	if err := checkEnvelope(resp, envelopeRequired); err != nil {
 		return fmt.Errorf("identity check failed: %w", err)
 	}
 	var who seedWhoami
@@ -467,7 +467,7 @@ func seedPoolState(c *Client, rows []seedRow, force bool) (map[string]bool, map[
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := checkSettingsEnvelope(resp); err != nil {
+	if err := checkEnvelope(resp, envelopeRequired); err != nil {
 		return nil, nil, fmt.Errorf("pool read failed: %w", err)
 	}
 	var payload struct {
@@ -545,7 +545,7 @@ func seedSecrets(c *Client, rows []seedRow, res *seedResult) error {
 		if status == http.StatusServiceUnavailable {
 			return withOrphanSecretNote(seedSealboxUnavailable(resp), res.Secrets)
 		}
-		if err := checkSettingsEnvelope(resp); err != nil {
+		if err := checkEnvelope(resp, envelopeRequired); err != nil {
 			return withOrphanSecretNote(fmt.Errorf("sealing %s: %w. Nothing was written to the pool", r.secretName, err), res.Secrets)
 		}
 		Errorf("%s: sealed as api_key_ref for %s", r.secretName, r.name)
@@ -565,7 +565,7 @@ func seedSecrets(c *Client, rows []seedRow, res *seedResult) error {
 	if err != nil {
 		return err
 	}
-	if err := checkSettingsEnvelope(resp); err != nil {
+	if err := checkEnvelope(resp, envelopeRequired); err != nil {
 		return withOrphanSecretNote(fmt.Errorf("secret metadata read failed: %w. Nothing was written to the pool", err), res.Secrets)
 	}
 	var payload struct {
@@ -609,8 +609,12 @@ func withOrphanSecretNote(err error, sealed []string) error {
 // with the fix instead of a generic sealbox error. Never a silent plaintext
 // downgrade.
 func seedSealboxUnavailable(resp []byte) error {
+	// Not an envelope CHECK (the caller already failed): this only lifts the
+	// server's reason out of the frame for a hand-written message.
 	detail := strings.TrimSpace(string(resp))
-	var env settingsEnvelope
+	var env struct {
+		Error string `json:"error"`
+	}
 	if err := json.Unmarshal(resp, &env); err == nil && env.Error != "" {
 		detail = env.Error
 	}
@@ -636,7 +640,7 @@ func seedCreateRow(c *Client, r seedRow) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if cerr := checkSettingsEnvelope(resp); cerr != nil {
+	if cerr := checkEnvelope(resp, envelopeRequired); cerr != nil {
 		if status == http.StatusConflict || strings.Contains(cerr.Error(), "already exists") {
 			return false, nil
 		}

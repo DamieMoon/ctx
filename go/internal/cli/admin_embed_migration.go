@@ -77,7 +77,7 @@ func emPost(getClient func() (*Client, error), action string, data map[string]an
 	if err != nil {
 		return nil, err
 	}
-	if err := checkSettingsEnvelope(resp); err != nil {
+	if err := checkEnvelope(resp, envelopeRequired); err != nil {
 		return resp, err
 	}
 	return resp, nil
@@ -149,7 +149,7 @@ func runEmbedMigrationStatus(getClient func() (*Client, error), id string, exact
 	if err != nil {
 		return err
 	}
-	if err := checkSettingsEnvelope(resp); err != nil {
+	if err := checkEnvelope(resp, envelopeRequired); err != nil {
 		return err
 	}
 	return renderOrJSON(resp, func(resp []byte) error {
@@ -224,7 +224,7 @@ func embedMigrationTransitionCmd(getClient func() (*Client, error), action, shor
 			if err != nil {
 				return err
 			}
-			if err := checkSettingsEnvelope(resp); err != nil {
+			if err := checkEnvelope(resp, envelopeRequired); err != nil {
 				return err
 			}
 			if action == "confirm" {
@@ -294,7 +294,7 @@ func embedMigrationReasonCmd(getClient func() (*Client, error), action, short st
 			if err != nil {
 				return err
 			}
-			if err := checkSettingsEnvelope(resp); err != nil {
+			if err := checkEnvelope(resp, envelopeRequired); err != nil {
 				return err
 			}
 			if action == "rollback" {

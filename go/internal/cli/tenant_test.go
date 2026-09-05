@@ -62,7 +62,7 @@ func runTenant(t *testing.T, cmd *cobra.Command, args ...string) error {
 // carrying the server's reason — never a raw-JSON print with exit 0.
 //
 // RED state proven before the envelope gate existed in tenantManage
-// (checkSettingsEnvelope temporarily removed): every subtest failed with
+// (the envelope check temporarily removed): every subtest failed with
 // "err = nil, want the server's 403 reason". GREEN with the gate in place.
 func TestTenant403MappedToCommandError(t *testing.T) {
 	deny := `{"success":false,"error":"admin key required"}`

@@ -182,7 +182,7 @@ func runBackendsList(getClient func() (*Client, error)) error {
 	if err != nil {
 		return err
 	}
-	if err := checkSettingsEnvelope(resp); err != nil {
+	if err := checkEnvelope(resp, envelopeRequired); err != nil {
 		return err
 	}
 	return renderOrJSON(resp, func(resp []byte) error {
@@ -227,7 +227,7 @@ func runBackendsMutate(getClient func() (*Client, error), action, id string, dat
 	if err != nil {
 		return err
 	}
-	if err := checkSettingsEnvelope(resp); err != nil {
+	if err := checkEnvelope(resp, envelopeRequired); err != nil {
 		return err
 	}
 	PrintJSON(resp)

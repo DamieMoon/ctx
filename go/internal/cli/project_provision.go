@@ -110,7 +110,7 @@ func runProjectProvisionInit(c *Client, baseURL string, chosen resolvedIdentity)
 	if err != nil {
 		return err
 	}
-	if err := checkSettingsEnvelope(resp); err != nil {
+	if err := checkEnvelope(resp, envelopeRequired); err != nil {
 		return err
 	}
 	var res provisionResult

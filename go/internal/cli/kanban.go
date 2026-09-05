@@ -134,7 +134,7 @@ func runKanban(getClient func() (*Client, error), project string, limit int) err
 	if err != nil {
 		return err
 	}
-	if err := checkSettingsEnvelope(resp); err != nil {
+	if err := checkEnvelope(resp, envelopeRequired); err != nil {
 		return err
 	}
 	// Pipe / non-TTY: the machine contract — forward the server board verbatim

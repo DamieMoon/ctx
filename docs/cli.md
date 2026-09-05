@@ -2,6 +2,27 @@
 
 The `ctx` CLI reads its config from `~/.config/ctx/config` (`CTX_BASE_URL` + `CTX_KEY`). On a TTY most commands render a table; when piped they emit JSON. See [operations](operations.md#first-run-ctx-init) for setup (`ctx init` writes that config, and seeds the backend pool while it is at it).
 
+## Exit codes: one contract for every command
+
+**A failed call exits non-zero. Every command, no exception.** Since v5.15.0 that is a property of the CLI, not of individual commands: one checker (`internal/cli/envelope.go`) turns the server's `{"success":false,"error":…}` frame into the exit code, and a test walks the whole command tree so a newly added command cannot skip it (`internal/cli/envelope_test.go`).
+
+| Situation | Exit | stdout | stderr |
+|-----------|------|--------|--------|
+| Call succeeded | `0` | the response (JSON when piped, a table/human form on a TTY) | — |
+| Server answered `success:false` | `1` | unchanged — the response is printed first, then the envelope sets the exit code, so `\| jq` keeps its bytes | the server's reason |
+| Transport failure, bad arguments | `1` | — | the reason |
+| `ctx contract` | `0` ok, `1` drift, `2` unchecked, `3` cannot check | its own report | its own reason |
+
+**Before v5.15.0, two dozen command paths printed the failure and exited `0`:** `stats`, `categories`, `get`, `delete`, `list-meta`, `digest`, `save`, `search`, `query --json`, `manage`, `dream` / `dream stats` / `dream review` / `dream enable` / `dream disable` / `dream throttle`, `mcp` / `mcp list`, `mcp delete`, `keys` / `keys list`, `keys delete`, and all three `block-grant` verbs. In a shell pipeline, a cron job or a git hook a rejected write was indistinguishable from a successful one. Rollout notes are in [operations](operations.md#cli-rollout-the-envelope-exit-code-contract-v5150).
+
+**Two commands also change what they print, and only those two.** `ctx keys list` and `ctx mcp list` used to answer a `403` with *"No API keys provisioned."* / *"No MCP clients registered."* and exit `0` — an empty list and a rejected request were the same output. That line is gone from the failure path; the server's reason goes to stderr instead. In the other direction, `ctx api` now prints the failed response body it always documented and previously swallowed. Everywhere else stdout is byte-for-byte what it was.
+
+Three deliberate exceptions, unchanged:
+
+- **`ctx health`** reads `GET /health`, which is not an `/api` route and carries no `success` frame. It exits `0` whenever it got an answer; read the answer, not the exit code.
+- **`ctx brief`, `ctx persist`, `ctx statusline`, `ctx ingest`** degrade silently by design — they run inside Claude Code hooks and the status bar, where a non-zero exit would break the caller rather than inform anybody.
+- **`ctx api` and `ctx manage`** are raw passthroughs: *you* pick the route, so a body without a `success` field (a bare array, a proxied `/health`) prints and exits `0` there. An explicit `success:false` exits `1` like everywhere else.
+
 ## Core
 
 | Command | Description |
@@ -116,3 +137,4 @@ The kanban board view: the project's issues grouped into the workflow-status col
 | Command | Description |
 |---------|-------------|
 | `ctx api <method> <path> [json]` | Generic authenticated passthrough to any `/api` route (method is GET/POST/PUT/PATCH/DELETE; JSON body via arg or stdin, sent verbatim). Prints the response JSON; a `success:false` envelope exits 1 with the server's reason. This is the script-level reach for the REST surfaces (project/types/issues) that are not `manage` actions — e.g. `ctx api GET /api/project`, `echo '{"display_name":"X"}' \| ctx api PATCH /api/project/<id>` |
+| `ctx manage <action> [id] [data-json]` | The short spelling of `ctx api POST /api/manage '{"action":…}'` for the manage actions — `ctx manage stats` instead of `ctx api POST /api/manage '{"action":"stats"}'`. Since v5.15.0 it **runs that exact code path**: same request on the wire, same output, same exit contract (it used to print a `success:false` envelope and exit 0). `id` becomes the `id` field, `data-json` the `data` field (invalid JSON is sent as a plain string, unchanged) |

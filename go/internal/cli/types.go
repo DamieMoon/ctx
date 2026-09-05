@@ -143,7 +143,7 @@ func runTypesSet(getClient func() (*Client, error), name string, payload map[str
 	if err != nil {
 		return err
 	}
-	if err := checkSettingsEnvelope(resp); err != nil {
+	if err := checkEnvelope(resp, envelopeRequired); err != nil {
 		return err
 	}
 	return renderOrJSON(resp, func(resp []byte) error {
@@ -168,7 +168,7 @@ func runTypesRm(getClient func() (*Client, error), name string) error {
 	if err != nil {
 		return err
 	}
-	if err := checkSettingsEnvelope(resp); err != nil {
+	if err := checkEnvelope(resp, envelopeRequired); err != nil {
 		return err
 	}
 	return renderOrJSON(resp, func(resp []byte) error {
@@ -186,7 +186,7 @@ func runTypesList(getClient func() (*Client, error)) error {
 	if err != nil {
 		return err
 	}
-	if err := checkSettingsEnvelope(resp); err != nil { // shared success/error frame
+	if err := checkEnvelope(resp, envelopeRequired); err != nil { // shared success/error frame
 		return err
 	}
 	return renderOrJSON(resp, func(resp []byte) error {
@@ -224,7 +224,7 @@ func runTypesGet(getClient func() (*Client, error), name string) error {
 	if err != nil {
 		return err
 	}
-	if err := checkSettingsEnvelope(resp); err != nil {
+	if err := checkEnvelope(resp, envelopeRequired); err != nil {
 		return err
 	}
 	return renderOrJSON(resp, func(resp []byte) error {

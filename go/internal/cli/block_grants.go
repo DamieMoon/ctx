@@ -75,7 +75,7 @@ func blockGrantListCmd(getClient func() (*Client, error)) *cobra.Command {
 				return err
 			}
 			PrintJSON(resp)
-			return nil
+			return checkEnvelope(resp, envelopeRequired)
 		},
 	}
 }
@@ -96,5 +96,5 @@ func blockGrantPost(getClient func() (*Client, error), action, blockID, granteeT
 		return err
 	}
 	PrintJSON(resp)
-	return nil
+	return checkEnvelope(resp, envelopeRequired)
 }

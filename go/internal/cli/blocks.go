@@ -320,7 +320,7 @@ func blocksManageCall(getClient func() (*Client, error), action string, data jso
 	if err != nil {
 		return nil, err
 	}
-	if err := checkSettingsEnvelope(resp); err != nil {
+	if err := checkEnvelope(resp, envelopeRequired); err != nil {
 		return nil, err
 	}
 	return resp, nil

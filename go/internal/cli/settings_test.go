@@ -7,38 +7,8 @@ import (
 	"testing"
 )
 
-// The settings commands must convert an API-level failure into a command
-// error (cobra: stderr + exit 1) — never the PrintJSON-and-exit-0 shape of
-// the older endpoint commands. checkSettingsEnvelope is that gate.
-func TestCheckSettingsEnvelope(t *testing.T) {
-	cases := []struct {
-		name, body string
-		wantErr    string // "" = success
-	}{
-		{"success", `{"success":true,"settings":[]}`, ""},
-		{"validation 422", `{"success":false,"error":"validation: rerank.blend_weight must be in [0,1]"}`,
-			"must be in [0,1]"},
-		{"restart 409", `{"success":false,"error":"dream.parallelism is restart-only; set CTX_DREAM_PARALLELISM and restart"}`,
-			"restart-only"},
-		{"admin 403", `{"success":false,"error":"admin key required"}`, "admin key required"},
-		{"error without message", `{"success":false}`, "request failed"},
-		{"unparseable", `<html>proxy error</html>`, "unparseable response"},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			err := checkSettingsEnvelope([]byte(c.body))
-			if c.wantErr == "" {
-				if err != nil {
-					t.Fatalf("err = %v, want nil", err)
-				}
-				return
-			}
-			if err == nil || !strings.Contains(err.Error(), c.wantErr) {
-				t.Fatalf("err = %v, want it to contain %q", err, c.wantErr)
-			}
-		})
-	}
-}
+// The settings envelope cases (TestCheckSettingsEnvelope) moved to
+// envelope_test.go when the two checkers became one (T03-13).
 
 // toJSONValue decides the transport shape; the server normalizes the type.
 // Literal scalars pass through, arbitrary text becomes a JSON string.
@@ -107,7 +77,7 @@ func TestClientDo(t *testing.T) {
 		t.Errorf("status = %d", status)
 	}
 	// The 422 envelope must turn into a command error downstream.
-	if err := checkSettingsEnvelope(resp); err == nil || !strings.Contains(err.Error(), "validation") {
+	if err := checkEnvelope(resp, envelopeRequired); err == nil || !strings.Contains(err.Error(), "validation") {
 		t.Errorf("envelope err = %v", err)
 	}
 }
