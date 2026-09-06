@@ -1050,11 +1050,12 @@ func (s *Scheduler) distillBatches(ctx context.Context, t distillTick, key, sess
 		}
 		// INCOMPLETE FIRST, exhaustion second, and the order is the point
 		// (review #3). A batch that delivers nothing while reporting
-		// Complete=false is not an exhausted range — it is a read the source
-		// could not finish, and the hermes adapter produces exactly that shape
-		// for a window whose every row was undecodable
-		// (hermesadapter.go:149). Judged as `ok` it would journal a covered
-		// range every tick while covering nothing: the silent null operation
+		// Complete=false is not an exhausted range — the contract
+		// (distillsource.go, Batch.Complete) says a false Complete marks a
+		// batch that must not be advanced past, whatever produced it, and an
+		// empty one carries nothing that could justify the advance either.
+		// Judged as `ok` it would journal a covered range every tick while
+		// covering nothing: the silent null operation
 		// D-02 §4.2.1(b) wants to see red.
 		if len(b.Items) == 0 {
 			if !b.Complete {

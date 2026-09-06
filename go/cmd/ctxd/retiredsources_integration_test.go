@@ -350,3 +350,175 @@ func TestWarnRetiredV2SettingRowsBoot(t *testing.T) {
 		}
 	})
 }
+
+// TestWarnRetiredV3SettingRowsBoot is the row gate of the THIRD retirement
+// vintage (config/retired.go, retiredKeysWithoutSuccessorV3) and the twin of
+// the V2 gate above.
+//
+//	go test -tags=integration ./cmd/ctxd/ -run TestWarnRetiredV3SettingRowsBoot -count=1 -v
+//
+// It is this vintage's only channel to a foreign installation. After the cut
+// the row is invisible everywhere else: GET /api/settings is registry-driven
+// and no longer lists the key, the settings build turns the override into an
+// "unknown settings key" Issue on the OVERRIDE rather than a boot line about
+// the row, and a tenant-scoped row is not read at boot at all. The delete
+// migration of this vintage removes what exists at upgrade time; a row this
+// sweep finds afterwards was written around the API.
+func TestWarnRetiredV3SettingRowsBoot(t *testing.T) {
+	keys := config.RetiredV3KeyNames()
+	if len(keys) == 0 {
+		t.Fatal("RetiredV3KeyNames() is empty — the third vintage carries no key, so this sweep has no subject")
+	}
+	probe := keys[0]
+
+	// A row on a V3 key produces exactly ONE line, and it is the V3 line: own
+	// release, no successor named, executable SQL remedy with the scope in it.
+	t.Run("a row on a retired V3 key is named exactly once", func(t *testing.T) {
+		pool := testdb.SetupTestDB(t)
+		ctx := context.Background()
+
+		if _, err := pool.Exec(ctx,
+			`INSERT INTO context_settings (key, scope, value) VALUES ($1, $2, $3::jsonb)`,
+			probe, store.GlobalScope, `"probe"`); err != nil {
+			t.Fatalf("insert %s: %v", probe, err)
+		}
+
+		buf := captureBootLog(t)
+		warnRetiredV3SettingRowsBoot(ctx, pool)
+
+		out := buf.String()
+		if n := deprecationLines(out, deprecationRetiredRowV3); n != 1 {
+			t.Fatalf("log = %q, want exactly 1 %s line, got %d", out, deprecationRetiredRowV3, n)
+		}
+		if n := strings.Count(out, "level=WARN"); n != 1 {
+			t.Fatalf("log = %q, want exactly 1 WARN for 1 row, got %d", out, n)
+		}
+		for _, want := range []string{
+			"level=WARN",
+			"key=" + probe,
+			"scope=" + store.GlobalScope,
+			retiredV3Release,
+			// The remedy has to be EXECUTABLE against this binary: the key is
+			// cut, so the settings API answers 404 and SQL is the only way —
+			// scope included, or the operator deletes other tenants' rows too.
+			`DELETE FROM context_settings WHERE key = '` + probe + `' AND scope = '` + store.GlobalScope + `'`,
+			"404",
+		} {
+			if !strings.Contains(out, want) {
+				t.Errorf("log = %q, want %q", out, want)
+			}
+		}
+		// The references that are FALSE for this vintage: the other releases,
+		// the backend tuple's migration and its pool. Naming any of them sends
+		// the operator to a runbook section about keys he never had.
+		for _, wrong := range []string{retiredMajor, retiredV2Release, "Migration 133", "ctx backends"} {
+			if strings.Contains(out, wrong) {
+				t.Errorf("log = %q, must not name %q — it belongs to another vintage", out, wrong)
+			}
+		}
+		// The other visible path for the same row is a config Issue on the
+		// override ("unknown settings key", config/build.go), a different
+		// mechanism on a different channel. If its wording appeared HERE, the
+		// operator would read one row as two problems.
+		if strings.Contains(out, "unknown settings key") {
+			t.Errorf("log = %q, must not repeat the settings-build Issue — that path speaks about the override, this one about the row", out)
+		}
+	})
+
+	// The vintages do not answer for each other. One row, one line, one
+	// window — the runtime half of the list separation, now over three lists.
+	t.Run("vintages sweep not each other's rows", func(t *testing.T) {
+		pool := testdb.SetupTestDB(t)
+		ctx := context.Background()
+
+		v2probe := config.RetiredV2KeyNames()[0]
+		for _, row := range []struct{ key, value string }{
+			{probe, `"probe"`},
+			{v2probe, `false`},
+			{"chat.host", `"http://legacy.example.com"`},
+		} {
+			if _, err := pool.Exec(ctx,
+				`INSERT INTO context_settings (key, scope, value) VALUES ($1, $2, $3::jsonb)`,
+				row.key, store.GlobalScope, row.value); err != nil {
+				t.Fatalf("insert %s: %v", row.key, err)
+			}
+		}
+
+		for _, sweep := range []struct {
+			name    string
+			run     func()
+			ownRow  string
+			foreign []string
+		}{
+			{"V1", func() { warnRetiredSettingRowsBoot(ctx, pool) }, "chat.host", []string{probe, v2probe}},
+			{"V2", func() { warnRetiredV2SettingRowsBoot(ctx, pool) }, v2probe, []string{probe, "chat.host"}},
+			{"V3", func() { warnRetiredV3SettingRowsBoot(ctx, pool) }, probe, []string{v2probe, "chat.host"}},
+		} {
+			t.Run(sweep.name, func(t *testing.T) {
+				buf := captureBootLog(t)
+				sweep.run()
+				out := buf.String()
+				if n := strings.Count(out, "level=WARN"); n != 1 {
+					t.Fatalf("%s sweep log = %q, want 1 WARN (its own row only), got %d", sweep.name, out, n)
+				}
+				if !strings.Contains(out, "key="+sweep.ownRow) {
+					t.Errorf("%s sweep log = %q, want its own row %s", sweep.name, out, sweep.ownRow)
+				}
+				for _, other := range sweep.foreign {
+					if strings.Contains(out, "key="+other) {
+						t.Errorf("%s sweep log = %q, spoke about %s — another vintage's row", sweep.name, out, other)
+					}
+				}
+			})
+		}
+	})
+
+	// Silence on a clean installation and on rows of surviving keys — the
+	// load-bearing half: a sweep that warned about live configuration would
+	// send an operator deleting it.
+	t.Run("no V3 rows stays silent", func(t *testing.T) {
+		pool := testdb.SetupTestDB(t)
+		ctx := context.Background()
+
+		if _, err := pool.Exec(ctx,
+			`INSERT INTO context_settings (key, scope, value) VALUES ($1, $2, $3)`,
+			"distill.ctx_source_label", store.GlobalScope, `"ctx-checkpoint"`); err != nil {
+			t.Fatalf("insert surviving-key row: %v", err)
+		}
+
+		buf := captureBootLog(t)
+		warnRetiredV3SettingRowsBoot(ctx, pool)
+
+		if out := buf.String(); out != "" {
+			t.Errorf("log = %q, want silence — no row sits on a third-vintage key, and distill.ctx_source_label is a LIVE key whose spelling merely resembles one", out)
+		}
+	})
+
+	// The cross-scope property, same as its siblings: the row a boot path
+	// never reads. Boot settings loading is hard-wired to the global scope and
+	// the tenant overlay is lazy, so a tenant-scoped row is invisible to
+	// everything else.
+	t.Run("rows are named across every scope", func(t *testing.T) {
+		pool := testdb.SetupTestDB(t)
+		ctx := context.Background()
+
+		for _, scope := range []string{store.GlobalScope, "acme"} {
+			if _, err := pool.Exec(ctx,
+				`INSERT INTO context_settings (key, scope, value) VALUES ($1, $2, $3::jsonb)`,
+				probe, scope, `"probe"`); err != nil {
+				t.Fatalf("insert %s/%s: %v", probe, scope, err)
+			}
+		}
+
+		buf := captureBootLog(t)
+		warnRetiredV3SettingRowsBoot(ctx, pool)
+
+		out := buf.String()
+		if n := deprecationLines(out, deprecationRetiredRowV3); n != 2 {
+			t.Fatalf("log = %q, want 2 lines — one per row, in every scope, got %d", out, n)
+		}
+		if !strings.Contains(out, "scope=acme") {
+			t.Errorf("log = %q, want the tenant-scoped row named — it is the one no boot path reads", out)
+		}
+	})
+}

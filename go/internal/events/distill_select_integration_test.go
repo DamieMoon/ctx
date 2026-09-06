@@ -545,10 +545,11 @@ func TestDistillSelection(t *testing.T) {
 	})
 
 	// REVIEW #3 — an EMPTY batch that reports Complete=false must not close as
-	// `ok`. The reader of this source cannot produce that shape today, but the
-	// hermes adapter does (hermesadapter.go:149, a window whose every row was
-	// undecodable), and both readers do it for a non-positive cap. Closing it as
-	// `ok` would journal a covered range for a batch that covered nothing — the
+	// `ok`. The reader of this source cannot produce that shape today except
+	// for a non-positive cap (distillsource.go, Read: "a non-positive cap
+	// yields an empty, incomplete batch rather than a source-chosen default"),
+	// so the fake source below manufactures it directly. Closing it as `ok`
+	// would journal a covered range for a batch that covered nothing — the
 	// silent null operation D-02 §4.2.1(b) wants to see red.
 	//
 	// RED against b8976774: `outcome="ok" watermark=0..0 seen=0`.
@@ -563,7 +564,9 @@ func TestDistillSelection(t *testing.T) {
 			head:     map[string]int64{root: 5000},
 			hasNew:   map[string]bool{root: true},
 			readFn: func(after int64) (distillsource.Batch, error) {
-				// Exactly hermesadapter.go:149 for a fully dropped window.
+				// The shape distillsource.go, Batch.Complete calls "must
+				// not be advanced past", manufactured directly rather than
+				// provoked out of a real source.
 				return distillsource.Batch{Watermark: after, Complete: false}, nil
 			},
 		}

@@ -1749,21 +1749,30 @@ type SelectorConfig struct {
 const DistillMaxConcurrency = 16
 
 // DistillConfig is the ctxd distiller arm (Achse A03, design/03): a scheduler
-// arm that reads a FOREIGN, read-only SQLite state.db of an agent runtime,
-// selects archived tool output from it and distills it into insight blocks.
+// arm that reads compaction checkpoints out of this store's OWN corpus and
+// distills them into insight blocks.
 //
-// THIS GROUP HAS NO CONSUMER YET (wave W03-3). It is the policy half of the
-// doctrine the design states in §4: mechanism = code, policy = data. Every
-// number that can change with operation — cadence, budgets, thresholds, path,
-// category, scope — is a key here; every number that can only change with a
-// code change — the prompt rune budget, the quote minimum — is a constant with
-// a test (promptguard.BudgetDistill).
+// ONE SOURCE, and it needs no foreign file. internal/distillsource/ctxcheckpoint
+// presents the manifest and part blocks of type checkpoint that live in
+// context_blocks as a distillsource.Source, and Scheduler.newDistillSource
+// builds that reader once per tick and hands it every tunable it takes — the
+// reader itself reads no configuration (F1 layering, ctxcheckpoint package
+// doc). The keys below are wired, not scaffolded.
+//
+// The group is the policy half of the doctrine the design states in §4:
+// mechanism = code, policy = data. Every number that can change with operation
+// — cadence, budgets, thresholds, category, scope — is a key here; every number
+// that can only change with a code change — the prompt rune budget, the quote
+// minimum — is a constant with a test (promptguard.BudgetDistill).
 //
 // EVERY key is tenancy:"global-only", and the reason is stronger than the
-// registry's fail-closed default (§5.4): a state.db is a SINGLE artifact of a
-// SINGLE operator. Running the arm over the tenant iteration would write the
-// same foreign content into several scopes. The arm does not iterate tenants,
-// so no key here has a per-tenant reading.
+// registry's fail-closed default (§5.4): the arm holds exactly ONE scope for
+// read and write and never iterates tenants (§4.8). distillScope resolves that
+// single scope out of the _global snapshot and checks it against the DEFAULT
+// tenant's entitlements (events/distill.go, distillScope /
+// distillScopeAllowed), so a per-tenant reading of any key here would be a
+// value no tick ever loads — a tenant-overridable tag would read as a promise
+// the arm does not keep.
 //
 // Mutability follows the arm's structure, which the design copies from
 // recall_check (§4.2, "Struktur exakt nach recall_check.go"): the snapshot is
@@ -1774,45 +1783,26 @@ const DistillMaxConcurrency = 16
 // to run, this arm evaluates gate 0 per tick and books a skip_reason for it,
 // and a restart-class master switch would make that gate unreachable code.
 //
-// The default is OFF, and that is a load-bearing default, not caution: a
-// vanilla ctx install has no agent runtime next to it, and E03-1 requires that
-// ctx stays complete without one. A default-on arm would accumulate a journal
-// of "source unreachable" on every install that never asked for a distiller.
+// The default is OFF, and that is a load-bearing default, not caution: an
+// install that has never asked for a distiller must not start spending decode
+// capacity on its own transcripts, and it must not accumulate a run journal
+// (E03-1). Both switches carry that posture — distill.enabled here, and
+// distill.ctx_enabled on the source below.
 
 type DistillConfig struct {
 	// Enabled is gate 0 (§4.2). A disabled arm writes NO journal row at all —
 	// only a debug log — which is what keeps a vanilla install's journal empty.
 	Enabled bool `key:"distill.enabled" env:"CTX_DISTILL_ENABLED" default:"false" mut:"hot" tenancy:"global-only"`
 
-	// ── Source identity ────────────────────────────────────────────────────
-	//
-	// SourcePath is the read-only state.db the arm opens per tick (gate 1).
-	// EMPTY is the default and means "no source configured": nothing to open,
-	// the arm stays inert. That empty default is the second half of the
-	// default-off posture — an install that flips distill.enabled without
-	// naming a path still cannot reach a foreign file.
-	//
-	// The path is NOT part of the journal's source identity (SourceLabel is,
-	// below): a path in a data row would be an infrastructure statement in a
-	// data row, and a mount change would silently tear the watermark
-	// derivation apart (design §3.1).
-	SourcePath string `key:"distill.source_path" env:"CTX_DISTILL_SOURCE_PATH" default:"" mut:"hot" tenancy:"global-only"`
-	// SourceLabel is the stable half of the journal's source_key
-	// ("<label>:<session_id>", §3.1) and therefore of the DERIVED watermark.
-	// Changing it renames every source: the new key has no journal history, so
-	// the arm restarts that source at initial_backfill_rows. That consequence
-	// is on the key's description, because it is the operator-visible half.
-	SourceLabel string `key:"distill.source_label" env:"CTX_DISTILL_SOURCE_LABEL" default:"hermes" mut:"hot" tenancy:"global-only"`
-
 	// ── The ctx-checkpoint source (design D-02, wave A02-4) ────────────────
 	//
-	// The arm's SECOND source, and the one that needs no foreign file: the
-	// compaction checkpoints this store writes about its own sessions. It gets
-	// its own switch, its own label and its own quiet gate rather than reusing
-	// the three above, because the two sources differ in every property those
-	// keys carry — one is a read-only SQLite file of an agent runtime, the
-	// other is rows of context_blocks — and a single set of keys would force
-	// one number to mean two things.
+	// The arm's ONLY source since v5.17.0 retired the reader of the foreign
+	// agent state file: the compaction checkpoints this store writes about its
+	// own sessions, read as rows of context_blocks. The keys keep the ctx_
+	// prefix they were minted with while the source was the second one (A02-4)
+	// — renaming them now would retire four live names to buy a shorter
+	// spelling, and the prefix still separates the per-source knobs from the
+	// group-wide ones above.
 	//
 	// THREE OF THE FOUR KEYS BELOW ARE WIRED. distill.ctx_enabled gates the run
 	// (events/distill.go:481) and carries the credential-rank rule in
@@ -1828,18 +1818,20 @@ type DistillConfig struct {
 	// load-bearing reason distill.enabled is: an install that has never asked
 	// for a distiller must not start deriving blocks from its own transcripts.
 	CtxEnabled bool `key:"distill.ctx_enabled" env:"CTX_DISTILL_CTX_ENABLED" default:"false" mut:"hot" tenancy:"global-only"`
-	// CtxSourceLabel is the stable half of THIS source's journal source_key,
-	// exactly what SourceLabel is for the state.db source. The two must never
-	// be the same word: one source_key means one watermark series, and two
-	// sources sharing it would advance each other's watermark — the ranges in
-	// between are then skipped in silence, not re-read. The validator refuses
-	// the collision (case- and space-folded) before it can happen.
+	// CtxSourceLabel is the stable half of this source's journal source_key
+	// ("<label>:<session_id>", §3.1) and therefore of the DERIVED watermark.
+	// Changing it renames the source: the new key has no journal history, so
+	// the arm restarts every session of it at initial_backfill_rows. The
+	// validator refuses an EMPTY label (V28) for the sharper reason — an empty
+	// label makes every source_key start with ":", and one source_key is one
+	// watermark series, so a source added next to this one would advance its
+	// watermark instead of keeping its own, and the ranges in between would be
+	// skipped in silence rather than re-read.
 	CtxSourceLabel string `key:"distill.ctx_source_label" env:"CTX_DISTILL_CTX_SOURCE_LABEL" default:"ctx-checkpoint" mut:"hot" tenancy:"global-only"`
-	// CtxQuietFor is this source's quiet gate in SECONDS — the counterpart of
-	// SessionQuietFor, and a separate key because the two measure different
-	// things: SessionQuietFor reads the age of the youngest live row in the
-	// foreign state.db, this one the age of the youngest checkpoint of a root
-	// session.
+	// CtxQuietFor is this source's quiet gate in SECONDS: the age of the
+	// youngest checkpoint of a root session, which the arm will require before
+	// it touches that session. Still WITHOUT a reader — gate 3 (A02-10) is the
+	// wave that consumes it, as the section note above says.
 	//
 	// 30 min, derived rather than inherited (decision EA-5): the inherited
 	// 10 min was reasoned against a compaction distance of "~2 h 27 min", but
@@ -1896,15 +1888,6 @@ type DistillConfig struct {
 	// cut they exist for. The off-peak behavior comes from the gates, not from
 	// the clock.
 	Interval time.Duration `key:"distill.interval" env:"CTX_DISTILL_INTERVAL" default:"900" mut:"hot" tenancy:"global-only"`
-	// SessionQuietFor is gate 3 (§4.2), in seconds: how long the youngest live
-	// row of a session must have been quiet before the arm touches that
-	// session. It measures the load the ctx-side demand gate CANNOT see — a
-	// human working in the foreign runtime, whose every keystroke needs the
-	// same decode capacity. 0 turns the gate OFF, which is the documented
-	// setting for the snapshot access variant (§4.0 variant S), where the
-	// measurement would be stale by construction and therefore wrong rather
-	// than merely imprecise.
-	SessionQuietFor time.Duration `key:"distill.session_quiet_for" env:"CTX_DISTILL_SESSION_QUIET_FOR" default:"600" mut:"hot" tenancy:"global-only"`
 	// MaxSessionsPerRun caps how many sources one tick may touch; the arm
 	// rotates over the rest round-robin (§6.3). This bounds the READ order,
 	// not the call budget — those are two mechanisms (spend_max_calls is the
@@ -1949,10 +1932,13 @@ type DistillConfig struct {
 
 	// ── Selection (§4.3) ───────────────────────────────────────────────────
 	//
-	// RowsPerRead is the mandatory LIMIT on every read of the foreign file
-	// (§6.3 consequence 1). The foreign schema carries no index the arm may
-	// rely on, so an unbounded read is the one shape that turns a background
-	// tick into a multi-second scan of a multi-GB file.
+	// RowsPerRead is the mandatory LIMIT on every read (§6.3 consequence 1).
+	// It reaches the source as ctxcheckpoint.Options.MaxManifests — the cap on
+	// how many manifest heads one Read considers — and it is the bound on the
+	// CHEAP query of the pair: the checkpoint corpus grows without a retention
+	// path, so the one read whose cost tracks the corpus rather than the
+	// session must never be unbounded. The expensive query is bounded from the
+	// other side, by the item cap Read takes as an argument.
 	RowsPerRead int `key:"distill.rows_per_read" env:"CTX_DISTILL_ROWS_PER_READ" default:"400" mut:"hot" tenancy:"global-only"`
 	// MinRowRunes drops rows without substance before they cost anything
 	// (exit codes, "ok", empty tool answers). Measured, not guessed: the mean

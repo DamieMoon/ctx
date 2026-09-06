@@ -23,7 +23,8 @@ import (
 // are the older retirement vintage (U01-W5, see the closing comment of Config's
 // pool group): never env-sourced, no pool destination, unregistered since their
 // cutover — they already answer 404 today and contribute no env name to sweep.
-// Two vintages, two behaviours; retired_test.go pins the separation.
+// Every vintage has its own behaviour; retired_test.go pins the separation of
+// all of them.
 var retiredSettingKeys = map[string]string{
 	"chat.host":     "context_backends.base_url (chat-role row)",
 	"chat.api_key":  "context_backends.api_key_ref (F2 secret, chat-role row)",
@@ -96,7 +97,7 @@ func RetiredKeyNames() []string {
 // retired_test.go pins it against the live registry entry for as long as the
 // key has one, and against the ABSENCE of the name from EnvVars() once its
 // wave cut it, so a hand-written second list can never drift in from either
-// side of the cut. Both vintages share it, so the two lists cannot end up
+// side of the cut. Every vintage shares it, so no two lists can end up
 // spelling the same name two ways.
 func retiredEnvName(key string) string {
 	return "CTX_" + strings.ToUpper(strings.ReplaceAll(key, ".", "_"))
@@ -113,11 +114,19 @@ func retiredEnvName(key string) string {
 // Folding them into the first map would cost two things at once. The single
 // claim that map makes would become untrue, and the 29 in retireddocs_test.go
 // — the first vintage's pin — would move, which is exactly the vintage
-// confusion the separation exists against. Three vintages now, three
-// behaviours: the gaming keys (never env-sourced, no sweep at all), the
-// backend tuple (29 names, suffix-filtered env sweep, Migration 133) and this
-// one (env sweep without a suffix filter, own release, own delete migration).
+// confusion the separation exists against. FOUR vintages now, four behaviours:
+// the gaming keys (never env-sourced, no sweep at all), the backend tuple (29
+// names, suffix-filtered env sweep, Migration 133), this one (env sweep
+// without a suffix filter, own release v5.16.0, Migration 152) and V3 below
+// (same shape as this one, own release v5.17.0, own delete migration).
 // retired_test.go pins that no name lies in two of them.
+//
+// A NEW VINTAGE RATHER THAN A THIRD ENTRY HERE, and the reason is mechanical:
+// retiredv2migration_test.go binds this map to the ARRAY[…] of Migration 152
+// by SET EQUALITY, and 152 is landed, applied and frozen by checksum. A key
+// added here would turn that pin red with no repair left — the migration
+// cannot be edited, so the only honest home for a later retirement is its own
+// map, its own release and its own migration (K19).
 //
 // Same 404 on the wire as every other retirement (E13): a retired key answers
 // through the ordinary unknownKey path, with nothing that separates it from a
@@ -163,6 +172,86 @@ func RetiredV2EnvNames() []string {
 func RetiredV2KeyNames() []string {
 	out := make([]string, 0, len(retiredKeysWithoutSuccessor))
 	for key := range retiredKeysWithoutSuccessor {
+		out = append(out, key)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// retiredKeysWithoutSuccessorV3 is the THIRD retirement vintage, and it is the
+// second one whose values do not move anywhere: same VALUE contract as
+// retiredKeysWithoutSuccessor above — the Ist statement that answers the
+// operator's "and where did it go?" with "nowhere, and here is why nothing
+// changes" — but its own map, its own release and its own delete migration,
+// because Migration 152 is landed and frozen and its set-equality pin against
+// the V2 map has no repair path (see the note there).
+//
+// ONE SUBJECT DIED AND TOOK ALL THREE KEYS WITH IT. The distiller arm used to
+// carry a second source: a reader of a FOREIGN, read-only SQLite state file of
+// an agent runtime (internal/hermesstate) behind a distillsource adapter
+// (internal/distillsource/hermesadapter). Both packages are gone in v5.17.0,
+// so the path these three keys configured — which file to open, what to call
+// it in the journal, how long its sessions had to be quiet — has no code left
+// to reach. The arm keeps its remaining source, the ctx-checkpoint reader over
+// this store's own corpus, and that source has always had its own keys.
+//
+// distill.ctx_source_label AND distill.ctx_quiet_for ARE NOT SUCCESSORS. They
+// are the ctx-checkpoint source's OWN keys, minted with that source in A02-4
+// and live ever since — an operator who copies a value from a retired key into
+// one of them is not migrating a setting, he is overwriting a different
+// source's configuration with a number that was measured against a different
+// artifact. The similar spelling is the whole reason this paragraph exists.
+//
+// Same 404 on the wire as every other retirement (E13): a retired key answers
+// through the ordinary unknownKey path, with nothing that separates it from a
+// typo. The list is DATA for the boot advisories and for the migration that
+// deletes the rows, never an API surface.
+var retiredKeysWithoutSuccessorV3 = map[string]string{
+	"distill.source_label": "no successor — the source it named is gone: the reader of the foreign " +
+		"agent state file (internal/hermesstate) and its distillsource adapter fell in v5.17.0. " +
+		"distill.ctx_source_label is NOT this key under a new name; it is the ctx-checkpoint " +
+		"source's own label, live since A02-4, and copying a value into it renames THAT source",
+	"distill.session_quiet_for": "no successor — the gate measured the youngest live row of a " +
+		"session in the foreign state file, and there is no such file to read any more. " +
+		"distill.ctx_quiet_for is NOT its replacement: it is the ctx-checkpoint source's own gate " +
+		"over checkpoint ages, with its own measured default (30 min, decision EA-5)",
+	"distill.source_path": "no successor — the path pointed at the foreign agent state file the arm " +
+		"opened per tick, and nothing opens a file any more: the remaining source reads " +
+		"context_blocks through the pool the daemon already holds",
+}
+
+// RetiredV3EnvNames returns the env var names of the third vintage, sorted —
+// the name source of the V3 boot env sweep, with the same
+// sorted-for-diffability contract as RetiredEnvNames().
+//
+// NO SUFFIX FILTER, for the reason RetiredV2EnvNames() gives: the first
+// vintage's three suffixes select the value-bearing half of a topology tuple
+// whose other half arrives scaffolded non-empty on a whole cohort, and that
+// partition says nothing about these three — every one of them carries a value
+// an operator chose.
+func RetiredV3EnvNames() []string {
+	out := make([]string, 0, len(retiredKeysWithoutSuccessorV3))
+	for key := range retiredKeysWithoutSuccessorV3 {
+		out = append(out, retiredEnvName(key))
+	}
+	sort.Strings(out)
+	return out
+}
+
+// RetiredV3KeyNames returns the canonical settings keys of the third vintage,
+// sorted — the name source of the V3 boot row-shadow sweep, and the SET the
+// delete migration of this vintage binds its ARRAY[…] against (same contract
+// as RetiredV2KeyNames(): a key missing from that array leaves its rows behind
+// on every foreign installation, invisible after the registry cut and live
+// configuration again the day someone re-registers the name).
+//
+// Separate from RetiredV3EnvNames() for the reason RetiredKeyNames() is
+// separate from RetiredEnvNames(): context_settings rows are keyed by the
+// canonical key, and deriving one from the other outside this file would plant
+// the second transcript the whole file exists to prevent.
+func RetiredV3KeyNames() []string {
+	out := make([]string, 0, len(retiredKeysWithoutSuccessorV3))
+	for key := range retiredKeysWithoutSuccessorV3 {
 		out = append(out, key)
 	}
 	sort.Strings(out)

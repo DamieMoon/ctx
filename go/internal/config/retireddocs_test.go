@@ -65,16 +65,34 @@ func retiredV2EnvPattern(t *testing.T) *regexp.Regexp {
 	return regexp.MustCompile(`\b(` + strings.Join(names, "|") + `)\b`)
 }
 
+// retiredV3EnvPattern is the same construction for the THIRD vintage, and its
+// own function for both reasons the V2 one is: retiredEnvPattern's 29 is the
+// first vintage's pin, and a pattern built from a union would have to move
+// that number to grow. The emptiness Fatalf carries the same weight here —
+// `\b()\b` matches at every word boundary, so an empty list would turn the
+// gates below into "no word appears" and paint the whole file red for a reason
+// that has nothing to do with retirement.
+func retiredV3EnvPattern(t *testing.T) *regexp.Regexp {
+	t.Helper()
+	names := RetiredV3EnvNames()
+	if len(names) == 0 {
+		t.Fatalf("RetiredV3EnvNames() is empty — an empty alternation matches every line, not none")
+	}
+	return regexp.MustCompile(`\b(` + strings.Join(names, "|") + `)\b`)
+}
+
 // retiredEnvNamesAllVintages is the union the two file gates below speak
 // about: a name that must not appear in the tracked template or on the
-// container environment is a name of EITHER retirement, and a gate that knew
-// only the first one would let the second vintage's names back in through the
-// scaffold the day someone re-added them.
+// container environment is a name of ANY retirement, and a gate that knew only
+// the first one would let a later vintage's names back in through the scaffold
+// the day someone re-added them. Every vintage is appended here, which is what
+// the length pin in TestComposeDeclaresNoRetiredVar keeps honest.
 func retiredEnvNamesAllVintages() []string {
 	v1 := RetiredEnvNames()
-	out := make([]string, 0, len(v1)+len(retiredKeysWithoutSuccessor))
+	out := make([]string, 0, len(v1)+len(retiredKeysWithoutSuccessor)+len(retiredKeysWithoutSuccessorV3))
 	out = append(out, v1...)
 	out = append(out, RetiredV2EnvNames()...)
+	out = append(out, RetiredV3EnvNames()...)
 	return out
 }
 
@@ -123,24 +141,25 @@ func readEnvExample(t *testing.T) []string {
 // template must still point at the replacement path, so the deletion cannot
 // turn into a silent hole.
 //
-// It runs over BOTH vintages, one pattern each. The second vintage's names
-// have no pool to point at — a template line naming one would hand a fresh
-// installation a variable that reaches nothing at all — so the absence
+// It runs over EVERY vintage, one pattern each. The successorless vintages'
+// names have no pool to point at — a template line naming one would hand a
+// fresh installation a variable that reaches nothing at all — so the absence
 // statement is the same and only the sentence that explains it differs.
 func TestEnvExampleNamesNoRetiredVar(t *testing.T) {
 	lines := readEnvExample(t)
 	pattern := retiredEnvPattern(t)
-	patternV2 := retiredV2EnvPattern(t)
 	for i, line := range lines {
 		if m := pattern.FindString(line); m != "" {
 			t.Errorf(".env.example:%d names retired backend tuple var %s: %s — the pool is the configuration surface (`ctx backends`), and the full retirement notice lives in docs/operations.md",
 				i+1, m, strings.TrimSpace(line))
 		}
 	}
-	for i, line := range lines {
-		if m := patternV2.FindString(line); m != "" {
-			t.Errorf(".env.example:%d names retired var %s: %s — the key was retired WITHOUT a successor, so the template would hand a fresh install a variable that reaches nothing",
-				i+1, m, strings.TrimSpace(line))
+	for _, p := range []*regexp.Regexp{retiredV2EnvPattern(t), retiredV3EnvPattern(t)} {
+		for i, line := range lines {
+			if m := p.FindString(line); m != "" {
+				t.Errorf(".env.example:%d names retired var %s: %s — the key was retired WITHOUT a successor, so the template would hand a fresh install a variable that reaches nothing",
+					i+1, m, strings.TrimSpace(line))
+			}
 		}
 	}
 }
@@ -163,10 +182,11 @@ func TestEnvExampleNamesNoRetiredVar(t *testing.T) {
 // not lines, because the block's prose is where the cut is explained ("the 29
 // CTX_{CHAT,…}_* declarations that stood here are retired in v5.0.0"). A
 // comment may say the word; a declaration may not exist.
-// Both vintages, one union (retiredEnvNamesAllVintages). For the second one
-// the property is the sharper of the two: a declared name there is not only a
-// dead knob but also a guaranteed false positive of the boot env sweep, which
-// would then warn on every boot of every installation that kept the scaffold.
+// Every vintage, one union (retiredEnvNamesAllVintages). For the
+// successorless ones the property is the sharper: a declared name there is not
+// only a dead knob but also a guaranteed false positive of the boot env sweep,
+// which would then warn on every boot of every installation that kept the
+// scaffold.
 func TestComposeDeclaresNoRetiredVar(t *testing.T) {
 	declared := ctxServiceEnvNames(t)
 	for _, name := range RetiredEnvNames() {
@@ -175,16 +195,18 @@ func TestComposeDeclaresNoRetiredVar(t *testing.T) {
 				name)
 		}
 	}
-	for _, name := range RetiredV2EnvNames() {
-		if declared[name] {
-			t.Errorf("docker-compose.yml still declares retired var %s in the ctx service environment: block — the key has no successor, so the declaration is a knob that reaches nothing and a guaranteed false positive of the boot env sweep",
-				name)
+	for _, names := range [][]string{RetiredV2EnvNames(), RetiredV3EnvNames()} {
+		for _, name := range names {
+			if declared[name] {
+				t.Errorf("docker-compose.yml still declares retired var %s in the ctx service environment: block — the key has no successor, so the declaration is a knob that reaches nothing and a guaranteed false positive of the boot env sweep",
+					name)
+			}
 		}
 	}
-	// The union is what the gate SPEAKS about; the two loops above only split
-	// the explanation. Pinned here so a future vintage cannot be added to the
+	// The union is what the gate SPEAKS about; the loops above only split the
+	// explanation. Pinned here so a future vintage cannot be added to the
 	// helper without arriving in this gate.
-	if got, want := len(retiredEnvNamesAllVintages()), len(RetiredEnvNames())+len(RetiredV2EnvNames()); got != want {
+	if got, want := len(retiredEnvNamesAllVintages()), len(RetiredEnvNames())+len(RetiredV2EnvNames())+len(RetiredV3EnvNames()); got != want {
 		t.Errorf("retiredEnvNamesAllVintages() has %d names, want %d — the union must carry every vintage", got, want)
 	}
 }

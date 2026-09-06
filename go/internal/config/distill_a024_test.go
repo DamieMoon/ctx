@@ -72,37 +72,38 @@ func TestDistillCtxKeysReachSettings(t *testing.T) {
 	}
 }
 
-// TestDistillCtxSourceLabelDisjoint is the label-disjointness rule. Both labels
-// are the stable half of a journal source_key ("<label>:<session>"), so two
-// sources under the SAME label share one watermark series: one source would
-// advance the other's watermark and the ranges in between are skipped
-// silently. It is the same statement the empty-label refusal makes for one
-// source, one level up.
+// TestDistillCtxSourceLabelNotEmpty is what is left of V28 after the arm's
+// second source was retired in v5.17.0 (T05-8b). The rule shipped as a
+// DISJOINTNESS rule — two labels, two sources, one watermark series each — and
+// the second label (distill.source_label) went with its source, so the pair
+// half has no subject any more: its cases would assert a refusal that nothing
+// raises.
 //
-// The comparison folds case and surrounding space on purpose. Byte-wise
-// " Hermes " and "hermes" are different keys, so a strict comparison would
-// walk past them — but nobody sets two labels that differ only in a shift key
-// with the INTENT of separating two series, and the direction of the error is
-// the safe one: it can only refuse more, never less.
-func TestDistillCtxSourceLabelDisjoint(t *testing.T) {
+// The half that was never about the pair is the load-bearing one and stays. A
+// label is the stable part of a journal source_key ("<label>:<session>"), so
+// an empty label makes every key start with ":" — a source added next to this
+// one would share the series, advance this one's watermark, and the ranges in
+// between would be skipped in silence rather than re-read. Fatal for that
+// reason, not for tidiness.
+//
+// Whitespace is asserted next to the empty string because the check trims for
+// the COMPARISON only: the value itself is never normalized in place (a
+// trimmed label would rename a live source), so "   " has to be refused
+// explicitly or the rule could be bought with a space bar.
+func TestDistillCtxSourceLabelNotEmpty(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		sources map[string]string
 		want    Severity
 	}{
-		{"defaults are disjoint", map[string]string{}, -1},
-		{"identical labels", map[string]string{"distill.ctx_source_label": "hermes"}, SeverityError},
-		{"identical after case fold", map[string]string{"distill.ctx_source_label": "Hermes"}, SeverityError},
-		{"identical after trim", map[string]string{"distill.ctx_source_label": "  hermes  "}, SeverityError},
-		{"both moved to the same new name", map[string]string{
-			"distill.source_label":     "agent",
-			"distill.ctx_source_label": "agent",
-		}, SeverityError},
-		{"both moved, still disjoint", map[string]string{
-			"distill.source_label":     "agent",
-			"distill.ctx_source_label": "agent-ctx",
-		}, -1},
-		{"empty ctx label", map[string]string{"distill.ctx_source_label": "   "}, SeverityError},
+		{"the registry default is a name", map[string]string{}, -1},
+		{"empty ctx label", map[string]string{"distill.ctx_source_label": ""}, SeverityError},
+		{"whitespace is not a name", map[string]string{"distill.ctx_source_label": "   "}, SeverityError},
+		{"a moved label is still a name", map[string]string{"distill.ctx_source_label": "agent-ctx"}, -1},
+		// The retired vintage's word carries no rule any more: with the second
+		// source gone it is an ordinary label like any other, and a test that
+		// still refused it would pin a collision against nothing.
+		{"the retired source's word is an ordinary label now", map[string]string{"distill.ctx_source_label": "hermes"}, -1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			issues := Validate(validCfg(t, tc.sources))

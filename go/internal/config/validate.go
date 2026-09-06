@@ -282,45 +282,38 @@ func validateDistillCtxSource(d *DistillConfig) []Issue {
 	return issues
 }
 
-// validateDistillCtxLabel is V28: the two source labels must name two
-// different sources.
+// validateDistillCtxLabel is V28: the arm's source label must name something.
 //
 // A label is the stable half of a journal source_key ("<label>:<session>",
-// §3.1) and therefore of the DERIVED watermark. Two sources under one label
-// share one series: each run advances the other's watermark, and the ranges in
-// between are not re-read but silently skipped. That is the same failure the
-// empty-label refusal in V25 names for a single source — "an empty label would
-// merge the watermark series of every configured source into one" — one level
-// up, which is why the empty case is refused here too rather than left to a
-// second reading of V25's message.
+// §3.1) and therefore of the DERIVED watermark. An empty label makes every
+// source_key start with ":", so a source added next to this one shares its
+// series: each run advances the other's watermark, and the ranges in between
+// are not re-read but silently skipped. That is why the refusal is fatal
+// rather than a warn — the damage is a silent data merge, not a cosmetic
+// default.
 //
-// THE COMPARISON FOLDS CASE AND SURROUNDING SPACE, and the values are NOT
-// normalized in place. Both halves are deliberate:
+// V28 kept its number and its registration when the arm's second source was
+// retired in v5.17.0 (T05-8b): the collision half it also carried compared
+// this label against distill.source_label, and that key no longer exists.
+// What survives is the half that was never about the pair — a source_key needs
+// a name — and the message it raises is unchanged, because the reason it gives
+// is unchanged.
 //
-//   - Folding: byte-wise " Hermes " and "hermes" are two different source_keys,
-//     so a strict comparison would walk past them. But nobody sets two labels
-//     that differ only in a shift key WITH THE INTENT of separating two series,
-//     and the direction of the error is the safe one — it can only refuse more,
-//     never less.
-//   - No normalization: distill.source_label has been operator-visible since
-//     A03-W03-3 and goes into the source_key verbatim. Trimming it here would
-//     RENAME a live source (new key, no journal history, restart at
-//     initial_backfill_rows — the consequence its own doc comment carries), and
-//     that is not a validator's decision to make. V27 normalizes
-//     distill.category because the value is half an upsert identity that would
-//     otherwise CREATE a divergent category; a label creates nothing.
+// THE VALUE IS NOT NORMALIZED IN PLACE, and that half is still deliberate:
+// distill.ctx_source_label goes into the source_key verbatim, so trimming it
+// here would RENAME a live source (new key, no journal history, restart at
+// initial_backfill_rows — the consequence its own doc comment carries), and
+// that is not a validator's decision to make. V27 normalizes distill.category
+// because the value is half an upsert identity that would otherwise CREATE a
+// divergent category; a label creates nothing. TrimSpace is therefore applied
+// to the CHECK only: "   " is not a name, and accepting it would let the
+// refusal be bought with a space bar.
 func validateDistillCtxLabel(d *DistillConfig) []Issue {
-	ctxLabel := strings.TrimSpace(d.CtxSourceLabel)
-	if ctxLabel == "" {
+	if strings.TrimSpace(d.CtxSourceLabel) == "" {
 		return []Issue{{Field: "distill.ctx_source_label", Severity: SeverityError,
 			Msg: "distill.ctx_source_label must not be empty — it is the stable half of the ctx-checkpoint source's journal key, and an empty label would merge the watermark series of every configured source into one"}}
 	}
-	if !strings.EqualFold(ctxLabel, strings.TrimSpace(d.SourceLabel)) {
-		return nil
-	}
-	return []Issue{{Field: "distill.ctx_source_label", Severity: SeverityError,
-		Msg: fmt.Sprintf("distill.ctx_source_label %q and distill.source_label %q name the same source — one label is one watermark series, so the two sources would advance each other's watermark and the ranges in between would be skipped rather than re-read",
-			d.CtxSourceLabel, d.SourceLabel)}}
+	return nil
 }
 
 // validateDistillBlockType is V29: distill.block_type must name a COMPILED
@@ -542,14 +535,6 @@ func validateDistillCounters(d *DistillConfig) []Issue {
 		}
 	}
 
-	// The journal's source identity must have a name. An empty label collapses
-	// every source into a source_key that starts with ":", so two different
-	// state.db files would share one watermark series — a silent data merge,
-	// not a cosmetic default.
-	if strings.TrimSpace(d.SourceLabel) == "" {
-		issues = append(issues, Issue{Field: "distill.source_label", Severity: SeverityError,
-			Msg: "distill.source_label must not be empty — it is the stable half of the journal's source key, and an empty label would merge the watermark series of every configured source into one"})
-	}
 	return issues
 }
 

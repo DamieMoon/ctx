@@ -501,18 +501,214 @@ func TestWarnRetiredV2EnvVarsBoot(t *testing.T) {
 	})
 }
 
-// TestBothRetirementSweepsAreWiredAtBoot pins the CALL SITE of all four boot
+// TestWarnRetiredV3EnvVarsBoot is the env gate of the THIRD retirement vintage
+// (config/retired.go, retiredKeysWithoutSuccessorV3) and the twin of the V2
+// gate above. It closes the same silence: the loader is registry-driven, so a
+// deployment that still exports one of these variables boots without a word,
+// because the registry has never heard of the key.
+//
+// Two properties are this vintage's own and are asserted here rather than
+// inherited:
+//
+//   - OWN RELEASE in the text (retiredV3Release). A line naming v5.0.0 sends
+//     the operator to the backend-tuple runbook; one naming v5.16.0 sends him
+//     to a window his key was never in.
+//   - THE SUBJECT IS NAMED AS GONE, not merely the key. These three keys
+//     configured a source that no longer exists, so a line that only said "no
+//     successor" would leave an operator hunting for a replacement key that
+//     was never minted.
+//
+// The value filter and the name-only rule are pinned identically to both
+// siblings, because they are what decides whether the sweep is signal or noise
+// on an installation that never touched the variable.
+func TestWarnRetiredV3EnvVarsBoot(t *testing.T) {
+	v3 := config.RetiredV3EnvNames()
+	if len(v3) == 0 {
+		t.Fatal("RetiredV3EnvNames() is empty — the third vintage carries no key, so this sweep has no subject")
+	}
+	probe := v3[0]
+
+	t.Run("set non-empty retired var warns by name with the way out", func(t *testing.T) {
+		resetAllEnv(t)
+		buf := captureBootLog(t)
+		t.Setenv(probe, "600")
+
+		warnRetiredV3EnvVarsBoot()
+
+		out := buf.String()
+		if !strings.Contains(out, "level=WARN") {
+			t.Errorf("log = %q, want a WARN — a silently ignored setting is not an INFO", out)
+		}
+		if !strings.Contains(out, probe) {
+			t.Errorf("log = %q, want the var NAME — the operator has to know which line of his .env is dead", out)
+		}
+		if !strings.Contains(out, retiredV3Release) {
+			t.Errorf("log = %q, want the release the key disappeared in (%s)", out, retiredV3Release)
+		}
+		if n := deprecationLines(out, deprecationRetiredEnvV3); n != 1 {
+			t.Errorf("log = %q, want 1 line with the third vintage's deprecation label, got %d", out, n)
+		}
+		for _, foreign := range []struct{ label, why string }{
+			{deprecationRetiredEnv, "the FIRST vintage's label"},
+			{deprecationRetiredEnvV2, "the SECOND vintage's label"},
+		} {
+			if n := deprecationLines(out, foreign.label); n != 0 {
+				t.Errorf("log = %q, carries %s — the windows must stay apart", out, foreign.why)
+			}
+		}
+		// Both older releases belong to other windows. A line of this vintage
+		// naming either sends an operator to a runbook section about keys he
+		// never had.
+		for _, wrong := range []string{retiredMajor, retiredV2Release} {
+			if strings.Contains(out, wrong) {
+				t.Errorf("log = %q, must not name %s — that is another vintage's release", out, wrong)
+			}
+		}
+		if strings.Contains(out, "ctx backends") {
+			t.Errorf("log = %q, must not point at the backend pool — this key has no successor", out)
+		}
+		if n := strings.Count(out, "level=WARN"); n != 1 {
+			t.Errorf("log = %q, want exactly 1 WARN for 1 set var, got %d", out, n)
+		}
+	})
+
+	// The value filter, byte for byte the rule of both siblings: the tracked
+	// compose file materialises every one of these names as `${VAR:-}`, so on
+	// an untouched installation they all arrive set and empty, and the loader
+	// treats empty env as unset (load.go). A sweep that warned here would fire
+	// on the whole deployed cohort.
+	t.Run("negative: set-but-empty is not set", func(t *testing.T) {
+		resetAllEnv(t)
+		buf := captureBootLog(t)
+		for _, name := range v3 {
+			t.Setenv(name, "")
+		}
+
+		warnRetiredV3EnvVarsBoot()
+
+		if out := buf.String(); out != "" {
+			t.Errorf("log = %q with every V3 var set-but-empty, want silence", out)
+		}
+	})
+
+	t.Run("negative: nothing set is silent", func(t *testing.T) {
+		resetAllEnv(t)
+		buf := captureBootLog(t)
+
+		warnRetiredV3EnvVarsBoot()
+
+		if out := buf.String(); out != "" {
+			t.Errorf("log = %q on a clean environment, want silence", out)
+		}
+	})
+
+	// No sweep speaks about another vintage's name. This is the runtime half
+	// of the list separation retired_test.go pins statically: two sweeps over
+	// one name would log it twice, with two different releases.
+	//
+	// Separate subtests rather than halves of one, because resetAllEnv only
+	// neutralises config.EnvVars() — the LIVE registry names. A retired name
+	// is by definition not among them, so a t.Setenv on one survives inside
+	// the subtest that made it and only the subtest boundary takes it back.
+	t.Run("the older sweeps do not speak about a V3 name", func(t *testing.T) {
+		resetAllEnv(t)
+		buf := captureBootLog(t)
+		t.Setenv(probe, "600")
+
+		warnRetiredEnvVarsBoot()
+		warnRetiredV2EnvVarsBoot()
+
+		if out := buf.String(); out != "" {
+			t.Errorf("log = %q — an older sweep spoke about a V3 name", out)
+		}
+	})
+
+	t.Run("the V3 sweep does not speak about an older name", func(t *testing.T) {
+		resetAllEnv(t)
+		buf := captureBootLog(t)
+		t.Setenv("CTX_CHAT_HOST", "x")
+		t.Setenv("CTX_DISTILL_LOCAL_ONLY", "true")
+
+		warnRetiredV3EnvVarsBoot()
+
+		if out := buf.String(); out != "" {
+			t.Errorf("log = %q — the V3 sweep spoke about an older vintage's name", out)
+		}
+	})
+
+	// Name-only, like every sibling. These names are not secret-class, but the
+	// rule is the sweep's and not the key's — a path is deployment topology,
+	// and a boot log travels into aggregators.
+	t.Run("no value is ever logged (needle)", func(t *testing.T) {
+		resetAllEnv(t)
+		buf := captureBootLog(t)
+		t.Setenv(probe, needle)
+
+		warnRetiredV3EnvVarsBoot()
+
+		out := buf.String()
+		if !strings.Contains(out, probe) {
+			t.Fatalf("log = %q, want the var name — without the positive half the needle scan proves nothing", out)
+		}
+		if strings.Contains(out, needle) {
+			t.Errorf("the value reached the boot log:\n%s", out)
+		}
+	})
+
+	// Every name of the vintage gets a voice: one line each, none swallowed by
+	// a filter written for another vintage's shape.
+	t.Run("every V3 var is reported", func(t *testing.T) {
+		resetAllEnv(t)
+		buf := captureBootLog(t)
+		for _, name := range v3 {
+			t.Setenv(name, "non-default-value")
+		}
+
+		warnRetiredV3EnvVarsBoot()
+
+		out := buf.String()
+		for _, name := range v3 {
+			if !strings.Contains(out, "env="+name) {
+				t.Errorf("log = %q, missing %s", out, name)
+			}
+		}
+		if n := strings.Count(out, "level=WARN"); n != len(v3) {
+			t.Errorf("got %d WARN lines for %d set vars", n, len(v3))
+		}
+	})
+
+	// This vintage has NO scaffold exemption, and the arm states it as a
+	// property rather than leaving it as an absence: the three names entered
+	// the tracked compose file only in `${NAME:-}` form, so no installation
+	// ever receives one of them with a value nobody chose. Every non-empty
+	// value is therefore an operator's own line and warns.
+	t.Run("every non-empty value warns — no scaffold exemption exists", func(t *testing.T) {
+		for _, name := range v3 {
+			resetAllEnv(t)
+			buf := captureBootLog(t)
+			t.Setenv(name, "any-value")
+
+			warnRetiredV3EnvVarsBoot()
+
+			if !strings.Contains(buf.String(), name) {
+				t.Errorf("log = %q, want the WARN on %s — with no exemption every non-empty value warns", buf.String(), name)
+			}
+		}
+	})
+}
+
+// TestBothRetirementSweepsAreWiredAtBoot pins the CALL SITE of all six boot
 // sweeps, which is the one property every behaviour test above misses: they
 // call the functions directly, so a sweep deleted from the boot block keeps
 // them all green while the daemon goes silent. A list with a mechanism nobody
-// runs is a list without a mechanism — the exact failure mode the second
-// vintage was given four consumers to avoid.
+// runs is a list without a mechanism — the exact failure mode the successorless
+// vintages were given their own consumers to avoid.
 //
 // Source-level rather than behavioural because the alternative is booting a
 // daemon: main() takes a pool, a listener and a full config before it reaches
 // this block. The AST walk is precise where a grep would not be — it counts
-// CALLS, so the four names in comments and doc blocks around them do not
-// count, and it reads the non-test files of this package only.
+// CALLS, so the names in comments and doc blocks around them do not count, and
+// it reads the non-test files of this package only.
 func TestBothRetirementSweepsAreWiredAtBoot(t *testing.T) {
 	entries, err := os.ReadDir(".")
 	if err != nil {
@@ -524,6 +720,8 @@ func TestBothRetirementSweepsAreWiredAtBoot(t *testing.T) {
 		"warnRetiredSettingRowsBoot":   "",
 		"warnRetiredV2EnvVarsBoot":     "",
 		"warnRetiredV2SettingRowsBoot": "",
+		"warnRetiredV3EnvVarsBoot":     "",
+		"warnRetiredV3SettingRowsBoot": "",
 	}
 	count := map[string]int{}
 	fset := token.NewFileSet()
@@ -583,7 +781,7 @@ func TestBothRetirementSweepsAreWiredAtBoot(t *testing.T) {
 	host := want["warnRetiredEnvVarsBoot"]
 	for name, in := range want {
 		if in != host {
-			t.Errorf("%s is called in %s, the others in %s — the four sweeps belong in one boot block", name, in, host)
+			t.Errorf("%s is called in %s, the others in %s — every sweep belongs in one boot block", name, in, host)
 		}
 	}
 }

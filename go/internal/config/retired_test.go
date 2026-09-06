@@ -258,27 +258,48 @@ func TestGamingKeysStayOutOfTheRetiredList(t *testing.T) {
 //
 // Three assertions, three ways the separation can rot:
 //
-//  1. No name in both maps, and no derived env name in both lists.
+//  1. No name in two maps, and no derived env name in two lists — checked
+//     over every PAIR of vintages, not only against the first one. With three
+//     lists the interesting collision is the one between the two successorless
+//     vintages, which a first-vintage-only check would walk straight past.
 //  2. RetiredEnvNames() stays at 29. It is the first vintage's pin, quoted
 //     verbatim by retireddocs_test.go, and the only reason a second list
 //     exists instead of a longer first one.
-//  3. Every V2 value is a non-empty Ist statement. The map's VALUE is the
-//     whole difference to the first vintage, it reaches no wire (E13: the key
-//     answers a plain 404), and nothing else would catch rot in it.
+//  3. Every V2 and V3 value is a non-empty Ist statement. The map's VALUE is
+//     the whole difference to the first vintage, it reaches no wire (E13: the
+//     key answers a plain 404), and nothing else would catch rot in it.
 func TestRetirementVintagesStaySeparate(t *testing.T) {
-	for key := range retiredKeysWithoutSuccessor {
-		if _, both := retiredSettingKeys[key]; both {
-			t.Errorf("%s is in BOTH retirement lists — one key, two releases in the boot text and two delete migrations", key)
-		}
+	// Every pair, both directions covered by the index pairing. Written over a
+	// slice rather than as hand-written pairs so a fourth vintage joins the
+	// gate by being added to the list, instead of by somebody remembering to
+	// write three more comparisons.
+	vintages := []struct {
+		name string
+		keys map[string]string
+		env  []string
+	}{
+		{"V1", retiredSettingKeys, RetiredEnvNames()},
+		{"V2", retiredKeysWithoutSuccessor, RetiredV2EnvNames()},
+		{"V3", retiredKeysWithoutSuccessorV3, RetiredV3EnvNames()},
 	}
-
-	v1 := map[string]bool{}
-	for _, name := range RetiredEnvNames() {
-		v1[name] = true
-	}
-	for _, name := range RetiredV2EnvNames() {
-		if v1[name] {
-			t.Errorf("%s is swept by both vintages — the env tripwire would log it twice, with two different releases", name)
+	for i, a := range vintages {
+		for _, b := range vintages[i+1:] {
+			for key := range b.keys {
+				if _, both := a.keys[key]; both {
+					t.Errorf("%s is in BOTH %s and %s — one key, two releases in the boot text and two delete migrations",
+						key, a.name, b.name)
+				}
+			}
+			inA := map[string]bool{}
+			for _, name := range a.env {
+				inA[name] = true
+			}
+			for _, name := range b.env {
+				if inA[name] {
+					t.Errorf("%s is swept by %s and %s — the env tripwire would log it twice, with two different releases",
+						name, a.name, b.name)
+				}
+			}
 		}
 	}
 
@@ -307,9 +328,72 @@ func TestRetirementVintagesStaySeparate(t *testing.T) {
 		}
 	}
 
-	for key, ist := range retiredKeysWithoutSuccessor {
-		if strings.TrimSpace(ist) == "" {
-			t.Errorf("retired key %s carries no Ist statement — the VALUE is what makes this a separate vintage", key)
+	if got, want := len(RetiredV3KeyNames()), len(retiredKeysWithoutSuccessorV3); got != want {
+		t.Errorf("RetiredV3KeyNames() returned %d keys, map has %d", got, want)
+	}
+	if got, want := len(RetiredV3EnvNames()), len(retiredKeysWithoutSuccessorV3); got != want {
+		t.Errorf("RetiredV3EnvNames() returned %d names, map has %d", got, want)
+	}
+	if !sort.StringsAreSorted(RetiredV3KeyNames()) || !sort.StringsAreSorted(RetiredV3EnvNames()) {
+		t.Errorf("the V3 lists are not sorted — same diffability contract as the V1 pair")
+	}
+	v3Env := map[string]bool{}
+	for _, name := range RetiredV3EnvNames() {
+		v3Env[name] = true
+	}
+	for _, key := range RetiredV3KeyNames() {
+		if derived := retiredEnvName(key); !v3Env[derived] {
+			t.Errorf("%s: derived env name %q is not in RetiredV3EnvNames() (%v) — both lists must come from the same derivation",
+				key, derived, RetiredV3EnvNames())
+		}
+	}
+
+	for _, v := range []struct {
+		name string
+		keys map[string]string
+	}{
+		{"V2", retiredKeysWithoutSuccessor},
+		{"V3", retiredKeysWithoutSuccessorV3},
+	} {
+		for key, ist := range v.keys {
+			if strings.TrimSpace(ist) == "" {
+				t.Errorf("%s retired key %s carries no Ist statement — the VALUE is what makes this a separate vintage", v.name, key)
+			}
+		}
+	}
+}
+
+// TestRetiredV3KeysLeftTheRegistry is the third vintage's cut gate, and the
+// twin of TestRetiredV2KeysLeftTheRegistry: the registry half of "GET
+// /api/settings does not serve it any more". The list (handler.HandleList) is
+// built from config.Keys(), which walks registry(), so an unregistered key
+// cannot appear in the response, in the CLI's settings list or in the web UI.
+// A name back in the registry would revive every stale row on it as effective
+// configuration.
+//
+// It also pins the env surface and the description table: the key's variable
+// must be gone from EnvVars(), or the cut removed the struct field and left a
+// reader behind, and a description without a registered key is a dangling half
+// of the same cut.
+func TestRetiredV3KeysLeftTheRegistry(t *testing.T) {
+	for _, key := range RetiredV3KeyNames() {
+		if info, registered := KeyByName(key); registered {
+			t.Errorf("%s is registered again (env %q) — a retired name back in the registry is served by "+
+				"GET /api/settings and revives every stale row on it", key, info.EnvVar)
+		}
+	}
+	live := map[string]bool{}
+	for _, name := range EnvVars() {
+		live[name] = true
+	}
+	for _, name := range RetiredV3EnvNames() {
+		if live[name] {
+			t.Errorf("%s is still in EnvVars() — the env surface must go with the key", name)
+		}
+	}
+	for _, key := range RetiredV3KeyNames() {
+		if _, described := keyDescriptions[key]; described {
+			t.Errorf("%s still carries a registry description — a description without a registered key is a dangling half of the cut", key)
 		}
 	}
 }

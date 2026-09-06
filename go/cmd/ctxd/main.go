@@ -94,11 +94,18 @@ func bootLoadBackendPool(ctx context.Context, p *backends.Pool, reload, reconcil
 // at, and a different delete migration. An operator asking "how many rows of
 // the vintage my upgrade is about are still there" gets an answer from the
 // label; with one shared value he would get the sum of two windows.
+//
+// The _v3 pair follows the _v2 pair for the same reason it exists at all
+// (config/retired.go, retiredKeysWithoutSuccessorV3): another release, another
+// delete migration, another remedy window. An operator counting the rows of
+// HIS upgrade must not get the sum of two windows back.
 const (
 	deprecationRetiredEnv   = "retired_env"
 	deprecationRetiredRow   = "retired_settings_row"
 	deprecationRetiredEnvV2 = "retired_env_v2"
 	deprecationRetiredRowV2 = "retired_settings_row_v2"
+	deprecationRetiredEnvV3 = "retired_env_v3"
+	deprecationRetiredRowV3 = "retired_settings_row_v3"
 )
 
 // retiredEnvTripwireSuffixes selects the VALUE-BEARING half of the 29 retired
@@ -283,6 +290,54 @@ func warnRetiredV2EnvVarsBoot() {
 	}
 }
 
+// retiredV3Release is the release the THIRD retirement vintage's keys
+// disappear in. Its own constant for the reason retiredV2Release is not
+// retiredMajor: each vintage is a different window with a different remedy,
+// and a line naming the wrong release sends an operator to a runbook section
+// about keys he never had.
+const retiredV3Release = "v5.17.0"
+
+// warnRetiredV3EnvVarsBoot is the ENV half of the THIRD retirement vintage's
+// boot sweep — the twin of warnRetiredV2EnvVarsBoot, closing the same gap for
+// the same reason: the loader is registry-driven, so a deployment that still
+// exports one of these variables boots in perfect silence, and the boot log is
+// the one channel that reaches a concrete deployment without anybody reading
+// anything first.
+//
+// The REASON in the text is sharper than V2's. There the key had no successor
+// because its value had stopped being read; here the SUBJECT is gone — the
+// reader of the foreign agent state file and its distillsource adapter fell in
+// v5.17.0, so the source these variables configured does not exist any more.
+// That distinction is what keeps an operator from looking for a replacement
+// key: there is no source left to point one at.
+//
+// NO SCAFFOLD LIST, and that is a measured absence rather than an omission.
+// V1 and V2 each carry one because a name declared in the tracked compose file
+// arrives set and NON-EMPTY on a whole cohort that never chose it. These three
+// names never had such a declaration on any release: they entered the tracked
+// compose file only with the `${NAME:-}` rewrite (T05-5, v5.16.0) and were
+// absent from every file before it. So the value filter below already covers
+// every untouched installation, and an exemption map would have no entry to
+// hold — a name that arrives non-empty here is an operator's own line.
+//
+// The VALUE FILTER stays byte for byte: empty env is unset for FromEnv
+// (load.go), so a compose file that materialises the name as `${VAR:-}` must
+// not produce a line here either. NAME-ONLY, like the whole sweep — the line
+// carries the var name and the way out, never what was in it.
+func warnRetiredV3EnvVarsBoot() {
+	for _, name := range config.RetiredV3EnvNames() {
+		val, set := os.LookupEnv(name)
+		if !set || val == "" {
+			continue
+		}
+		slog.Warn("settings: retired env var "+name+" is set — ignored since "+retiredV3Release+
+			"; the source it configured was removed with the key, so there is nothing to move the"+
+			" value to and the variable can be dropped from .env and from the compose file"+
+			" (docs/operations.md)",
+			"deprecation", deprecationRetiredEnvV3, "env", name)
+	}
+}
+
 // warnRetiredSettingRowsBoot names every context_settings row that still sits
 // on one of the 29 retired keys, in EVERY scope (A06-A1, design/06 §3.4 #2).
 //
@@ -380,6 +435,59 @@ func warnRetiredV2SettingRowsBoot(ctx context.Context, pool *pgxpool.Pool) {
 			"(docs/operations.md)"
 		slog.Warn(msg,
 			"deprecation", deprecationRetiredRowV2,
+			"key", ref.Key, "scope", ref.Scope)
+	}
+}
+
+// warnRetiredV3SettingRowsBoot is the ROW half of the third vintage: every
+// context_settings row still sitting on one of its keys, in EVERY scope. Twin
+// of warnRetiredV2SettingRowsBoot, and its only channel to a foreign
+// installation for the same reason — after the registry cut the row is neither
+// served by the registry-driven GET /api/settings nor admitted by the settings
+// build (it becomes an "unknown settings key" Issue on the OVERRIDE,
+// config/build.go), and a tenant-scoped one is not read at boot at all. The
+// delete migration of this vintage sweeps what exists at upgrade time; a row
+// this sweep still finds was written around the API afterwards.
+//
+// Three references of the V1 text are FALSE here and are therefore absent:
+// v5.0.0, Migration 133, and "the pool owns this value now". So is V2's
+// release — this vintage has its own.
+//
+// The remedy is EXECUTABLE SQL with the scope in it, like both siblings: this
+// binary IS the cut, so DELETE /api/settings/<key> answers 404 in every scope,
+// and naming the closed route would send the operator to a 404 while leaving
+// the row where it is.
+//
+// The length guard is not defensive dressing. store.SettingRowsForKeys refuses
+// an EMPTY key list with an error rather than an empty result (settings.go),
+// because `key = ANY('{}')` would report a clean installation for a reason
+// that has nothing to do with the data. As long as the vintage carries a key
+// the call is made; on a vintage with none the sweep is silent by construction
+// instead of logging a sweep failure every boot.
+//
+// Never fatal, like every boot advisory: a failed sweep degrades to one line
+// saying the sweep failed.
+func warnRetiredV3SettingRowsBoot(ctx context.Context, pool *pgxpool.Pool) {
+	keys := config.RetiredV3KeyNames()
+	if len(keys) == 0 {
+		return
+	}
+	refs, err := store.SettingRowsForKeys(ctx, pool, keys)
+	if err != nil {
+		slog.Warn("settings: retired-key row sweep (third vintage) failed — retired settings rows cannot be reported this boot",
+			"deprecation", deprecationRetiredRowV3, "error", err)
+		return
+	}
+	for _, ref := range refs {
+		// name-only, like its siblings: key and scope are what the operator
+		// needs to act, the row's VALUE never appears in a boot log.
+		msg := "settings: a settings row still holds retired key " + ref.Key + " — retired in " + retiredV3Release +
+			" with no successor; the source it configured was removed with the key, and the settings API " +
+			"answers 404 for it in every scope, so remove the row in the database: " +
+			"DELETE FROM context_settings WHERE key = '" + ref.Key + "' AND scope = '" + ref.Scope + "' " +
+			"(docs/operations.md)"
+		slog.Warn(msg,
+			"deprecation", deprecationRetiredRowV3,
 			"key", ref.Key, "scope", ref.Scope)
 	}
 }
@@ -569,15 +677,18 @@ func main() {
 	// Both halves are advisory only: nothing here changes a value, and a boot
 	// with every retired source set behaves exactly as one with none.
 	//
-	// The second vintage's two halves run in the same block and for the same
-	// reason — one `deprecation=` grep, one place in the log. They carry their
-	// own labels because they are a different window with a different remedy
-	// (config/retired.go, retiredKeysWithoutSuccessor), not because they are a
-	// different kind of message.
+	// The later vintages' halves run in the same block and for the same reason
+	// — one `deprecation=` grep, one place in the log. They carry their own
+	// labels because each is a different window with a different remedy
+	// (config/retired.go, retiredKeysWithoutSuccessor and
+	// retiredKeysWithoutSuccessorV3), not because they are a different kind of
+	// message.
 	warnRetiredEnvVarsBoot()
 	warnRetiredSettingRowsBoot(ctx, pool)
 	warnRetiredV2EnvVarsBoot()
 	warnRetiredV2SettingRowsBoot(ctx, pool)
+	warnRetiredV3EnvVarsBoot()
+	warnRetiredV3SettingRowsBoot(ctx, pool)
 
 	// Evokoa-Clean-Room Achse 03 (design/03 §4.5, wave W03-3): the
 	// schema-contract check. AFTER settings.Bootstrap — the effective

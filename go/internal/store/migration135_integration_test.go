@@ -192,7 +192,7 @@ func TestMigration135_DistillJournal(t *testing.T) {
 	for _, tc := range []struct{ name, cols, vals string }{
 		{"unknown skip_reason", "outcome, skip_reason, finished_at", "'skipped', 'because-i-said-so', now()"},
 		{"unknown outcome", "outcome, finished_at", "'aborted', now()"},
-		{"raw error text instead of a class", "outcome, error, finished_at", "'failed', 'sqlite: disk I/O error at /compose/hermes/data/state.db', now()"},
+		{"raw error text instead of a class", "outcome, error, finished_at", "'failed', 'dial tcp 203.0.113.5:5432: connect: connection refused', now()"},
 		{"unknown plan_strategy", "outcome, plan_strategy, finished_at", "'ok', 'full-scan', now()"},
 		{"finished row without finished_at", "outcome", "'ok'"},
 		{"running row with finished_at", "outcome, finished_at", "'running', now()"},

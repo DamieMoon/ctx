@@ -18,17 +18,14 @@ import (
 // have rejected earlier cannot pass here and look like a validator statement.
 
 // TestDistillDefaultsAreInert pins the posture, not the numbers: a stock
-// install must have the arm off, no source to open, and a sensitivity that no
-// public-eligible backend clears. Those three are the ones that would be a
-// SECURITY difference if they drifted, which is why they are asserted by value
-// and the rest of the group is asserted as "validates clean".
+// install must have the arm off and a sensitivity that no public-eligible
+// backend clears. Those two are the ones that would be a SECURITY difference
+// if they drifted, which is why they are asserted by value and the rest of the
+// group is asserted as "validates clean".
 func TestDistillDefaultsAreInert(t *testing.T) {
 	d := Defaults().Distill
 	if d.Enabled {
 		t.Errorf("distill.enabled default = true, want false — a vanilla ctx install has no agent runtime next to it (E03-1) and must not accumulate a run journal")
-	}
-	if d.SourcePath != "" {
-		t.Errorf("distill.source_path default = %q, want empty — the second half of the default-off posture: enabling the arm without naming a path must still reach no foreign file", d.SourcePath)
 	}
 	if d.BlockSensitivity != backends.SensCredentials {
 		t.Errorf("distill.block_sensitivity default = %q, want %q (decision E03-7: \"configurable, default: like credentials\")",
@@ -209,34 +206,13 @@ func TestDistillCounterFloors(t *testing.T) {
 	}
 }
 
-// TestDistillSourceLabelNotEmpty pins the journal's source identity. An empty
-// label collapses every configured source into a source key that starts with
-// ":", so two different state databases would share one watermark series — a
-// silent data merge, which is why the class is fatal and not a warn.
-func TestDistillSourceLabelNotEmpty(t *testing.T) {
-	for _, tc := range []struct {
-		label string
-		want  Severity
-	}{
-		{"", SeverityError},
-		{"   ", SeverityError}, // whitespace is not a name
-		{"hermes", -1},
-	} {
-		issues := Validate(validCfg(t, map[string]string{"distill.source_label": tc.label}))
-		if got := severityFor(issues, "distill.source_label"); got != tc.want {
-			t.Errorf("distill.source_label %q severity = %v, want %v: %v",
-				tc.label, got, tc.want, issuesOn(issues, "distill.source_label"))
-		}
-	}
-}
-
 // TestDistillKeysAreGlobalOnly pins the tenancy classification of the whole
 // group at once. The registry's fail-closed default would already produce it,
-// but the STATEMENT is stronger than the default and belongs in a test: a
-// state database is a single artifact of a single operator, so running the arm
-// over the tenant iteration would write the same foreign content into several
-// scopes. A tenant-overridable tag slipping in later is a cross-tenant write
-// path, not a convenience.
+// but the STATEMENT is stronger than the default and belongs in a test: the
+// arm holds exactly ONE scope for read and write and never iterates tenants —
+// distillScope resolves that scope out of the _global snapshot — so a
+// tenant-overridable tag would promise a per-tenant reading that no tick ever
+// performs, and it is the shape in which a cross-tenant write path arrives.
 func TestDistillKeysAreGlobalOnly(t *testing.T) {
 	seen := 0
 	for _, e := range registry() {

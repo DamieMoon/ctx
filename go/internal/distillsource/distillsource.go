@@ -1,8 +1,8 @@
 // Package distillsource is the contract between the distillation arm and the
 // stores it reads. It carries types and error classes only — no query, no
-// driver, no configuration. Everything store-specific (SQLite strategies and
-// plan assertions, SQL, WAL semantics, content decoding) lives behind an
-// implementation and never appears here.
+// driver, no configuration. Everything store-specific (query strategies and
+// plan assertions, SQL, transactional semantics, content decoding) lives
+// behind an implementation and never appears here.
 //
 // Three properties hold for every implementation, and each one is a property
 // of this contract rather than of a caller's discipline:
@@ -69,11 +69,10 @@ var (
 // Ref identifies one readable unit of a source, opaque to the arm.
 //
 // Session is the unit AS THE SOURCE ADDRESSES IT and is half of the journal's
-// source_key: the root session id for the ctx checkpoint source, the state.db
-// session row for the hermes adapter — that store has no root-scoped read, so
-// a parent chain there yields one unit per member. Whatever Sessions returns
-// here is a valid argument to HasNew, Head, Read and QuietFor; that is the
-// invariant the field carries, not a claim about session genealogy.
+// source_key — the root session id for the ctx checkpoint source. Whatever
+// Sessions returns here is a valid argument to HasNew, Head, Read and
+// QuietFor; that is the invariant the field carries, not a claim about
+// session genealogy.
 type Ref struct {
 	Session   string
 	Watermark int64
@@ -108,8 +107,8 @@ type Item struct {
 	// compaction.
 	//
 	// A source whose read unit is not a manifest leaves it zero, which is the
-	// honest answer rather than a synthesized one — the hermes adapter reads
-	// one archived row at a time and has no such unit at all.
+	// honest answer rather than a synthesized one — a source has no such unit
+	// at all if its atom is a single row rather than a group of them.
 	Manifest Manifest
 
 	// Sensitivity is the SOURCE's classification of this item. A source
@@ -170,9 +169,8 @@ type Origin struct {
 	// (BlockID, ChunkIndex) or (RowID, ChunkIndex).
 	Ordinal int
 
-	// Role is "user", "assistant", "tool", or "" when unknown. The hermes
-	// adapter reads only tool results, which is why the set is wider than the
-	// two conversational roles of the checkpoint source.
+	// Role is "user", "assistant", "tool", or "" when unknown — the checkpoint
+	// source's own material carries only the two conversational roles.
 	Role string
 }
 
@@ -201,7 +199,7 @@ type Batch struct {
 // Source is the whole contract.
 type Source interface {
 	// Label names the source in logs, journals and the source_key. It is the
-	// operator-facing name ("hermes", "ctx-checkpoint"), not a type.
+	// operator-facing name (e.g. "ctx-checkpoint"), not a type.
 	Label() string
 
 	// Sessions lists the candidate units, newest activity first. It carries no
@@ -229,11 +227,11 @@ type Source interface {
 	// this contract rather than of any implementation: when a source's smallest
 	// INDIVISIBLE unit exceeds the cap, that unit is delivered whole and the
 	// cap is overshot. A source whose atom is a single row never reaches this
-	// case — the hermes adapter reads one archived row at a time and honours
-	// maxItems exactly. A source whose atom is a group of rows does: the ctx
-	// checkpoint source reads a manifest with all of its parts, and the largest
-	// manifest in the live corpus yields 558 items against a rows_per_read of
-	// 400 (measured, A02-3).
+	// case, because one row can never exceed a positive item cap by itself. A
+	// source whose atom is a group of rows does: the ctx checkpoint source
+	// reads a manifest with all of its parts, and the largest manifest in the
+	// live corpus yields 558 items against a rows_per_read of 400 (measured,
+	// A02-3).
 	//
 	// The alternative is worse than the overshoot, and that is why the contract
 	// bends rather than the implementation: a batch that can never cover its

@@ -65,9 +65,11 @@ func (r *record) field(name string) (config.Issue, bool) {
 func TestOpenReportsConfigErrorOnceAndOpensNoPool(t *testing.T) {
 	cleanEnv(t)
 	t.Setenv("CONTEXT_DB_PASSWORD", "x")
-	// Same label on both sides of the distill source split: one watermark
-	// series for two sources, a cross-field error Validate alone can see.
-	t.Setenv("CTX_DISTILL_CTX_SOURCE_LABEL", "hermes")
+	// A blank source label: the journal key would lose its identity, and V28
+	// refuses it fatally. Only Validate can see it — the typed parser takes
+	// the string as given, and a value of spaces is SET for FromEnv, so this
+	// error exists nowhere earlier in the boot order.
+	t.Setenv("CTX_DISTILL_CTX_SOURCE_LABEL", "   ")
 
 	var r record
 	sess, ok := Open(deadCtx(t), r.report, r.poolErr)
@@ -89,10 +91,10 @@ func TestOpenReportsConfigErrorOnceAndOpensNoPool(t *testing.T) {
 	}
 	is, found := r.field("distill.ctx_source_label")
 	if !found {
-		t.Fatalf("the label collision is missing from the reported issues: %+v", r.issues)
+		t.Fatalf("the blank-label refusal is missing from the reported issues: %+v", r.issues)
 	}
 	if is.Severity != config.SeverityError {
-		t.Errorf("label collision has severity %v, want %v", is.Severity, config.SeverityError)
+		t.Errorf("blank label has severity %v, want %v", is.Severity, config.SeverityError)
 	}
 }
 
