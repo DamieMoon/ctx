@@ -68,7 +68,7 @@ var bw1bPerturb = []string{
 
 // ---------------------------------------------------------------------------
 // Shared measurement
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 // bw1bRun is one measurement of the whole query set against whatever ctx_rrf
 // currently is.
@@ -209,7 +209,7 @@ func bw1bInstalledOrderBy(t *testing.T, ctx context.Context, pool *pgxpool.Pool)
 
 // ---------------------------------------------------------------------------
 // Gate (a) + (b): red on Generation 16, green on Generation 17
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 // TestBW1bGen17TieOrderRedGreen is the load-bearing gate. It starts on a
 // database whose migration chain is capped at 138 — a genuine pre-139 state,
@@ -403,7 +403,7 @@ func bw1bAssertSameSetAndScores(t *testing.T, before, after bw1bRun) {
 
 // ---------------------------------------------------------------------------
 // Gate (b2): strict parity and repeat stability on the full chain
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 // TestBW1bGen17StrictOrderParity runs on a database with the COMPLETE
 // migration chain (the shipped state, not a capped one) and drops every
@@ -504,7 +504,7 @@ func TestBW1bGen17StrictOrderParity(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // Gate (c): plan shape
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 // TestBW1bGen17ExplainPlanShape compares the plan of Generation 16's and
 // Generation 17's projection on the fixture.

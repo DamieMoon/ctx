@@ -58,7 +58,7 @@ import (
 
 // ---------------------------------------------------------------------------
 // Fixture
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 const (
 	bw1ScopeA       = "bw1a"  // primary read scope
@@ -211,7 +211,7 @@ func bw1SeedCorpus(t *testing.T, pool *pgxpool.Pool) bw1Fixture {
 
 // ---------------------------------------------------------------------------
 // Call surface
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 // bw1Query is one generated fixture query: the 18-argument surface both
 // functions share.
@@ -368,7 +368,7 @@ func bw1Embedding(k int) []float32 {
 
 // ---------------------------------------------------------------------------
 // Gate (a): fusion parity
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 // TestBW1ArmsFusionParity is the load-bearing gate. For every generated query
 // it calls ctx_rrf and ctx_rrf_arms with identical arguments inside ONE
@@ -534,7 +534,7 @@ func TestBW1ArmsFusionParity(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // Gate (b): visibility parity
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 // TestBW1ArmsVisibilityParity pins that the sister's candidate SET is exactly
 // ctx_rrf's — over a fixture with two read scopes, an excluded type, archived
@@ -561,10 +561,10 @@ func TestBW1ArmsVisibilityParity(t *testing.T) {
 	// through every visibility branch.
 	var sawB, sawGrant, sawDamped bool
 	for id := range armIDs {
-		switch {
-		case fx.scopes[id] == bw1ScopeB:
+		switch fx.scopes[id] {
+		case bw1ScopeB:
 			sawB = true
-		case fx.scopes[id] == bw1ScopeForeign:
+		case bw1ScopeForeign:
 			sawGrant = true
 		}
 		if fx.types[id] == "audit-trail" {
@@ -652,7 +652,7 @@ func bw1AssertSameSet(t *testing.T, label string, want, got map[string]bool) {
 
 // ---------------------------------------------------------------------------
 // Gate (c): negative probe
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 // bw1MakeProbe loads 137_rrf_arms.sql out of the embedded FS, renames the
 // function, applies mutate to the part of the text AFTER `RETURN QUERY` (so a
@@ -771,7 +771,7 @@ func TestBW1ArmsNegativeProbe(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // Gate (d): cap parameters
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 // TestBW1ArmsCapParameters pins the five new parameters: an explicit
 // p_cap_semantic really truncates the semantic arm, and the default call is
@@ -886,7 +886,7 @@ func bw1AssertSameRows(t *testing.T, label string, a, b []armRow) {
 
 // ---------------------------------------------------------------------------
 // Gate (e): GUC seam
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 // TestBW1ArmsGUCSeam proves the ann arm's SET LOCAL really travels out of the
 // function and lasts to the end of the transaction. That is the mechanical

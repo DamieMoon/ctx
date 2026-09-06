@@ -16,7 +16,7 @@
 //     success); a configured transition ⇒ success. RED: skip ValidateTransition ⇒
 //     the invalid target persists with IsError=false.
 //
-// Run: go test -tags=integration ./internal/handler/ -run TestMCPIssue -count=1 -v
+// Run: `go test -tags=integration ./internal/handler/ -run TestMCPIssue -count=1 -v`.
 package handler
 
 import (

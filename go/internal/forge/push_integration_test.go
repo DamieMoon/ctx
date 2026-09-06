@@ -25,7 +25,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// ── spy Forge (records push wire calls; pull methods no-op via fakeForge) ──────
+// ── spy Forge (records push wire calls; pull methods no-op via fakeForge) ──────.
 
 type recordedPatch struct {
 	Number int64
@@ -87,7 +87,7 @@ func (s *pushSpyForge) wireCalls() int {
 	return s.wire
 }
 
-// ── helpers ───────────────────────────────────────────────────────────────────
+// ── helpers ───────────────────────────────────────────────────────────────────.
 
 func pusherWithRegistry(pool *pgxpool.Pool) *Pusher {
 	reg := blocktype.NewRegistry().Snapshot()
@@ -153,7 +153,7 @@ func mapByBlock(t *testing.T, pool *pgxpool.Pool, id string) (forgeID int64, bas
 
 func enablePush(p store.ProjectRow) store.ProjectRow { p.PushEnabled = true; return p }
 
-// ── gates ──────────────────────────────────────────────────────────────────────
+// ── gates ──────────────────────────────────────────────────────────────────────.
 
 // TestPush_DisabledGate (§5.6): push_enabled=false ⇒ 0 wire writes, even with a
 // live ctx-ahead candidate. RED without the gate.

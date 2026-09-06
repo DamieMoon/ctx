@@ -29,7 +29,7 @@
 //     block instead — embedding it. The old block stays parked (memoized,
 //     visible), never silently dropped, never retried forever.
 //
-// Run: go test -tags=integration ./internal/events/ -run TestBackfillHeadOfLine_Integration -count=1 -v
+// Run: `go test -tags=integration ./internal/events/ -run TestBackfillHeadOfLine_Integration -count=1 -v`.
 package events
 
 import (

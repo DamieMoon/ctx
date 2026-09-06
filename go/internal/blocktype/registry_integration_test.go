@@ -25,7 +25,7 @@ import (
 	"github.com/GottZ/ctx/migrations"
 )
 
-// ── slog capture ─────────────────────────────────────────────────────────────
+// ── slog capture ─────────────────────────────────────────────────────────────.
 
 type capturedRecord struct {
 	level slog.Level

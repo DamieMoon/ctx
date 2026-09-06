@@ -23,7 +23,7 @@
 //     verifying drain, paused idle, ClearEmbedding convergence, runtime
 //     index lifecycle (CIC / INVALID recovery / terminal drop).
 //
-// Run: go test -tags=integration ./internal/events/ -run TestEmbedMigrate_Integration -count=1 -v
+// Run: `go test -tags=integration ./internal/events/ -run TestEmbedMigrate_Integration -count=1 -v`.
 package events
 
 import (

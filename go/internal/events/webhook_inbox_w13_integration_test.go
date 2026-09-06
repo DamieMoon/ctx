@@ -12,7 +12,7 @@
 //     payload (§5.3 §9.2(f) — the block state is driven by the sync PULL, not the
 //     webhook body). Proven: draining creates ZERO context_blocks.
 //
-// Run: go test -tags=integration ./internal/events/ -run TestWebhookInboxW13 -count=1 -v
+// Run: `go test -tags=integration ./internal/events/ -run TestWebhookInboxW13 -count=1 -v`.
 package events
 
 import (

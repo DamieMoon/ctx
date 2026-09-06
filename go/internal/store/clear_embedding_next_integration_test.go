@@ -16,7 +16,7 @@
 // embedding_next/embed_model_next columns) already exists at RED time —
 // the columns exist, ClearEmbedding just doesn't touch them yet.
 //
-// Run: go test -tags=integration ./internal/store/ -run TestClearEmbedding_NextExtension -count=1 -v
+// Run: `go test -tags=integration ./internal/store/ -run TestClearEmbedding_NextExtension -count=1 -v`.
 package store_test
 
 import (

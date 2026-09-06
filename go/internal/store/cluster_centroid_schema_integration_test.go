@@ -8,7 +8,7 @@
 // internal/overview/centroid_integration_test.go geprüft, der Lese-Pfad in
 // internal/rrf.
 //
-// Run: go test -tags=integration ./internal/store/ -run TestClusterCentroidSchema -count=1 -v
+// Run: `go test -tags=integration ./internal/store/ -run TestClusterCentroidSchema -count=1 -v`.
 package store_test
 
 import (

@@ -12,7 +12,7 @@
 //   - Retention eviction is INDEX-driven: EXPLAIN names idx_webhook_done, never a
 //     Seq Scan (§3.4), and EvictWebhookEvents removes only OLD processed rows.
 //
-// Run: go test -tags=integration ./internal/store/ -run TestWebhookW13 -count=1 -v
+// Run: `go test -tags=integration ./internal/store/ -run TestWebhookW13 -count=1 -v`.
 package store_test
 
 import (

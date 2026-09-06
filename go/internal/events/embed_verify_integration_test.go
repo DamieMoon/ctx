@@ -23,7 +23,7 @@
 //     idempotency across paused→resume→verifying with HNSW index REUSE
 //     (relfilenode-pinned, never a rebuild).
 //
-// Run: go test -tags=integration ./internal/events/ -run TestEmbedVerify_Integration -count=1 -v
+// Run: `go test -tags=integration ./internal/events/ -run TestEmbedVerify_Integration -count=1 -v`.
 package events
 
 import (

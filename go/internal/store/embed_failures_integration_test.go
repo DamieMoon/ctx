@@ -18,7 +18,7 @@
 //   - EmbedFailureExcludedPredicate actually excludes a backed-off block and
 //     stops excluding it once next_attempt_at lapses.
 //
-// Run: go test -tags=integration ./internal/store/ -run TestEmbedFailures -count=1 -v
+// Run: `go test -tags=integration ./internal/store/ -run TestEmbedFailures -count=1 -v`.
 package store_test
 
 import (

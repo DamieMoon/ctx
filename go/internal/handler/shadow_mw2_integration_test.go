@@ -209,7 +209,7 @@ func mw2Digest(s string) string {
 
 // ---------------------------------------------------------------------------
 // Probes (a)-(e), (g): the fail-closed gate table (§4.2 G1-G5, G7)
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 // TestMW2GateTable pins six of the seven gates by their answer code.
 //
@@ -294,7 +294,7 @@ func TestMW2GateTable(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // Review finding #3: the F-1 core — no flag can override the deny-list
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 // TestMW2DenyListBeatsAFlippedFlag pins the scenario changelog F-1 exists for,
 // and it is the ONLY test that can: everywhere else `checkpoint` is refused by
@@ -376,7 +376,7 @@ func TestMW2DenyListBeatsAFlippedFlag(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // Probe (h): rows yes, sources no
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 // TestMW2ShadowRowsNeverBecomeSources is the happy path and the containment
 // claim in one: the shadow block ranks into the arm rows and the fusion order
@@ -433,7 +433,7 @@ func TestMW2ShadowRowsNeverBecomeSources(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // Review finding #1: the embed backfill is a SECOND chain on the same request
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 // TestMW2SkipsEmbedBackfill closes the hole the adversarial review found in the
 // chain-locality obligation.
@@ -501,7 +501,7 @@ func mw2HasEmbedding(t *testing.T, pool *pgxpool.Pool, id string) bool {
 
 // ---------------------------------------------------------------------------
 // Probe (k): scope
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 // TestMW2ShadowRespectsScope pins that the seam widens the TYPE allowlist and
 // nothing else: an identical shadow block in a foreign scope stays invisible.
@@ -524,7 +524,7 @@ func TestMW2ShadowRespectsScope(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // Probe (f): the forced rerank shutdown (G6)
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 // mw2RerankConfig arms the reranker. With no backend carrying the rerank role
 // the dispatch takes the LLM-as-judge branch — a chat-wire call over the
@@ -605,7 +605,7 @@ func mw2WaitJudgeRows(t *testing.T, pool *pgxpool.Pool, want int) int {
 
 // ---------------------------------------------------------------------------
 // The chain-locality obligation that follows from G6
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 // TestMW2RefusesNonLANChain pins the obligation of §4.2: every role a shadow
 // request can still resolve a chain for must be locality=lan. The live pool
@@ -654,7 +654,7 @@ func TestMW2RefusesNonLANChain(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // Probe (i): the response without the field is byte-identical
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 // mw2PreWaveMeasurementSHA is the sha256 of the FIRST arm_ranks measurement
 // response over this fixture, captured against the UNCHANGED tree (M-W1 tip
@@ -684,7 +684,7 @@ func TestMW2ByteIdenticalWithoutField(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // Probe (j), allocation half: the measurement slice is a copy
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 // TestMW2MeasureSliceIsACopy pins the ALLOCATION half of §4.2's two-slice rule:
 // the measurement slice is a clone plus the shadow names, so nothing holding

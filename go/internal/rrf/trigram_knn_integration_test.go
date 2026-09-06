@@ -76,7 +76,7 @@ const (
 
 // ---------------------------------------------------------------------------
 // Lifting the CTE out of the migration
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 // vw4Params maps the plpgsql parameter names that occur inside trigram_title
 // to the placeholder cast they need. The order fixes the $n numbering and must
@@ -196,7 +196,7 @@ func vw4RunCTE(t *testing.T, ctx context.Context, pool *pgxpool.Pool, file, quer
 
 // ---------------------------------------------------------------------------
 // Plan inspection
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 // vw4Node is the slice of an EXPLAIN (FORMAT JSON) node this gate reasons
 // about; the rest of the node is deliberately not decoded.
@@ -270,7 +270,7 @@ func vw4ExplainText(t *testing.T, ctx context.Context, pool *pgxpool.Pool, file,
 
 // ---------------------------------------------------------------------------
 // Fixtures
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 // vw4SeedBig writes n visible rows in one statement. Titles carry a stable
 // prefix plus two md5 digests so the corpus has real trigram variation instead
@@ -417,7 +417,7 @@ func vw4IndexAM(t *testing.T, ctx context.Context, pool *pgxpool.Pool, name stri
 
 // ---------------------------------------------------------------------------
 // Gate 1 + 2 + 3: red plan, index-scan plan, capped estimate at >= 100k rows
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 func TestVW4TrigramKNNPlanShape(t *testing.T) {
 	pool := testdb.SetupTestDBUpTo(t, 139)
@@ -530,7 +530,7 @@ func TestVW4TrigramKNNPlanShape(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // Gate 4a: set identity where at least `cap` rows clear the threshold
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 func TestVW4TrigramKNNSetIdentity(t *testing.T) {
 	pool := testdb.SetupTestDBUpTo(t, 139)
@@ -564,7 +564,7 @@ func TestVW4TrigramKNNSetIdentity(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // Gate 4b/4c: the post-filter, and the proof that it is load-bearing
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 func TestVW4TrigramKNNPostFilter(t *testing.T) {
 	pool := testdb.SetupTestDBUpTo(t, 139)
@@ -616,7 +616,7 @@ func TestVW4TrigramKNNPostFilter(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // The index guard: pre-built index and the large-table branch
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 // TestVW4IndexGuard pins the two branches of 140's DO block that the runbook
 // in its header promises but that a normal migration run never reaches.
@@ -690,7 +690,7 @@ func TestVW4IndexGuard(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // The guard checks the DEFINITION, not the name (review V-W4, finding #1)
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 // vw4MigrateCapturingNotices completes the migration chain over a pool of its
 // own making so the server's NOTICE/WARNING traffic is observable. testdb's
@@ -798,7 +798,7 @@ func TestVW4IndexGuardDefinition(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // The inner tiebreak `, cb.id` (review V-W4, finding #2)
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 // vw4RunCTEUnder runs the lifted CTE inside a transaction with the given
 // `SET LOCAL` statements applied, and returns the plan alongside the rows so a
@@ -909,7 +909,7 @@ func TestVW4TrigramInnerTiebreak(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // Gate 5: parity between the two bodies, and its sensitivity
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 // vw4FusionMismatch runs the B-W1 query set and counts the delivered positions
 // where ctx_rrf's score differs from the offline fusion of ctx_rrf_arms' ranks.

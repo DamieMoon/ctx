@@ -10,7 +10,7 @@
 // state.go's Transition) — this file pins the DB objects themselves, mirroring
 // embed_failures_integration_test.go's "schema_objects_present" contract.
 //
-// Run: go test -tags=integration ./internal/store/ -run TestEmbedMigrationsSchema -count=1 -v
+// Run: `go test -tags=integration ./internal/store/ -run TestEmbedMigrationsSchema -count=1 -v`.
 package store_test
 
 import (

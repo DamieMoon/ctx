@@ -92,7 +92,7 @@ const (
 
 // ---------------------------------------------------------------------------
 // Lifting the two FTS CTEs out of a migration file
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 // opsw1Subst maps the plpgsql parameter names occurring inside fulltext_de /
 // fulltext_en to the SQL text they are replaced by. p_types_visible is the ONE
@@ -196,7 +196,7 @@ func opsw1VisibleLiteral(types []string) string {
 
 // ---------------------------------------------------------------------------
 // Plan inspection
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 type opsw1Node struct {
 	NodeType  string      `json:"Node Type"`
@@ -272,7 +272,7 @@ type pgxQuerier interface {
 
 // ---------------------------------------------------------------------------
 // Fixture
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 // opsw1Seed writes n rows carrying all four classes this wave reasons about —
 // visible types, the two deny-listed ones, and the two shadow-measurable
@@ -388,7 +388,7 @@ func opsw1PredOf(st opsw1IndexState) string {
 
 // ---------------------------------------------------------------------------
 // Gate 1 + 2 + 5: red plan (full GIN), green plan (partial GIN), sizes
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 func TestOPSW1PlanShapeAndSize(t *testing.T) {
 	pool := testdb.SetupTestDBUpTo(t, 144)
@@ -514,7 +514,7 @@ func TestOPSW1PlanShapeAndSize(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // Gate 5: the size, measured on a LIVE-SHAPED fixture
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 // opsw1LiveShape mirrors the live census of 2026-08-27 (context_store), scaled
 // down by ten in ROW count while keeping each type's characteristic text size —
@@ -606,7 +606,7 @@ func TestOPSW1LiveShapedIndexSize(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // Gate 2b: the implication is what carries the index — the generic-plan proof
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 // TestOPSW1ImplicationIsLoadBearing is the negative probe of gate 2: with the
 // static conjunct removed, the SAME CTE stops using the partial FTS index.
@@ -711,7 +711,7 @@ func opsw1ImplicationProbe(t *testing.T, ctx context.Context, pool *pgxpool.Pool
 
 // ---------------------------------------------------------------------------
 // Gate 3: set identity across the wave
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 func opsw1IDs(t *testing.T, ctx context.Context, pool *pgxpool.Pool, stmt string) []string {
 	t.Helper()
@@ -815,7 +815,7 @@ func TestOPSW1SetIdentity(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // Gate 4: the shadow probe — the negative probe of the deny-list CHOICE
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 // TestOPSW1ShadowTypeStaysFindable is gate 4, the probe that makes the
 // design decision ("hard deny-list, NOT all excluded types") load-bearing:
@@ -953,7 +953,7 @@ func TestOPSW1AllExcludedPredicateBreaksTheShadowArm(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // The predicate normal form, pinned against a freshly built index
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 // TestOPSW1PredicateNormalForm pins the string migration 145's DO block compares
 // against. The guard recognises an already-built target index by its predicate
@@ -998,11 +998,11 @@ func TestOPSW1PredicateNormalForm(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // The index guard: the branches a normal migration run never reaches
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 // ---------------------------------------------------------------------------
 // The mass guard: the axis the rebuild cost actually runs on (review A1 / #4)
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 // opsw1MassGuardLiteral is the byte threshold migration 145 compares against,
 // spelled as the decimal literal the file carries so the scratch substitution
@@ -1375,7 +1375,7 @@ func TestOPSW1IndexGuard(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // The named consequence: a tenant overlay that lifts the deny-list
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 // TestOPSW1TenantOverlayShadowsFTS pins the ONE case in which the static
 // conjunct is NOT a no-op, so a later change cannot walk past it silently.

@@ -11,7 +11,7 @@
 // die Rune-genaue Längengrenze und die "als gelabelt markiert, aber leer"-
 // Sperre.
 //
-// Run: go test -tags=integration ./internal/store/ -run TestClusterTopicLabelSchema -count=1 -v
+// Run: `go test -tags=integration ./internal/store/ -run TestClusterTopicLabelSchema -count=1 -v`.
 package store_test
 
 import (

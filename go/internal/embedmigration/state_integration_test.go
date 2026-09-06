@@ -9,7 +9,7 @@
 // verify_started_at, finished_at, abort_reason, rollback_reason) atomically
 // with the status flip.
 //
-// Run: go test -tags=integration ./internal/embedmigration/ -run TestTransition -count=1 -v
+// Run: `go test -tags=integration ./internal/embedmigration/ -run TestTransition -count=1 -v`.
 package embedmigration_test
 
 import (

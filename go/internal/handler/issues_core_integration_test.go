@@ -20,7 +20,7 @@
 //	manage issue-create without a scope    ⇒ the HOME scope (fallback)
 //	MCP    issue_create                    ⇒ the HOME scope, always
 //
-// Run: go test -tags=integration -p 1 -run TestIssueScopeSources ./internal/handler/
+// Run: `go test -tags=integration -p 1 -run TestIssueScopeSources ./internal/handler/`.
 package handler
 
 import (
@@ -150,7 +150,7 @@ func TestIssueScopeSourcesStayThree_Integration(t *testing.T) {
 // its own. Without this test the core's entry check would be unwatched (W10) and
 // an out-of-policy status would silently become a 200.
 //
-// Run: go test -tags=integration -p 1 -run TestIssueCreateEntryTransition ./internal/handler/
+// Run: `go test -tags=integration -p 1 -run TestIssueCreateEntryTransition ./internal/handler/`.
 func TestIssueCreateEntryTransitionIsPolicyGated_Integration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("integration test")

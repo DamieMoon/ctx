@@ -23,7 +23,7 @@
 //	(3) Fallback:   ein Typ OHNE Registry-Zeile wird weiter gepickt
 //	    (+ Positiv-Kontrolle knowledge und audit-trail/damped)
 //
-// Run: go test -tags=integration ./internal/handler/ -run TestBackfillPending_RetrievalExcludedType_Integration -count=1 -v
+// Run: `go test -tags=integration ./internal/handler/ -run TestBackfillPending_RetrievalExcludedType_Integration -count=1 -v`.
 package handler
 
 import (

@@ -18,6 +18,7 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -162,7 +163,7 @@ func TestProjectSyncW11_Integration(t *testing.T) {
 				if rec.Code != tc.want {
 					t.Fatalf("%s: status %d, want %d (body=%s)", tc.name, rec.Code, tc.want, rec.Body.String())
 				}
-				if tc.err == forge.ErrSyncSaturated {
+				if errors.Is(tc.err, forge.ErrSyncSaturated) {
 					if _, ok := w6DecodeBody(t, rec)["retry_after_s"]; !ok {
 						t.Errorf("saturated 409 missing retry_after_s")
 					}

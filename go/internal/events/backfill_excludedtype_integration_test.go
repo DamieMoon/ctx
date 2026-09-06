@@ -17,7 +17,7 @@
 //	Zyklus 2 → Block mit Typ OHNE Registry-Zeile (Fallback bleibt embedbar)
 //	Zyklus 3 → false (nichts mehr pickbar), beide excluded-Blöcke NULL
 //
-// Run: go test -tags=integration ./internal/events/ -run TestBackfillExcludedType_Integration -count=1 -v
+// Run: `go test -tags=integration ./internal/events/ -run TestBackfillExcludedType_Integration -count=1 -v`.
 package events
 
 import (

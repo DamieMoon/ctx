@@ -55,7 +55,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/GottZ/ctx/internal/evalscore"
 	"github.com/GottZ/ctx/internal/testdb"
 )
 
@@ -431,10 +430,72 @@ func (s w01m2ArmStat) share() float64 {
 	return float64(s.Derived) / float64(s.Ranked)
 }
 
+// The two bench numbers this measurement needs, computed here instead of
+// imported. internal/evalscore is the tooling-side scoring vocabulary, and only
+// internal/{armsweep,goldbench,goldset} and cmd/ctx-* may import it (T01-4,
+// design/06 §4.7, enforced by the depguard rule `evalscore-tooling-only` in
+// .golangci.yml). internal/rrf is a domain package and this external test
+// package sits in its directory, so the rule holds for this file — and moving
+// the file into a tooling package instead would drag the B-W1 fixture
+// (arms_parity_integration_test.go, ~195 lines across three files) out from
+// under the seven other files in this package that build on it.
+//
+// Both formulas are the ones evalscore pins in its own layer — RecallAtK
+// (evalscore/rank.go:21) and SRecallAtK (evalscore/diversity.go:43) — including
+// the two details a re-derivation gets wrong: recall divides by |gold|, not by
+// k, and an id repeated inside the window counts once.
+
+// w01m2RecallAt is Recall@k of the gold set over a delivered ranking.
+func w01m2RecallAt(ranked []string, gold map[string]bool, k int) float64 {
+	if k <= 0 || len(ranked) == 0 || len(gold) == 0 {
+		return 0
+	}
+	if k > len(ranked) {
+		k = len(ranked)
+	}
+	seen := make(map[string]bool, k)
+	hits := 0
+	for i := 0; i < k; i++ {
+		id := ranked[i]
+		if seen[id] || !gold[id] {
+			seen[id] = true
+			continue
+		}
+		seen[id] = true
+		hits++
+	}
+	return float64(hits) / float64(len(gold))
+}
+
+// w01m2SRecallAt is subtopic recall: the share of ASPECTS the top-k window
+// covers with at least one member.
+func w01m2SRecallAt(ranked []string, aspects map[string][]string, k int) float64 {
+	if k <= 0 || len(ranked) == 0 || len(aspects) == 0 {
+		return 0
+	}
+	if k > len(ranked) {
+		k = len(ranked)
+	}
+	window := make(map[string]bool, k)
+	for _, id := range ranked[:k] {
+		window[id] = true
+	}
+	covered := 0
+	for _, ids := range aspects {
+		for _, id := range ids {
+			if window[id] {
+				covered++
+				break
+			}
+		}
+	}
+	return float64(covered) / float64(len(aspects))
+}
+
 var w01m2Live = w01m2Kernel{
 	Name: "live",
 	Recall5: func(ranked []string, gold map[string]bool) float64 {
-		return evalscore.RecallAtK(ranked, gold, w01m2Cut)
+		return w01m2RecallAt(ranked, gold, w01m2Cut)
 	},
 	RankOf: func(ranking []w01m2Hit, id string) int {
 		for i, h := range ranking {
@@ -547,7 +608,7 @@ func w01m2Score(k w01m2Kernel, base, cond w01m2Run, derived map[string]bool) w01
 		if r5 < 1.0 {
 			m.Recall5Drop++
 		}
-		srecallSum += evalscore.SRecallAtK(ranked, w01m2Aspects(goldOrder, cond.Attrappen), w01m2Cut)
+		srecallSum += w01m2SRecallAt(ranked, w01m2Aspects(goldOrder, cond.Attrappen), w01m2Cut)
 
 		top1 := goldOrder[0]
 		pos := k.RankOf(cq.Ranking, top1)

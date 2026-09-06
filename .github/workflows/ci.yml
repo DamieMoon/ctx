@@ -78,6 +78,13 @@ jobs:
           # auch der Vorfall vom 05.08. (s. o.). Lint dauert ohne Cache ~1 min.
           skip-cache: true
           only-new-issues: ${{ github.event_name == 'pull_request' }}
+          # NZ-1: KEIN zweiter Lauf mit --build-tags=integration. Der Tag steht
+          # in .golangci.yml (`run.build-tags`), also fährt dieser Schritt ihn
+          # schon — genauso wie .hooks/pre-commit und jedes lokale
+          # `golangci-lint run`. Ein zweiter Aufruf hier wäre dieselbe Wahrheit
+          # zum doppelten Preis und die zweite Stelle, an der der Tag fehlen
+          # kann. Vor NZ-1 lief der Job tag-los und sah keine einzige
+          # `//go:build integration`-Datei (111 Funde, 3 davon Layer-Verstöße).
 
       # T02-7: der Tripwire des Tree-Shaking-Runs. deadcode.sh vergleicht die
       # Erreichbarkeitsanalyse gegen go/deadcode-allow.txt und blockiert in

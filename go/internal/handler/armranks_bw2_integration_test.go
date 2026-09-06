@@ -219,7 +219,7 @@ func bw2DecodeBody(t *testing.T, rec *httptest.ResponseRecorder) map[string]any 
 
 // ---------------------------------------------------------------------------
 // Gates (a)-(c): the fail-closed gate block
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 // TestBW2GateDiscipline pins the three refusals in their order of precedence.
 //
@@ -279,7 +279,7 @@ func TestBW2GateDiscipline(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // Gate (d): the measurement response
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 // TestBW2MeasurementResponse is the happy path: admin + synthesize:false +
 // arm_ranks:true returns the extra block, complete.
@@ -359,7 +359,7 @@ func TestBW2MeasurementResponse(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // Gate (e): access-log provenance
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 // bw2Sources waits for the ASYNC access-log rows of one query and returns
 // their metadata.source values (logAccess runs in its own goroutine).
@@ -430,7 +430,7 @@ func TestBW2AccessLogSource(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // Gate (f): non-regression without the flag
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 // bw2GoldenSHA is the SHA-256 of the response body of
 //
@@ -538,7 +538,7 @@ func TestBW2TransactionCensus(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // Gate (h): the pins
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 // TestBW2PinnedTranslation pins that pinned_translation REPLACES the
 // translation stage rather than merely overwriting its result: the chat

@@ -28,7 +28,7 @@
 //     pool snapshot synchronously reloaded; double-confirm fails the CAS
 //     precondition. Plus memo re-homing, sweep, and cleanup probes.
 //
-// Run: go test -tags=integration ./internal/events/ -run TestEmbedCutover_Integration -count=1 -v
+// Run: `go test -tags=integration ./internal/events/ -run TestEmbedCutover_Integration -count=1 -v`.
 package events
 
 import (

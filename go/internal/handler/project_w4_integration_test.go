@@ -310,7 +310,7 @@ func TestProjectW4_Integration(t *testing.T) {
 	})
 }
 
-// ── Store-level gates: atomicity + K14 prune drain ──────────────────────────
+// ── Store-level gates: atomicity + K14 prune drain ──────────────────────────.
 
 func TestProjectW4_CreateAtomicRollback_Integration(t *testing.T) {
 	if testing.Short() {

@@ -96,9 +96,16 @@ listed, **and** a listed line whose symbol became reachable again (delete the li
 — an allowlist that only grows is a lid, not a policy). `deadcode` only sees
 functions; constants, vars, types and struct fields are covered by the `unused`
 linter in `.golangci.yml`, whose form of the same doctrine is a
-`//nolint:unused // <reason>` at the declaration. Note that the lint run of CI and
-`.hooks/pre-commit` is **tag-less**, so a symbol read only from an
-`//go:build integration` file reads as unused and needs such a line.
+`//nolint:unused // <reason>` at the declaration.
+
+**Lint runs with `//go:build integration` included** (`run.build-tags` in
+`.golangci.yml`, since NZ-1): CI job `lint`, `.hooks/pre-commit` and a local
+`golangci-lint run` all lint the tagged tree in the same single run — the tagged
+run is a superset, the tree carries no `!integration` file. Before that the
+tagged half was invisible and collected 111 findings, three of them depguard
+layer violations. Two consequences: a symbol read only from an integration test
+now counts as used (no `//nolint:unused` line needed for that case), and an
+integration test is held to the same linters as any other file.
 
 **Second ratchet: `bash deadcode.sh testonly`.** Same package set, same doctrine,
 one flag less — the run without `-test` answers the other question: which

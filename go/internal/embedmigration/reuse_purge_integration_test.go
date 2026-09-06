@@ -13,7 +13,7 @@
 //   - Purge: batched column-wise nulling clears every leftover row; refuses
 //     while a non-terminal migration exists.
 //
-// Run: go test -tags=integration ./internal/embedmigration/ -run 'Reuse|Purge' -count=1 -v
+// Run: `go test -tags=integration ./internal/embedmigration/ -run 'Reuse|Purge' -count=1 -v`.
 package embedmigration_test
 
 import (

@@ -271,7 +271,7 @@ func bw5GoldIDs(cases []goldset.Case) []string {
 
 // ---------------------------------------------------------------------------
 // Gate (b): P2 dump parity
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 // TestBW5DumpParity is gate (b): re-fusing a dump record under V0 must
 // reproduce the fusion order the LIVE ctx_rrf produced from the same arm ranks.
@@ -424,7 +424,7 @@ func TestBW5PinsSuppressTheLLMStages(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // Gate (d): the drift negative probe
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 // TestBW5DriftSeesAnInsertMidDump is the first half of gate (d): a block
 // inserted WHILE the dump runs must show up in the after-census.
@@ -532,7 +532,7 @@ func TestBW5DriftAbortsOnAGoldMutation(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // Gate (f): the contamination probe
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 // TestBW5ContaminationProbeAborts is gate (f): a LABELLED block created after
 // the gold stamp's corpus_max_created_at means the gold set and the corpus have
@@ -577,7 +577,7 @@ func TestBW5ContaminationProbeAborts(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // Gate (g): the retry budget
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 // TestBW5RetryBudget is gate (g): two retries are spent, a third failure
 // excludes the case — listed, never replaced.
@@ -672,7 +672,7 @@ func TestBW5GateRefusalIsFatal(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // The additive drift section of /api/manage stats
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 // TestBW5DriftSectionIsAdditiveAndAdminOnly pins the three properties the
 // server-side change was allowed under: opt-in, admin-only, and byte-identical

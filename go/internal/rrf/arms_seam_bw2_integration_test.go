@@ -78,7 +78,7 @@ func bw2Arms(ctx context.Context, q rrf.Querier, dec rrf.SelectorDecision, polic
 
 // ---------------------------------------------------------------------------
 // Gate (f), statement half: what runs, and how often
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 // TestBW2StatementCounts pins the statement budget of the seam. With the
 // selector OFF (the production default) a measurement is exactly two
@@ -172,7 +172,7 @@ func TestBW2ProbeRidesTheQuerier(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // Gate (g): snapshot identity
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 // bw2Intruder inserts one block from a SEPARATE connection — a write the
 // measurement transaction must not be able to see once its snapshot is taken.
@@ -269,7 +269,7 @@ func TestBW2SnapshotIdentity(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // Delegation
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 // TestBW2SearchDelegatesToSearchTx pins that the untouched Search entry point
 // and the new SearchTx produce the same retrieval on the same corpus — the

@@ -97,7 +97,7 @@ func TestWriteLinks_TxAbort_BehaviourMatchesContract(t *testing.T) {
 	if err != nil {
 		// Acceptable: error path with aborted-TX wrapping.
 		msg := err.Error()
-		if !(strings.Contains(msg, "commit") || strings.Contains(msg, "transaction") || strings.Contains(msg, "abort")) {
+		if !strings.Contains(msg, "commit") && !strings.Contains(msg, "transaction") && !strings.Contains(msg, "abort") {
 			t.Errorf("error not recognisable as TX-abort: %v", err)
 		}
 	}

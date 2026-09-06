@@ -10,7 +10,7 @@
 // fail-closed (both the injected-negative and the real-statfs-positive
 // path).
 //
-// Run: go test -tags=integration ./internal/embedmigration/ -count=1 -v
+// Run: `go test -tags=integration ./internal/embedmigration/ -count=1 -v`.
 package embedmigration_test
 
 import (

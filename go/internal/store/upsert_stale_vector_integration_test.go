@@ -32,7 +32,7 @@
 // i.e. embedding IS NOT NULL and embed_model unchanged after a content
 // change — the Ist-Bug from the wave briefing, verbatim.
 //
-// Run: go test -tags=integration ./internal/store/ -run TestUpsertBlock_StaleVector -count=1 -v
+// Run: `go test -tags=integration ./internal/store/ -run TestUpsertBlock_StaleVector -count=1 -v`.
 package store_test
 
 import (

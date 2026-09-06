@@ -8,6 +8,22 @@
 
 version: "2"
 
+# NZ-1 (Nachlauf-Board N3): ohne build-tags ist jede Datei mit
+# `//go:build integration` für golangci-lint unsichtbar — 415 Testdateien, in
+# denen 111 Funde lagen, darunter drei depguard-Verstöße gegen genau die Regeln
+# unten (gemessen 06.09.: 3 depguard, 1 errorlint, 3 staticcheck, 104 godot; die
+# Voreinstellung `max-same-issues: 10` zeigte davon nur 17). Der getaggte Lauf
+# ist eine OBERMENGE des tag-losen: der Baum trägt keine einzige
+# `!integration`-Bedingung (gemessen: 415× `integration`, 0× `!integration`),
+# diese Zeile verliert also keine Datei, sie nimmt die getaggten dazu. Der Tag
+# steht deshalb hier und nicht als zweiter Aufruf in CI-Job und pre-commit-Hook:
+# ein zweiter Lauf wäre Doppelarbeit für dieselbe Wahrheit (frischer Cache,
+# gemessen: 15,4 s getaggt gegenüber 12,5 s tag-los), und zwei Aufrufe können
+# auseinanderlaufen — eine Konfigurationszeile, die jeder Aufrufer liest, nicht.
+run:
+  build-tags:
+    - integration
+
 linters:
   default: none
   enable:

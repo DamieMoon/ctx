@@ -216,9 +216,12 @@ fi
 # ============================================================
 #
 # go vet -tags=integration is the local mirror of the CI matrix leg that
-# broke v3.5.0: `go test -short` and golangci NEVER compile build-tagged
-# _test.go files, so a signature drift in an integration test ships
-# invisibly and only CI goes red (lesson 019ebdb4-65e0, G27→v3.5.1).
+# broke v3.5.0: `go test -short` never compiles build-tagged _test.go files,
+# so a signature drift in an integration test ships invisibly and only CI
+# goes red (lesson 019ebdb4-65e0, G27→v3.5.1). golangci-lint DOES see them
+# since NZ-1 (`run.build-tags: [integration]` in .golangci.yml, one run for
+# both halves) — but it type-checks a package, it does not run `go vet`'s
+# analyzers on the tagged tree, so both gates stay.
 
 STAGED_GO=$(git diff --cached --name-only --diff-filter=ACM -- '*.go')
 if [ -z "$STAGED_GO" ]; then

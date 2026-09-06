@@ -18,7 +18,7 @@
 //   - the pending-peek query uses idx_embedding_pending;
 //   - embed_status/idx_embed_pending are gone, idx_embedding_pending exists.
 //
-// Run: go test -tags=integration ./internal/store/ -run TestEmbedProvenance -count=1 -v
+// Run: `go test -tags=integration ./internal/store/ -run TestEmbedProvenance -count=1 -v`.
 package store_test
 
 import (

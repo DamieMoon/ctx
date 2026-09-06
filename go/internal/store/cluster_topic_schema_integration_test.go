@@ -10,7 +10,7 @@
 // liest oder schreibt ihn. Die Zuordnungs-Semantik (Overlap-Matching, Geburt/
 // Tod/Split/Merge) ist W3 und wird dort geprüft.
 //
-// Run: go test -tags=integration ./internal/store/ -run TestClusterTopicSchema -count=1 -v
+// Run: `go test -tags=integration ./internal/store/ -run TestClusterTopicSchema -count=1 -v`.
 package store_test
 
 import (

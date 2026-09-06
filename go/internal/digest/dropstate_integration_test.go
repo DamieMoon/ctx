@@ -251,7 +251,7 @@ func TestDropDigestState_MigrationShape(t *testing.T) {
 	iTrg := strings.Index(sql, "DROP TRIGGER")
 	iFn := strings.Index(sql, "DROP FUNCTION")
 	iTbl := strings.Index(sql, "DROP TABLE")
-	if iTrg < 0 || iFn < 0 || iTbl < 0 || !(iTrg < iFn && iFn < iTbl) {
+	if iTrg < 0 || iFn < 0 || iTbl < 0 || iTrg >= iFn || iFn >= iTbl {
 		t.Errorf("drop order is trigger=%d function=%d table=%d — must be trigger before function before table", iTrg, iFn, iTbl)
 	}
 

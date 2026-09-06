@@ -14,7 +14,7 @@
 // kurzer Deadline und überlebt den Request-Abbruch; der Block ist ab der
 // nächsten Query durch das Memo-Prädikat ausgeschlossen.
 //
-// Run: go test -tags=integration ./internal/handler/ -run TestBackfillPending_MemoSurvivesRequestCancel -count=1 -v
+// Run: `go test -tags=integration ./internal/handler/ -run TestBackfillPending_MemoSurvivesRequestCancel -count=1 -v`.
 package handler
 
 import (

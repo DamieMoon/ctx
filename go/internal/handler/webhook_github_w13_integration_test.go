@@ -13,7 +13,7 @@
 //   - foreign-scope secret listing does NOT contain the project's webhook secret;
 //   - PATCH webhook_secret_ref ⇒ 422 (server-managed).
 //
-// Run: go test -tags=integration ./internal/handler/ -run TestWebhookW13 -count=1 -v
+// Run: `go test -tags=integration ./internal/handler/ -run TestWebhookW13 -count=1 -v`.
 package handler
 
 import (

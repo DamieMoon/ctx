@@ -21,7 +21,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/GottZ/ctx/internal/backends"
-	"github.com/GottZ/ctx/internal/config"
 	"github.com/GottZ/ctx/internal/derived"
 	"github.com/GottZ/ctx/internal/store"
 	"github.com/GottZ/ctx/internal/testdb"
@@ -87,7 +86,7 @@ func TestDerivedSensitivityWrite_Integration(t *testing.T) {
 	const body = "Drei Quellen, eine Aussage je Quelle, nichts weiter."
 
 	set := rsRegistry(t, pool)
-	noFloor := config.ScopeFloor{}.Apply
+	noFloor := rsFloor(nil)
 
 	// foldOf seeds real source blocks, resolves them and hands back the value the
 	// arm would write. This is the whole point of gate 1 and the reason the first

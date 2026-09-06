@@ -47,7 +47,7 @@ import (
 
 // ---------------------------------------------------------------------------
 // Fixture
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 const (
 	// c23TieBlocks is deliberately larger than the fts cap (100): the tie group
@@ -211,7 +211,7 @@ func c23AssertFixtureShape(t *testing.T, ctx context.Context, pool *pgxpool.Pool
 
 // ---------------------------------------------------------------------------
 // Measurement
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 // c23Fingerprint is one observation of both functions for one query: the
 // full-text arms as (id -> rank) maps, plus what ctx_rrf finally delivered.
@@ -452,7 +452,7 @@ func c23Describe(a, b string) string {
 
 // ---------------------------------------------------------------------------
 // Structure assertion
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 // c23TiebreakSites counts the tiebroken and the untiebroken full-text sort keys
 // in the body the database ACTUALLY runs, read back out of the catalog rather
@@ -484,7 +484,7 @@ func c23TiebreakSites(t *testing.T, ctx context.Context, pool *pgxpool.Pool, fn 
 
 // ---------------------------------------------------------------------------
 // Gate 1 + 2: determinism, red before 147 and green after
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 // TestC23FTSTiebreakRedGreen is the load-bearing gate. It starts on a database
 // whose migration chain is capped at 146 — the genuine shipped state, not a
@@ -583,7 +583,7 @@ func TestC23FTSTiebreakRedGreen(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // Gate 3: ranking non-regression on a tie-free fixture
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 // TestC23TieFreeByteIdentical is the promise that the tiebreak is a LAST sort
 // key and nothing more: where no two candidates score bit-identically, 147 may
@@ -635,7 +635,7 @@ func TestC23TieFreeByteIdentical(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // Gate 4: the two bodies stay clause-identical
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 // TestC23ArmParityOfTiebreak pins that ctx_rrf and ctx_rrf_arms carry the SAME
 // full-text sort keys after 147. The arithmetic parity gate lives in
@@ -672,7 +672,7 @@ func TestC23ArmParityOfTiebreak(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // Gate 5: plan shape
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 // TestC23PlanShape answers the one cost question this migration raises. The
 // tiebreak is written twice per arm — once in the ROW_NUMBER window, once in

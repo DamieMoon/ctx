@@ -24,7 +24,6 @@ import (
 
 	"github.com/GottZ/ctx/internal/backends"
 	"github.com/GottZ/ctx/internal/blocktype"
-	"github.com/GottZ/ctx/internal/config"
 	"github.com/GottZ/ctx/internal/derived"
 	"github.com/GottZ/ctx/internal/store"
 	"github.com/GottZ/ctx/internal/testdb"
@@ -127,6 +126,29 @@ func rsRegistry(t *testing.T, pool *pgxpool.Pool) *blocktype.Set {
 	return reg.Snapshot()
 }
 
+// rsFloor builds a store.SensitivityFloor from a scope→minimum map. It exists
+// because this test package must not import internal/config (F1 layering rule,
+// depguard `config-layering` in .golangci.yml): store takes the floor as a
+// FUNCTION VALUE exactly so the two layers stay separable
+// (resolve_sources.go:16-26), and production hands
+// cfg.Pool.ScopeSensitivityFloor.Apply into that slot from a package that may
+// import config (events/scheduler.go:701, events/topic_label.go:95).
+//
+// The arithmetic is the one config.ScopeFloor.Apply performs one layer up
+// (config/config.go:1121-1127): a scope without an entry passes through, an
+// entry can only RAISE, and the raise is backends.MaxSensitivity — the same
+// shared primitive, not a second implementation of it. The config half of the
+// contract, "an entry raises and only raises", is pinned in its own layer by
+// config.TestScopeFloorApplyOnlyRaises (config/sensitivity_test.go:47).
+func rsFloor(min map[string]backends.Sensitivity) store.SensitivityFloor {
+	return func(s backends.Sensitivity, scope string) backends.Sensitivity {
+		if m, ok := min[scope]; ok {
+			return backends.MaxSensitivity(s, m)
+		}
+		return s
+	}
+}
+
 func TestResolveSources_Integration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("integration test")
@@ -135,9 +157,9 @@ func TestResolveSources_Integration(t *testing.T) {
 	ctx := context.Background()
 	set := rsRegistry(t, pool)
 
-	// No floor entry for this scope: Apply is a pass-through, so every probe
-	// that is NOT about the floor measures the raw fold.
-	noFloor := config.ScopeFloor{}.Apply
+	// No floor entry for this scope: the floor passes the value through, so
+	// every probe that is NOT about the floor measures the raw fold.
+	noFloor := rsFloor(nil)
 
 	const own = "w015"
 
@@ -311,10 +333,13 @@ func TestResolveSources_Integration(t *testing.T) {
 			rsInsert(t, pool, rsSeed{title: "w015-7a-2", scope: floored, sensitivity: "internal"}),
 			rsInsert(t, pool, rsSeed{title: "w015-7a-3", scope: floored, sensitivity: "internal"}),
 		}
-		// The REAL config.ScopeFloor, not a stand-in: the obligation from the
-		// W01-1 review (#6) is that Apply runs HERE, and a hand-rolled fake
-		// would prove that a function ran, not that the policy did.
-		floor := config.ScopeFloor{floored: backends.SensCredentials}.Apply
+		// The obligation from the W01-1 review (#6) is that the floor runs
+		// HERE, and the store half of it is what this package can pin: store
+		// receives the floor as a function value, so the probe shows that the
+		// RECEIVED function decided FlooredMax. rsFloor performs the same
+		// arithmetic on the same primitive as config.ScopeFloor.Apply, whose
+		// own half of the contract is pinned in config's layer (see rsFloor).
+		floor := rsFloor(map[string]backends.Sensitivity{floored: backends.SensCredentials})
 
 		raised, err := store.ResolveSources(ctx, pool, set, floor, ids, floored)
 		if err != nil {

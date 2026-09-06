@@ -50,7 +50,7 @@ func testAdmitter(t *testing.T) dispatch.Admitter {
 	return d
 }
 
-// --- fakes ---
+// --- fakes ---.
 
 type fakeLLM struct {
 	mu        sync.Mutex
@@ -208,7 +208,7 @@ func toolCall(name, args string) llm.ToolCall {
 	return llm.ToolCall{ID: "c1", Type: "function", Function: llm.ToolCallFunction{Name: name, Arguments: json.RawMessage(args)}}
 }
 
-// --- engine tests ---
+// --- engine tests ---.
 
 func TestChatEngine(t *testing.T) {
 	pool := testdb.SetupTestDB(t)
@@ -523,7 +523,7 @@ func TestChatEngine(t *testing.T) {
 	})
 }
 
-// --- executor tests ---
+// --- executor tests ---.
 
 func TestChatExecutor(t *testing.T) {
 	pool := testdb.SetupTestDB(t)

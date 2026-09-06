@@ -21,7 +21,7 @@
 //	SyncCap=4 (Soll, this wave's default)
 //	  → exactly 4 embedded, the rest left pending for Pfad B.
 //
-// Run: go test -tags=integration ./internal/handler/ -run TestBackfillPending_SyncCap_Integration -count=1 -v
+// Run: `go test -tags=integration ./internal/handler/ -run TestBackfillPending_SyncCap_Integration -count=1 -v`.
 package handler
 
 import (

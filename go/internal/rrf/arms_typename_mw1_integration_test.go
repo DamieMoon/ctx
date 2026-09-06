@@ -155,7 +155,7 @@ func mw1CountParityOnly(rows []mw1Row, truth map[string]string) int {
 
 // ---------------------------------------------------------------------------
 // RED anchor
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 // TestMW1ArmsTypeNameAbsentAt141 pins the pre-142 state: the column does not
 // exist, and the statement the parity gate runs fails with 42703
@@ -190,7 +190,7 @@ func TestMW1ArmsTypeNameAbsentAt141(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // Gate: type parity over four types
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 // TestMW1ArmsTypeNameParity is the §4.3 gate. It runs the projection twice —
 // once under the production-shaped allowlist (three types) and once with
@@ -292,7 +292,7 @@ func TestMW1ArmsTypeNameParity(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // Negative probe: the constant variant
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------.
 
 // mw1InstallConstantProbe loads 142 out of the embedded FS, renames the
 // function and replaces the type_name PROJECTION with a constant.

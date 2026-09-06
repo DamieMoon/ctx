@@ -73,7 +73,7 @@ func benchGuardScratchDSN(t *testing.T, pool *pgxpool.Pool) {
 	}
 }
 
-// --- Build: duration + the transient memory peak -----------------------------
+// --- Build: duration + the transient memory peak -----------------------------.
 
 // benchBuildStats is one rebuild measurement series.
 type benchBuildStats struct {
@@ -198,7 +198,7 @@ func benchBuildSnapshot(t *testing.T, pool *pgxpool.Pool, runs int) (*graphcache
 
 func benchMB(b uint64) string { return fmt.Sprintf("%.0fMB", float64(b)/(1<<20)) }
 
-// --- Expand seeds ------------------------------------------------------------
+// --- Expand seeds ------------------------------------------------------------.
 
 // benchExpandCfg mirrors the shipped graph.* defaults (config/config.go:237-252)
 // with the stage enabled. Hub damping is ON — the damping degree is the walk
@@ -283,7 +283,7 @@ func benchExpandArm(t *testing.T, pool *pgxpool.Pool, name string, iters int,
 		fmt.Sprintf("seeds=%d injected=%d src=%s", len(seeds), injected, rep.Source)}
 }
 
-// --- Degrees -----------------------------------------------------------------
+// --- Degrees -----------------------------------------------------------------.
 
 // benchCacheDegrees is the Q3 snapshot stage of egoCacheHops.degrees, driven
 // directly over a NodeID set: the same MakeDegreeHints + DegreeHitCap wiring, so
@@ -320,7 +320,7 @@ func benchNodeIDs(t *testing.T, snap *graphcache.Snapshot, ids []string) []uint3
 	return out
 }
 
-// --- The arm block -----------------------------------------------------------
+// --- The arm block -----------------------------------------------------------.
 
 // benchW058Arms runs arms 8-19 and returns their rows for the shared report
 // table. It is called from TestGraphBench1M after the SQL arms so both halves
