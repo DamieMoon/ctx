@@ -84,13 +84,32 @@ func (f *mw2FakeCtx) client() *armsweep.Client {
 // not stamped as a measure copy is a refusal, and the refusal is a distinct
 // error class so a scheduler can tell it from a failed run.
 //
-// RED before M-W2: `undefined: armsweep.GateInstanceKind`.
+// The subject is the PRODUCTION pair — StampInstanceKind reads the label,
+// CheckInstanceKind refuses on it — in the order cmd/ctx-armsweep composes them
+// (commands.go gateInstance, :202/:206). M-W2 shipped a third function that
+// fused the two halves; X-W3a split them because the label belongs on EVERY
+// dump and the refusal only on a shadow run, and from then on nothing but this
+// test called the fused form. It is gone, and the gate now probes what the
+// driver actually runs instead of a parallel implementation of it.
+//
+// RED before M-W2: `undefined: armsweep.CheckInstanceKind`.
 func TestMW2InstanceKindGate(t *testing.T) {
 	shadow := []string{"mw2-shadow"}
 
+	// gate mirrors cmd/ctx-armsweep's gateInstance for a non-dry run: read the
+	// label off the instance, then refuse on it.
+	gate := func(t *testing.T, f *mw2FakeCtx, shadowTypes []string, allowLive bool) (string, error) {
+		t.Helper()
+		kind, err := armsweep.StampInstanceKind(context.Background(), f.client())
+		if err != nil {
+			return "", err
+		}
+		return kind, armsweep.CheckInstanceKind(kind, shadowTypes, allowLive)
+	}
+
 	t.Run("live instance refuses", func(t *testing.T) {
 		f := mw2NewFakeCtx(t, armsweep.InstanceKindLive)
-		kind, err := armsweep.GateInstanceKind(context.Background(), f.client(), shadow, false)
+		kind, err := gate(t, f, shadow, false)
 		if !errors.Is(err, armsweep.ErrNotMeasureCopy) {
 			t.Fatalf("err = %v, want ErrNotMeasureCopy", err)
 		}
@@ -101,7 +120,7 @@ func TestMW2InstanceKindGate(t *testing.T) {
 
 	t.Run("measure copy passes", func(t *testing.T) {
 		f := mw2NewFakeCtx(t, armsweep.InstanceKindMeasureCopy)
-		kind, err := armsweep.GateInstanceKind(context.Background(), f.client(), shadow, false)
+		kind, err := gate(t, f, shadow, false)
 		if err != nil {
 			t.Fatalf("err = %v, want nil", err)
 		}
@@ -112,7 +131,7 @@ func TestMW2InstanceKindGate(t *testing.T) {
 
 	t.Run("explicit override passes and reports the true kind", func(t *testing.T) {
 		f := mw2NewFakeCtx(t, armsweep.InstanceKindLive)
-		kind, err := armsweep.GateInstanceKind(context.Background(), f.client(), shadow, true)
+		kind, err := gate(t, f, shadow, true)
 		if err != nil {
 			t.Fatalf("err = %v, want nil under the override", err)
 		}
@@ -127,29 +146,46 @@ func TestMW2InstanceKindGate(t *testing.T) {
 	t.Run("an unreadable stamp is a refusal, not a pass", func(t *testing.T) {
 		f := mw2NewFakeCtx(t, armsweep.InstanceKindMeasureCopy)
 		f.code = http.StatusNotFound
-		if _, err := armsweep.GateInstanceKind(context.Background(), f.client(), shadow, false); err == nil {
+		if _, err := gate(t, f, shadow, false); err == nil {
 			t.Fatal("err = nil for an instance whose stamp could not be read")
 		}
 	})
 
 	t.Run("an unknown value is a refusal", func(t *testing.T) {
 		f := mw2NewFakeCtx(t, "something-else")
-		if _, err := armsweep.GateInstanceKind(context.Background(), f.client(), shadow, false); !errors.Is(err, armsweep.ErrNotMeasureCopy) {
+		if _, err := gate(t, f, shadow, false); !errors.Is(err, armsweep.ErrNotMeasureCopy) {
 			t.Fatalf("err = %v, want ErrNotMeasureCopy", err)
 		}
 	})
 
-	t.Run("without shadow types the instance is never asked", func(t *testing.T) {
+	t.Run("a silent instance stamps unknown, and unknown is a refusal", func(t *testing.T) {
+		// The empty answer is the one case the two halves disagree about: the
+		// stamp must never write "" (that byte means "dry run" in a dump), and
+		// the refusal must not read "unknown" as a measure copy.
+		f := mw2NewFakeCtx(t, "")
+		kind, err := gate(t, f, shadow, false)
+		if kind != armsweep.InstanceKindUnknown {
+			t.Errorf("kind = %q, want %q — an empty answer must not stamp as an empty string", kind, armsweep.InstanceKindUnknown)
+		}
+		if !errors.Is(err, armsweep.ErrNotMeasureCopy) {
+			t.Fatalf("err = %v, want ErrNotMeasureCopy", err)
+		}
+	})
+
+	t.Run("without shadow types the refusal does not fire", func(t *testing.T) {
+		// Since X-W3a the label is read on EVERY non-dry run — an ordinary dump
+		// carries the instance's kind too (that is the F-32 campaign rule) and
+		// only the REFUSAL is reserved for a shadow run.
 		f := mw2NewFakeCtx(t, armsweep.InstanceKindLive)
-		kind, err := armsweep.GateInstanceKind(context.Background(), f.client(), nil, false)
+		kind, err := gate(t, f, nil, false)
 		if err != nil {
 			t.Fatalf("err = %v, want nil for an ordinary dump", err)
 		}
-		if kind != "" {
-			t.Errorf("kind = %q, want empty — an ordinary dump makes no claim about the instance", kind)
+		if kind != armsweep.InstanceKindLive {
+			t.Errorf("kind = %q, want the instance's own %q — an ordinary dump is stamped too", kind, armsweep.InstanceKindLive)
 		}
-		if n := f.reads.Load(); n != 0 {
-			t.Errorf("the gate read the settings surface %d times for a non-shadow dump", n)
+		if n := f.reads.Load(); n != 1 {
+			t.Errorf("the label was read %d times, want exactly 1 per run", n)
 		}
 	})
 }

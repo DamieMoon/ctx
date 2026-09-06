@@ -5,7 +5,7 @@
 // across EVERY scope, the audit trigger records each delete as an attributable
 // unset, living keys are untouched, and the operator hears about it.
 //
-//	go test -tags=integration ./internal/store/ -run TestMigration133 -count=1 -v
+//	go test -tags=integration ./cmd/ctxd/ -run TestMigration133 -count=1 -v
 //
 // The migration is never run against the live database from here — the whole
 // gate lives on a throwaway testcontainer database capped at migration 132.

@@ -103,21 +103,3 @@ func CheckInstanceKind(kind string, shadowTypes []string, allowLive bool) error 
 	return fmt.Errorf("%w: %s=%q — ein Schatten-Dump gehört in eine wiederhergestellte Mess-Kopie (§5 B4b); Override: -allow-live-instance",
 		ErrNotMeasureCopy, SettingInstanceKind, kind)
 }
-
-// GateInstanceKind is the read-and-refuse form M-W2 shipped: it returns the
-// instance kind it read and refuses unless the instance says measure-copy.
-//
-// A dump without shadow types asks the instance nothing HERE — the gate is
-// about a claim only a shadow dump makes. Since X-W3a that no longer means an
-// ordinary dump carries no kind: the driver reads the label through
-// StampInstanceKind on every non-dry run and applies this refusal to it.
-func GateInstanceKind(ctx context.Context, c *Client, shadowTypes []string, allowLive bool) (string, error) {
-	if len(shadowTypes) == 0 {
-		return "", nil
-	}
-	kind, err := c.InstanceKind(ctx)
-	if err != nil {
-		return "", err
-	}
-	return kind, CheckInstanceKind(kind, shadowTypes, allowLive)
-}

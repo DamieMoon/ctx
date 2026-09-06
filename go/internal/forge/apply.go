@@ -332,6 +332,20 @@ func (a *Applier) applyComment(ctx context.Context, project store.ProjectRow, wr
 func (a *Applier) pullCreateComment(ctx context.Context, project store.ProjectRow, c CommentRemote,
 	parentBlockID, cappedBody, forgeH string, forgeFields json.RawMessage, fUpdated *time.Time, writable []string) (ApplyResult, error) {
 
+	// This is the FOURTH store.InsertCommentBlock site (T02-11 Übergabe 4) and
+	// the only one outside the handler claim gates — deliberately, and it needs
+	// no gate of its own: parentBlockID cannot be empty here. ApplyComments
+	// reaches this function only through a mapped parent issue (`if !hasParent {
+	// continue }`), and what it passes is context_project_sync_map.block_id, a
+	// column declared `UUID NOT NULL REFERENCES context_blocks(id)`
+	// (113_baseline.sql) — a mapping row that exists names a block that exists.
+	// The claim gates decide what a CLIENT may assert about a block it writes;
+	// this arm asserts nothing on a client's behalf, and its type is the SQL
+	// literal inside InsertCommentBlock, not a name out of a request. Running
+	// parentRequiredReject here would be a branch whose condition is constant.
+	// The floor under all four sites is the primitive itself: an empty parent is
+	// ErrCommentParentRequired before any write. Pinned by
+	// TestApply_CommentParentByConstruction (apply_comment_parent_integration_test.go).
 	if err := pgxdb.Write(ctx, a.pool, pgxdb.Stages{}, func(tx pgx.Tx) error {
 		b, err := store.InsertCommentBlock(ctx, tx, parentBlockID, store.CommentFields{
 			Content:  cappedBody,

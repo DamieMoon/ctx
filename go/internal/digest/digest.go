@@ -9,10 +9,10 @@ import (
 	"sort"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/GottZ/ctx/internal/blocktype"
 	"github.com/GottZ/ctx/internal/store"
+	"github.com/GottZ/ctx/internal/util"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -108,7 +108,7 @@ func RunDigest(ctx context.Context, pool *pgxpool.Pool, blocktypes *blocktype.Re
 
 			// Title truncation: max 70 runes (rune-aware — a byte slice can split
 			// a multi-byte char, leaving invalid UTF-8 that fails the upsert: 22021).
-			title := truncateTitle(b.Title)
+			title := util.TruncateRunes(b.Title, 70)
 
 			// Scope annotation: append [scope] if different from homeScope.
 			scopeAnnotation := ""
@@ -287,20 +287,6 @@ func writeStub(ctx context.Context, pool *pgxpool.Pool, set *blocktype.Set, home
 	}
 	slog.Info("digest: topic map replaced by stub", "scope", homeScope, "content_length", len(text))
 	return nil
-}
-
-// truncateTitle caps a topic-map row title at 70 runes (rune-aware). A byte
-// slice can split a multi-byte rune (em-dash, ellipsis, CJK, emoji), leaving
-// invalid UTF-8 that PostgreSQL rejects on upsert with SQLSTATE 22021 —
-// regression target of Issue #4. This is an inline COPY of the shared helper,
-// not a call into it: digest imports no internal package besides blocktype and
-// store, and truncateTitle(t) returns byte for byte what util.TruncateRunes(t,
-// 70) returns (util/strings.go:19-30, same 70/67 arithmetic).
-func truncateTitle(title string) string {
-	if utf8.RuneCountInString(title) > 70 {
-		return string([]rune(title)[:67]) + "..."
-	}
-	return title
 }
 
 // fetchBlockMeta retrieves non-archived block metadata for the given scopes,

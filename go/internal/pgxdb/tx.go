@@ -108,6 +108,23 @@ func Write(ctx context.Context, db Beginner, s Stages, fn func(pgx.Tx) error) er
 // this way; what it does NOT carry is the grace bound, and that is the part
 // this helper adds: WithoutCancel alone would let a rollback wait without a
 // limit of its own.
+//
+// This buys the return-to-the-pool outcome only for a cancel that lands
+// BETWEEN statements, while fn is not blocked on the wire. A cancel that
+// lands MID-STATEMENT is a different case: pgx's context watcher for that
+// in-flight call (DeadlineContextWatcherHandler, store.NewPool's default —
+// pgconn/config.go:373-375, HandleCancel at pgconn.go:2955-2957) reacts to
+// ctx.Done() of the ORIGINAL context, not the detached one, and sets a
+// near-immediate socket deadline — the connection is already broken by the
+// time this function's deferred rollback runs. The Rollback call itself
+// still returns without an error the caller sees (its error is discarded on
+// purpose, rollbackDetached above), but it lands on a connection pgx has
+// marked dead, and the pool discards rather than reuses it — measured
+// against PG18 on both the pre- and post-T04-4k form of the migration
+// runner: conn_closed=true, pool_total_conns=0 either way (T04-4k-Prüfung
+// F1). So: a cancel between statements is the case this bracket turns into a
+// real ROLLBACK on a live connection; a cancel mid-statement was always
+// going to cost the connection, with or without this bracket.
 func WriteOpts(ctx context.Context, db Beginner, opts pgx.TxOptions, s Stages, fn func(pgx.Tx) error) error {
 	tx, err := db.BeginTx(ctx, opts)
 	if err != nil {

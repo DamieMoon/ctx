@@ -66,14 +66,24 @@ var (
 	// client that branches on "typo" must not treat this as one.
 	classReservedType = rejectClass{http.StatusUnprocessableEntity, "reserved_type"}
 	// classParentRequired — explicit `type` names a type whose registry policy
-	// demands a structural parent (parent.mode=required), on a write surface
-	// that carries none (T02-11, design/02 §8 E02-4). 422 like the other two
-	// type-claim classes and for the same reason: the client's assertion about
-	// the entity is what is unprocessable. A separate code, because the remedy
-	// differs from both neighbours — unknown_type says "fix the name",
-	// reserved_type says "drop the claim", this one says "use the type's own
-	// domain path", which is the only place a parent can be handed over.
+	// demands a structural parent (parent.mode=required), in a write that carries
+	// none (T02-11, design/02 §8 E02-4). 422 like the other two type-claim
+	// classes and for the same reason: the client's assertion about the entity is
+	// what is unprocessable. A separate code, because the remedy differs from
+	// both neighbours — unknown_type says "fix the name", reserved_type says
+	// "drop the claim", this one says "hand over a parent": `parent_id` on
+	// /api/store (NZ-3), or the type's own domain path, which is the only offer
+	// the surfaces without a parent field can make.
 	classParentRequired = rejectClass{http.StatusUnprocessableEntity, "parent_required"}
+	// classUnknownParent — the write NAMES a parent (`parent_id`) that cannot
+	// carry one: unknown id, archived block, a block in another scope, a
+	// malformed uuid, or the very block the write itself addresses. ONE class for
+	// all five, deliberately: distinguishing them would turn the field into an
+	// existence oracle for foreign block ids, the property the issue arms protect
+	// with their uniform 404 (§5.2). 422 rather than 404, because /api/store
+	// answers about the PAYLOAD it was handed — nothing about this route is
+	// "not found".
+	classUnknownParent = rejectClass{http.StatusUnprocessableEntity, "unknown_parent"}
 	// classReservedCategory — the write targets a category reserved for the
 	// derived layer (I7/S2). 403, not 422: the payload is well-formed, the
 	// caller is simply not authorised for that namespace.

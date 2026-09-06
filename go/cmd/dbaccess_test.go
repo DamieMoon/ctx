@@ -429,7 +429,11 @@ func scanDBAccess(t *testing.T, pkgs []config.ScanPackage) (findings []dbFinding
 	root := moduleRoot(t)
 	fset := token.NewFileSet()
 	for _, pkg := range pkgs {
-		for _, abs := range nonTestGoFiles(t, pkg.Dir) {
+		goFiles, err := config.NonTestGoFiles(pkg.Dir)
+		if err != nil {
+			t.Fatalf("list %s: %v", pkg.Dir, err)
+		}
+		for _, abs := range goFiles {
 			files++
 			file, err := goparser.ParseFile(fset, abs, nil, goparser.SkipObjectResolution)
 			if err != nil {

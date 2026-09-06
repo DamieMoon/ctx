@@ -152,7 +152,7 @@ func (s *chatStageRunner) StageUpdate(ctx context.Context, id string, category, 
 	// smallest model (file header), which makes a missing gate here worse than
 	// anywhere else, not better. The tool carries no `type` (chat/tools.go
 	// updateToolDef), so that arm is inert.
-	if rej := claimReject(nil, strOrEmpty(data.Category), "", data.Metadata); rej != nil {
+	if rej := claimReject(nil, strOrEmpty(data.Category), "", "", data.Metadata); rej != nil {
 		return nil, rej.Msg, nil
 	}
 

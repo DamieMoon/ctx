@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	"github.com/GottZ/ctx/internal/util"
 )
 
 // TestTruncateTitle_EmDashAtBoundary is the direct regression test for
@@ -16,18 +18,18 @@ func TestTruncateTitle_EmDashAtBoundary(t *testing.T) {
 	// 66 ASCII bytes, then em-dash (E2 80 94), then tail to exceed the 70-rune guard.
 	title := strings.Repeat("a", 66) + "—long tail well past seventy bytes"
 
-	out := truncateTitle(title)
+	out := util.TruncateRunes(title, 70)
 
 	if !utf8.ValidString(out) {
-		t.Fatalf("truncateTitle produced invalid UTF-8: % x", []byte(out))
+		t.Fatalf("util.TruncateRunes(…, 70) produced invalid UTF-8: % x", []byte(out))
 	}
 	if utf8.RuneCountInString(out) > 70 {
-		t.Errorf("truncateTitle output has %d runes, want <= 70",
+		t.Errorf("util.TruncateRunes(…, 70) output has %d runes, want <= 70",
 			utf8.RuneCountInString(out))
 	}
 	want := strings.Repeat("a", 66) + "—..."
 	if out != want {
-		t.Errorf("truncateTitle = %q, want %q", out, want)
+		t.Errorf("util.TruncateRunes(…, 70) = %q, want %q", out, want)
 	}
 }
 
@@ -35,22 +37,22 @@ func TestTruncateTitle_EmDashAtBoundary(t *testing.T) {
 // from Damien's report: U+2026 HORIZONTAL ELLIPSIS (E2 80 A6).
 func TestTruncateTitle_EllipsisAtBoundary(t *testing.T) {
 	title := strings.Repeat("a", 66) + "… trailing content past the cap"
-	out := truncateTitle(title)
+	out := util.TruncateRunes(title, 70)
 	if !utf8.ValidString(out) {
-		t.Fatalf("truncateTitle produced invalid UTF-8: % x", []byte(out))
+		t.Fatalf("util.TruncateRunes(…, 70) produced invalid UTF-8: % x", []byte(out))
 	}
 }
 
 // TestTruncateTitle_NoTruncationNeeded — short titles unchanged.
 func TestTruncateTitle_NoTruncationNeeded(t *testing.T) {
 	title := "short ASCII title"
-	if got := truncateTitle(title); got != title {
-		t.Errorf("truncateTitle(%q) = %q, want unchanged", title, got)
+	if got := util.TruncateRunes(title, 70); got != title {
+		t.Errorf("util.TruncateRunes(%q, 70) = %q, want unchanged", title, got)
 	}
 	// Non-ASCII but under limit.
 	title2 := "中文标题 mit ein paar emojis 🎉"
-	if got := truncateTitle(title2); got != title2 {
-		t.Errorf("truncateTitle(%q) = %q, want unchanged", title2, got)
+	if got := util.TruncateRunes(title2, 70); got != title2 {
+		t.Errorf("util.TruncateRunes(%q, 70) = %q, want unchanged", title2, got)
 	}
 }
 
@@ -58,8 +60,8 @@ func TestTruncateTitle_NoTruncationNeeded(t *testing.T) {
 // be truncated.
 func TestTruncateTitle_ExactBoundary70(t *testing.T) {
 	title := strings.Repeat("z", 70)
-	if got := truncateTitle(title); got != title {
-		t.Errorf("truncateTitle at exactly 70 runes: got %q, want unchanged", got)
+	if got := util.TruncateRunes(title, 70); got != title {
+		t.Errorf("util.TruncateRunes(…, 70) at exactly 70 runes: got %q, want unchanged", got)
 	}
 }
 
@@ -70,7 +72,7 @@ func TestTruncateTitle_FuzzMultiByteBoundary(t *testing.T) {
 	for offset := 0; offset < 100; offset++ {
 		prefix := strings.Repeat("a", offset)
 		title := prefix + "—" + strings.Repeat("z", 100)
-		out := truncateTitle(title)
+		out := util.TruncateRunes(title, 70)
 		if !utf8.ValidString(out) {
 			t.Errorf("offset=%d: invalid UTF-8 in %q", offset, out)
 		}
@@ -89,7 +91,7 @@ func TestTruncateTitle_ChineseAndEmoji(t *testing.T) {
 		"mixed 中文 emoji 🎉 " + strings.Repeat("a", 200),
 	}
 	for i, c := range cases {
-		out := truncateTitle(c)
+		out := util.TruncateRunes(c, 70)
 		if !utf8.ValidString(out) {
 			t.Errorf("case %d: invalid UTF-8 in %q", i, out)
 		}

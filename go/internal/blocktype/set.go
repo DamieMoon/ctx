@@ -285,10 +285,11 @@ func (s *Set) GuardSameScopeOnly(name string) bool {
 //
 // The CLAIM CHAIN consults it (T02-11, design/02 §8 E02-4):
 // handler.parentRequiredReject — the fourth gate of handler.claimReject in
-// stage_gates.go — refuses a CLIENT-NAMED type with parent.mode=required on
-// every surface that lets a client name one, and not one of them carries a
-// parent: REST /api/store, both MCP store arms, manage-update and the confirm
-// of a staged card. (The chat stage runner, /api/ingest and the MCP update tool
+// stage_gates.go — refuses a CLIENT-NAMED type with parent.mode=required unless
+// the write CARRIES a parent. Exactly one surface can (REST /api/store's
+// parent_id, NZ-3 point 8); on both MCP store arms, on manage-update and on the
+// confirm of a staged card the refusal stays total, because their shapes have no
+// parent field. (The chat stage runner, /api/ingest and the MCP update tool
 // reach the same function but pass no type at all, so the gate is inert there —
 // a write without a `type` is untouched everywhere.) parent.mode=required
 // therefore means what it says: a block of that type is never CREATED orphaned

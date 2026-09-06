@@ -78,7 +78,7 @@ func TestClaimReject_ParentRequired(t *testing.T) {
 		`through its own domain path, not claimed here`
 
 	t.Run("required_type_refused_422", func(t *testing.T) {
-		rej := claimReject(set, "test", "parent-required", nil)
+		rej := claimReject(set, "test", "parent-required", "", nil)
 		if rej == nil {
 			t.Fatal("admissible — a client may claim a required-parent type on a surface with no parent; " +
 				"this is E02-4 open (policy without mechanism)")
@@ -96,9 +96,31 @@ func TestClaimReject_ParentRequired(t *testing.T) {
 		}
 	})
 
+	t.Run("required_type_with_a_parent_is_admissible", func(t *testing.T) {
+		// NZ-3 point 8: the gate reads what the WRITE carries. A surface that
+		// names a parent satisfies the mode — the id's existence, visibility and
+		// scope are the write's business (store.ParentLinkable, PutBlockParent),
+		// not a second, weaker copy of that verdict inside a registry gate.
+		if rej := claimReject(set, "test", "parent-required", "01a07624-2b77-7d2e-ad54-14bf0c466dc3", nil); rej != nil {
+			t.Errorf("refused %s/%q although the write names a parent — parent.mode=required is a "+
+				"CONDITION on a surface that carries one", rej.Code, rej.Msg)
+		}
+		// A parent does not buy anything else: the type gates in front of it keep
+		// their verdicts, so parent_id cannot be used to smuggle a name past them.
+		for _, c := range []struct{ name, wantCode string }{
+			{"no-such-type", "unknown_type"},
+			{"insight", "reserved_type"}, // derived layer, never client-claimable
+		} {
+			rej := claimReject(set, "test", c.name, "01a07624-2b77-7d2e-ad54-14bf0c466dc3", nil)
+			if rej == nil || rej.Code != c.wantCode {
+				t.Errorf("type %q with a parent answered %v, want %s", c.name, rej, c.wantCode)
+			}
+		}
+	})
+
 	t.Run("optional_and_none_and_absent_stay_admissible", func(t *testing.T) {
 		for _, name := range []string{"parent-optional", "parent-none", "knowledge", ""} {
-			if rej := claimReject(set, "test", name, nil); rej != nil {
+			if rej := claimReject(set, "test", name, "", nil); rej != nil {
 				t.Errorf("type %q refused %s/%q — only parent.mode=required is gated",
 					name, rej.Code, rej.Msg)
 			}
@@ -110,14 +132,14 @@ func TestClaimReject_ParentRequired(t *testing.T) {
 		// ParentMode falls back to "none" for names it does not know, so a gate
 		// placed AHEAD of the membership check would have answered "admissible"
 		// for a typo and let it through to the next gate's verdict.
-		rej := claimReject(set, "test", "no-such-type", nil)
+		rej := claimReject(set, "test", "no-such-type", "", nil)
 		if rej == nil || rej.Code != "unknown_type" {
 			t.Fatalf("unknown name answered %v, want unknown_type — the membership check "+
 				"stays in front of the parent gate", rej)
 		}
 		// A nil registry stays fail-closed at the membership check; the parent
 		// gate never sees an unvalidated name.
-		rej = claimReject(nil, "test", "parent-required", nil)
+		rej = claimReject(nil, "test", "parent-required", "", nil)
 		if rej == nil || rej.Code != "unknown_type" {
 			t.Fatalf("nil registry answered %v, want unknown_type (fail-closed)", rej)
 		}

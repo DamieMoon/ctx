@@ -86,6 +86,12 @@ type confirmOutcome struct {
 // Split out of executeConfirm only to keep that function under the cyclop
 // budget; the placement (before the consume) and the reasoning live at the
 // call site.
+//
+// The empty parent argument is not an omission: a staged card is built from the
+// MCP/chat write shapes, and neither carries a parent — the one surface that
+// does (REST /api/store, NZ-3) is a direct write path and never stages. A
+// required-parent type therefore stays unconfirmable, which is the same verdict
+// the stage itself would have given.
 func confirmClaimReject(ctx context.Context, blocktypes *blocktype.Registry, cw store.CanonicalWrite) *writeReject {
 	if cw.Op != "store" && cw.Op != "update" {
 		return nil
@@ -94,7 +100,7 @@ func confirmClaimReject(ctx context.Context, blocktypes *blocktype.Registry, cw 
 	if blocktypes != nil {
 		set = blocktypes.SnapshotForRequest(ctx)
 	}
-	return claimReject(set, cw.Category, cw.Type, cw.Metadata)
+	return claimReject(set, cw.Category, cw.Type, "", cw.Metadata)
 }
 
 // executeConfirm runs the complete confirm sequence for one payload hash,

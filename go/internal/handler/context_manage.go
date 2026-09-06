@@ -498,12 +498,17 @@ func (h *ManageHandler) handleListMeta(w http.ResponseWriter, r *http.Request, a
 // #6): its own copy ran type-before-category and answered 422 where
 // /api/store answered 403 for the identical payload. An absent pointer becomes
 // the empty value, which claimReject reads as "not part of this write".
+//
+// The empty parent argument is the literal shape of this surface: manage-update
+// has no parent field and cannot give a block one, so a required-parent type
+// stays unclaimable here — the deliberate consequence T02-11 recorded, unchanged
+// by the parent_id NZ-3 added to /api/store.
 func (h *ManageHandler) updateClaimReject(ctx context.Context, data store.UpdateBlockData) *writeReject {
 	var set *blocktype.Set
 	if h.blocktypes != nil {
 		set = h.blocktypes.SnapshotForRequest(ctx)
 	}
-	return claimReject(set, strOrEmpty(data.Category), strOrEmpty(data.Type), data.Metadata)
+	return claimReject(set, strOrEmpty(data.Category), strOrEmpty(data.Type), "", data.Metadata)
 }
 
 // writeUpdateFailure renders a failed by-id block write on the manage surface

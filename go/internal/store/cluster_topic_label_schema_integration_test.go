@@ -113,7 +113,7 @@ func TestClusterTopicLabelSchema_Integration(t *testing.T) {
 	})
 
 	// 120 wie repr_title (057), aber char_length — Zeichen, nicht Bytes.
-	// Dieselbe Rune-Genauigkeit, die digest.truncateTitle gegen 22021
+	// Dieselbe Rune-Genauigkeit, die util.TruncateRunes gegen 22021
 	// herstellt: ein 120-Umlaut-Label wiegt 240 Bytes und muss trotzdem passen.
 	t.Run("label_length_is_rune_exact", func(t *testing.T) {
 		if _, err := pool.Exec(ctx,

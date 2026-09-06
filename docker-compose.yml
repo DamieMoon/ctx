@@ -471,6 +471,24 @@ services:
       # (comma-separated exact URIs; loopback is always allowed by rule).
       CTX_CANONICAL_ISSUER: ${CTX_CANONICAL_ISSUER:-https://${CTX_HOSTNAME}}
       CTX_OAUTH_REDIRECT_EXTRA: ${CTX_OAUTH_REDIRECT_EXTRA:-}
+      # Token lifetimes + rotation cap (oauth.go:123-129): Go duration
+      # overrides of decided values — the registry parses no duration format,
+      # and all three are server-global while every registry key carries a
+      # tenancy.
+      CTX_OAUTH_ACCESS_TTL: ${CTX_OAUTH_ACCESS_TTL:-}
+      CTX_OAUTH_REFRESH_TTL: ${CTX_OAUTH_REFRESH_TTL:-}
+      CTX_OAUTH_FAMILY_CAP: ${CTX_OAUTH_FAMILY_CAP:-}
+      # Dynamic client registration mode (oauth.go:175-181): fail-closed
+      # open|admin|off switch over whether an unknown client may register at
+      # all — cannot be reachable through the API it gates.
+      CTX_OAUTH_DCR_MODE: ${CTX_OAUTH_DCR_MODE:-}
+      # Open-DCR guard (oauth_register_guard.go:1-5,29-37): resource backstop
+      # and per-IP rate budget against table DoS, plus the one proxy hop
+      # whose X-Forwarded-For appendix is trusted for the per-IP count — none
+      # of the three may be writable through the surface they protect.
+      CTX_OAUTH_MAX_CLIENTS: ${CTX_OAUTH_MAX_CLIENTS:-}
+      CTX_OAUTH_REGISTER_RATE: ${CTX_OAUTH_REGISTER_RATE:-}
+      CTX_TRUSTED_PROXY: ${CTX_TRUSTED_PROXY:-}
     networks:
       - n8nintern
     depends_on:

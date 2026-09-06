@@ -3,10 +3,11 @@
 // Integration gates for Achse-02 Welle I-C (design/02 §7-I-C) against a real
 // PG18 testcontainer. Every probe drives a REAL pipeline consumer through its
 // exported entrypoint (guard.RunGuardBatch, dream.PickBlock, overview.Rebuild)
-// or the exact SQL filter a private consumer uses (digest.fetchBlockMeta →
-// digest.go:159, mirrored via DigestTypes()), proving the migration-084 issue/
-// comment seeds take effect end-to-end. Each is a NEGATIVE probe: the comment
-// names the seed value whose flip would turn it red.
+// or the exact SQL filter a private consumer uses (digest.fetchBlockMeta,
+// digest.go:296, called from digest.go:64, mirrored via DigestTypes()),
+// proving the migration-084 issue/comment seeds take effect end-to-end. Each
+// is a NEGATIVE probe: the comment names the seed value whose flip would turn
+// it red.
 //
 // The registry is booted from the migrated DB — issue/comment come from the 084
 // seed, NOT a test literal (that is the point: the shipped seed drives the
@@ -147,7 +148,7 @@ func TestICDreamPicksIssueNotComment(t *testing.T) {
 }
 
 // TestICDigestExcludesIssueTitles — the digest source selection (mirroring the
-// private digest.fetchBlockMeta filter, digest.go:159, with DigestTypes()) skips
+// private digest.fetchBlockMeta filter, digest.go:296, with DigestTypes()) skips
 // issue AND comment titles while keeping knowledge. RED if issue/comment shipped
 // digest.include=true: a 10k-issue repo would flood the topic-map (§6.8).
 func TestICDigestExcludesIssueTitles(t *testing.T) {
@@ -164,7 +165,7 @@ func TestICDigestExcludesIssueTitles(t *testing.T) {
 	seedBlock(t, pool, diIssue, "issue", "private", "projects", "digest-issue-title", nil)
 	seedBlock(t, pool, diComment, "comment", "private", "projects", "digest-comment-title", nil)
 
-	// Exact filter of digest.fetchBlockMeta (digest.go:159-167): the digest
+	// Exact filter of digest.fetchBlockMeta (digest.go:297-304): the digest
 	// source is `scope = ANY AND NOT is_archived AND type_name = ANY(DigestTypes)`.
 	rows, err := pool.Query(ctx,
 		`SELECT title FROM context_blocks

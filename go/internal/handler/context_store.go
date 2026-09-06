@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -11,7 +12,9 @@ import (
 	"github.com/GottZ/ctx/internal/auth"
 	"github.com/GottZ/ctx/internal/backends"
 	"github.com/GottZ/ctx/internal/blocktype"
+	"github.com/GottZ/ctx/internal/pgxdb"
 	"github.com/GottZ/ctx/internal/store"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -49,7 +52,38 @@ type storeRequest struct {
 	// unknown); sets type_source='manual', which permanently overrides the
 	// auto-classifier (T4 semantics). Absent ⇒ auto-classification.
 	Type string `json:"type,omitempty"`
+	// ParentID hangs the written block under an existing one
+	// (context_blocks.parent_id, the ONE structural parent — K3). Absent ⇒ no
+	// parent, exactly as before this field existed; the answer shape is
+	// unchanged either way (NZ-3 point 8, the follow-up T02-11 named).
+	//
+	// It is the first request shape in the tree that can satisfy
+	// parent.mode=required, so the fourth claim gate (parentRequiredReject,
+	// stage_gates.go) is a CONDITION on this route and stays a total refusal on
+	// the surfaces that carry no parent. It is NOT the type's domain path: a
+	// comment created here is a block with a parent, not an issue comment with
+	// the title, the local sequence and the scope the issue verbs derive.
+	//
+	// The value is a full block uuid in the SAME scope this write resolves to
+	// (the comment-scope invariant of §5.2, read as "child and parent share a
+	// scope"). The write scope is decided by the scope gate, not by the parent —
+	// the upsert key is (category, title, scope), so letting the parent pick the
+	// scope would silently move the block a repeat save addresses. Unknown,
+	// archived, foreign-scope, malformed and self-referencing ids answer ONE
+	// class (422 unknown_parent), so the field is no existence oracle.
+	ParentID string `json:"parent_id,omitempty"`
 }
+
+// parentNotLinkableMsg is the ONE answer to every parent_id this route cannot
+// hang a block under — unknown id, archived block, block in another scope,
+// malformed uuid, and the write's own identity — and it is deliberately the same
+// sentence for all five: told apart, they would answer "does this uuid exist"
+// and "is it yours" for any id a caller cares to try. It is the /api/store
+// wording of the rule the issue arms keep with their uniform 404
+// (store.ErrLinkScopeViolation, structlinks.go).
+const parentNotLinkableMsg = "parent_id: no parent of this write's scope with that id — unknown, " +
+	"archived, foreign-scope, malformed and self-referencing ids answer alike, so the field is no " +
+	"existence oracle"
 
 // HandleStore processes upsert requests with auto-embedding.
 func (h *StoreHandler) HandleStore(w http.ResponseWriter, r *http.Request) {
@@ -101,21 +135,35 @@ func (h *StoreHandler) HandleStore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Hash NOOP check: skip if identical content already exists.
-	existingID, err := store.HashNOOPCheck(ctx, h.pool, req.Content, res.WriteScope, req.Category, req.Title)
-	if err != nil {
-		slog.Error("store: hash noop check error", "error", err, "request_id", reqID)
-		writeJSONReject(w, classInternal.reject("Internal server error"))
+	// The named parent is resolved BEFORE anything is written (NZ-3 point 8).
+	if rej := parentPreflight(ctx, h.pool, req, res.WriteScope, reqID); rej != nil {
+		writeJSONReject(w, rej)
 		return
 	}
-	if existingID != "" {
-		writeJSON(w, http.StatusOK, map[string]any{
-			"success":     true,
-			"action":      "noop",
-			"reason":      "identical_content",
-			"existing_id": existingID,
-		})
-		return
+
+	// Hash NOOP check: skip if identical content already exists.
+	//
+	// A write that NAMES a parent never takes the shortcut: the shortcut answers
+	// "identical_content" without touching the row, so a repeat save that adds a
+	// parent would be told "nothing to do" while the parent it asked for was
+	// never written. The condition costs one upsert on a payload that is
+	// otherwise a no-op and is the only way the field can mean what it says.
+	if req.ParentID == "" {
+		existingID, err := store.HashNOOPCheck(ctx, h.pool, req.Content, res.WriteScope, req.Category, req.Title)
+		if err != nil {
+			slog.Error("store: hash noop check error", "error", err, "request_id", reqID)
+			writeJSONReject(w, classInternal.reject("Internal server error"))
+			return
+		}
+		if existingID != "" {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"success":     true,
+				"action":      "noop",
+				"reason":      "identical_content",
+				"existing_id": existingID,
+			})
+			return
+		}
 	}
 
 	// F6-C6 scope boundary (D-E1, DECISIONS §Klarstellung): REST stays a
@@ -133,6 +181,12 @@ func (h *StoreHandler) HandleStore(w http.ResponseWriter, r *http.Request) {
 		// I7/S3: the conflicting row is a derivative. The refusal is decided in
 		// the store (atomic with the row lock) and answered here as 403.
 		writeJSONReject(w, upsertFailureReject(err, reqID))
+		return
+	}
+
+	// Hang the block under the parent it named (nothing named ⇒ no-op).
+	if rej := linkParent(ctx, h.pool, block.ID, req.ParentID, res.WriteScope, reqID); rej != nil {
+		writeJSONReject(w, rej)
 		return
 	}
 
@@ -179,6 +233,77 @@ func (h *StoreHandler) HandleStore(w http.ResponseWriter, r *http.Request) {
 			res.Sens.Value, block.Sensitivity)}
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// parentPreflight resolves the parent a write NAMED, before anything is
+// written. nil = this write names no parent, or names one it may hang under.
+//
+// It exists because store.UpsertBlock owns its own transaction, so the link
+// (linkParent below) is a SECOND bracket. Without this check the routine
+// refusals — a typo, a parent in another scope, an archived one — would arrive
+// AFTER the row exists, and the only answers left would be an error standing
+// next to a stored block, or a 200 that silently dropped the parent. Neither is
+// an answer this route may give for a field it accepts.
+//
+// It grants nothing: store.PutBlockParent re-validates inside the transaction
+// that performs the write, and store.ParentLinkable answers unknown, archived,
+// foreign-scope, malformed and self-referencing ids with ONE error, so the
+// pre-check cannot become an existence oracle either. The self-reference is why
+// it takes the whole request: (category, title, scope) is the upsert key, so a
+// parent carrying that identity IS the row this write is about, and only a check
+// that knows both can refuse it before the upsert instead of after.
+func parentPreflight(ctx context.Context, pool *pgxpool.Pool, req storeRequest, writeScope, reqID string) *writeReject {
+	parentID := req.ParentID
+	if parentID == "" {
+		return nil
+	}
+	if err := store.ParentLinkable(ctx, pool, parentID, writeScope, req.Category, req.Title); err != nil {
+		if !errors.Is(err, store.ErrLinkScopeViolation) {
+			slog.Error("store: parent lookup error", "error", err, "request_id", reqID)
+			return classInternal.reject("Internal server error")
+		}
+		return classUnknownParent.reject(parentNotLinkableMsg)
+	}
+	return nil
+}
+
+// linkParent hangs the freshly written block under the parent the request named.
+// nil = nothing named, or linked.
+//
+// store.PutBlockParent is the ONE parent_id write path (structlinks.go) and
+// re-asserts the scope invariant inside this transaction — the same primitive
+// store.InsertCommentBlock composes, so the two parent-bearing paths share their
+// verdict instead of agreeing by accident. The allowed scope is the write's own
+// resolved scope, which makes "child and parent share a scope" (§5.2) the
+// condition here; the WRITE scope is not derived from the parent, because the
+// upsert key is (category, title, scope) and a parent-derived scope would move
+// the block a repeat save addresses.
+//
+// WINDOW, deliberate and named: the upsert committed in a transaction of its
+// own, so this is a second bracket. parentPreflight removed the routine reasons
+// for a failure here, which leaves a process death between the two commits, or a
+// parent archived/deleted/moved in between — and then the block exists without
+// the parent its type demands, the orphan the gate prevents. The answer names
+// the failure instead of hiding it. Closing the window means handing the parent
+// to store.UpsertBlock so both writes share ONE transaction, exactly as
+// InsertCommentBlock does; that edit belongs to store/blocks.go, which the wave
+// that added this field does not own (NZ-3 Übergabe).
+func linkParent(ctx context.Context, pool *pgxpool.Pool, blockID, parentID, writeScope, reqID string) *writeReject {
+	if parentID == "" {
+		return nil
+	}
+	err := pgxdb.Write(ctx, pool, pgxdb.At("store: link block parent"), func(tx pgx.Tx) error {
+		return store.PutBlockParent(ctx, tx, blockID, parentID, []string{writeScope})
+	})
+	if err == nil {
+		return nil
+	}
+	slog.Error("store: parent link failed after the upsert — the block exists without its parent",
+		"error", err, "block_id", blockID, "parent_id", parentID, "request_id", reqID)
+	if errors.Is(err, store.ErrLinkScopeViolation) {
+		return classUnknownParent.reject(parentNotLinkableMsg)
+	}
+	return classInternal.reject("Internal server error")
 }
 
 // blockSizeLimit checks the shared write-path size caps. Empty = within

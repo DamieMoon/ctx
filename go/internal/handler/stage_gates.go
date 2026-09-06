@@ -37,8 +37,10 @@ type stageWriteGateResult struct {
 // them, so no assertion over those seven can tell the two wirings apart. A
 // probe gate hung here can: it reaches REST, MCP-direct and MCP-staged if and
 // only if all three really run this chain — which is what keeps the claim of
-// the doc comment below ("a gate added here reaches all three at once")
-// checkable after the fact instead of merely stated.
+// the doc comment below ("a gate added here reaches every call site at once")
+// checkable after the fact instead of merely stated. Three arms, not four: the
+// probe drives the surfaces a client can compare byte-for-byte; the chain's
+// fourth call site is named below.
 //
 // A gate sees the REQUEST and nothing else: not the resolved sensitivity, not
 // the post-detector metadata, not the resolved scope. That is deliberate — the
@@ -57,8 +59,17 @@ var extraWriteGates []func(req storeRequest) *writeReject
 // It started as the STAGED path's copy of that order, while the direct MCP
 // store arm still ran a hand-rolled subset. Gap-C6-a removed the split: the
 // direct arm (mcpStoreHandler) calls THIS function too, so REST, MCP-direct
-// and MCP-staged share one gate order and one set of rejection messages, and
-// a gate added here reaches all three at once.
+// and MCP-staged share one gate order and one set of rejection messages.
+//
+// FOUR call sites reach it, and a gate added here reaches every call site at
+// once: REST /api/store (context_store.go), the MCP store tool for BOTH its arms
+// (mcp.go), the confirm of a staged card (mcp_confirm.go) and the chat stage
+// runner (chat_stage.go) — five surfaces on four call sites. The doc comments
+// of this chain counted three of them until NZ-3 point 9, because the wiring
+// probe drives three; the chat arm was the uncounted fourth caller (T02-11
+// Übergabe 5). What is true of it is that it reaches the chain with no scope,
+// type or sensitivity input of its own (chat_stage.go), so every gate that reads
+// one of those fields is inert there — inert, not absent.
 //
 // pool is only touched when rateLimitWrite > 0 (nil pool + limit 0 is a valid
 // test wiring). set == nil fails closed on an explicit type (never lets an
@@ -98,7 +109,7 @@ func runStageWriteGates(
 	// scope gate's placement carries. req.Metadata is the RAW client metadata:
 	// the detector below adds its own key afterwards, and gating the
 	// post-detector map would gate the server's own annotation.
-	if rej := claimReject(set, req.Category, req.Type, req.Metadata); rej != nil {
+	if rej := claimReject(set, req.Category, req.Type, req.ParentID, req.Metadata); rej != nil {
 		return nil, rej
 	}
 
@@ -206,34 +217,41 @@ func validateTypeNameAgainstSet(set *blocktype.Set, name string) *writeReject {
 }
 
 // parentRequiredReject is the fourth claim gate: a type whose registry policy
-// says parent.mode=required may not be claimed on a surface that carries no
+// says parent.mode=required may not be claimed by a write that carries no
 // parent. nil = admissible.
 //
 // It is the MECHANISM behind a policy that had none (design/02 §8 E02-4).
 // blocktype.Set.ParentMode resolved the value and no production path read it,
 // so a registry row could promise orphan prevention that no write delivered:
 // REST /api/store, both MCP store arms, manage-update and the confirm of a
-// staged card all take a client-named `type` out of the same client JSON, and
-// NONE of them has a parent field. A block of a required-parent type written
-// through any of them is an orphan by construction — while the registry had
-// accepted the very configuration that forbids it. On the shipped registry the
-// affected type is `comment`, which is not write.internal_only:
-// `{"type":"comment"}` on /api/store bought a comment block with parent_id NULL.
+// staged card all take a client-named `type` out of the same client JSON. A
+// block of a required-parent type written through one of them without a parent
+// is an orphan by construction — while the registry had accepted the very
+// configuration that forbids it. On the shipped registry the affected type is
+// `comment`, which is not write.internal_only: `{"type":"comment"}` on
+// /api/store bought a comment block with parent_id NULL.
 //
-// The other three callers of claimReject — the chat stage runner, /api/ingest
-// and the MCP update tool — pass no type at all (their tool/chunk shapes have
-// no such field), so this gate is inert on them by construction rather than by
-// omission, exactly as validateTypeNameAgainstSet already is.
+// parentID is what THIS WRITE carries, not what the row has — empty means "this
+// write names no parent". Since NZ-3 exactly one surface can fill it:
+// storeRequest.parent_id on REST /api/store, which hands the id to
+// store.PutBlockParent after the upsert (context_store.go). There the gate is a
+// CONDITION; everywhere else it stays the total refusal T02-11 built, because
+// those shapes carry no parent field at all and pass "" for that reason. The
+// other three callers of claimReject — the chat stage runner, /api/ingest and
+// the MCP update tool — pass no type either, so the gate is inert on them by
+// construction rather than by omission, exactly as validateTypeNameAgainstSet
+// already is.
 //
-// The refusal is therefore TOTAL on these surfaces, not conditional. There is no
-// request shape here that could satisfy the mode, so asking "does this write
-// carry a parent" would be asking a question with one possible answer. The
-// parent-bearing path is the type's own domain path: for `comment` that is
-// store.InsertCommentBlock behind the issue verbs (manage issue-comment-create,
-// POST /api/project/{id}/issues/{block_id}/comments, the MCP issue_comment
-// tool), which takes parent_id as a mandatory argument and refuses an empty one
-// itself (store.ErrCommentParentRequired). That path runs neither this gate nor
-// this chain and is unchanged, down to the bytes of its first refusal.
+// The refusal names the type's own DOMAIN path, and that is not the same offer
+// as parent_id: for `comment` the domain path is store.InsertCommentBlock behind
+// the issue verbs (manage issue-comment-create, POST
+// /api/project/{id}/issues/{block_id}/comments, the MCP issue_comment tool),
+// which takes parent_id as a mandatory argument, derives title, local sequence
+// and scope FROM the parent, and refuses an empty parent itself
+// (store.ErrCommentParentRequired). /api/store with parent_id hangs a block
+// under a parent; it does not become that domain path. That path runs neither
+// this gate nor this chain and is unchanged, down to the bytes of its first
+// refusal.
 //
 // WHY IN claimReject AND NOT IN runStageWriteGates: the claim gates are the
 // surfaces' shared answer to "what may a client assert about a block it writes",
@@ -256,7 +274,7 @@ func validateTypeNameAgainstSet(set *blocktype.Set, name string) *writeReject {
 // for a typo and hand the verdict to the next gate — and a nil set would reach
 // s.policies through a nil receiver. Past the membership check the set is
 // non-nil and the name resolved.
-func parentRequiredReject(set *blocktype.Set, name string) *writeReject {
+func parentRequiredReject(set *blocktype.Set, name, parentID string) *writeReject {
 	if set == nil {
 		// Unreachable from claimReject (the membership check above fails closed
 		// with unknown_type on a nil set); here so the function is total.
@@ -265,6 +283,20 @@ func parentRequiredReject(set *blocktype.Set, name string) *writeReject {
 	if set.ParentMode(name) != blocktype.ParentModeRequired {
 		return nil
 	}
+	if parentID != "" {
+		// The mode is satisfied by the CLAIM; whether the named parent exists, is
+		// visible and shares the scope is decided at the write, by
+		// store.ParentLinkable and store.PutBlockParent — a registry gate must not
+		// hold a second, weaker copy of that verdict.
+		return nil
+	}
+	// The prose is unchanged since T02-11 and byte-identical on every arm (the
+	// arm-parity probe in mcp_store_gatechain_integration_test.go asserts the
+	// EQUALITY between arms, not only the class). On the one arm that grew a
+	// parent field, "this write surface carries no parent" now reads as "this
+	// write carries none"; the accurate remedy for that arm — name parent_id — is
+	// published in docs/api.md rather than re-worded into a message four other
+	// arms share.
 	return classParentRequired.reject(fmt.Sprintf(
 		"type: %q requires a parent (parent.mode=required) — this write surface carries no parent, "+
 			"so a block of that type is created through its own domain path, not claimed here", name))
@@ -291,7 +323,12 @@ func parentRequiredReject(set *blocktype.Set, name string) *writeReject {
 // manage-update copy checked type before category and answered 422 where
 // /api/store answered 403 for the identical payload (review finding #6) — the
 // exact property this comment claimed.
-func claimReject(set *blocktype.Set, category, typeName string, metadata map[string]any) *writeReject {
+//
+// parentID follows the same empty-value convention as the other three: "" means
+// "this write names no parent", which is the literal truth on every surface but
+// REST /api/store. Passing it explicitly is what keeps that fact at the call
+// site instead of inside the gate.
+func claimReject(set *blocktype.Set, category, typeName, parentID string, metadata map[string]any) *writeReject {
 	if rej := reservedCategoryReject(category); rej != nil {
 		return rej
 	}
@@ -304,7 +341,7 @@ func claimReject(set *blocktype.Set, category, typeName string, metadata map[str
 	if rej := validateTypeNameAgainstSet(set, typeName); rej != nil {
 		return rej
 	}
-	return parentRequiredReject(set, typeName)
+	return parentRequiredReject(set, typeName, parentID)
 }
 
 // reservedMetadataReject is the second half of I7/S3 (design D-01 §4.3.1 read

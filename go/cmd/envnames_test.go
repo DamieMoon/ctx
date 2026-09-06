@@ -110,27 +110,6 @@ func toolPackages(t *testing.T) []config.ScanPackage {
 	return out
 }
 
-// nonTestGoFiles lists the .go files of one directory, test files excluded —
-// the same file set config.ScanEnvNames walks, so both halves of the fence
-// judge the same code.
-func nonTestGoFiles(t *testing.T, dir string) []string {
-	t.Helper()
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatalf("read %s: %v", dir, err)
-	}
-	var out []string
-	for _, entry := range entries {
-		name := entry.Name()
-		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		out = append(out, filepath.Join(dir, name))
-	}
-	sort.Strings(out)
-	return out
-}
-
 // budgetedNames is the registry plus the budget: what a literal may be.
 func budgetedNames() map[string]bool {
 	out := map[string]bool{}
@@ -222,7 +201,14 @@ func TestEveryNonLiteralEnvReadIsNamed(t *testing.T) {
 	fset := token.NewFileSet()
 	files := 0
 	for _, pkg := range toolPackages(t) {
-		for _, abs := range nonTestGoFiles(t, pkg.Dir) {
+		// config.NonTestGoFiles is the same file set config.ScanEnvNames walks,
+		// so both halves of the fence judge the same code — one definition, not
+		// a copy that can drift (NZ-3).
+		goFiles, err := config.NonTestGoFiles(pkg.Dir)
+		if err != nil {
+			t.Fatalf("list %s: %v", pkg.Dir, err)
+		}
+		for _, abs := range goFiles {
 			files++
 			file, err := goparser.ParseFile(fset, abs, nil, goparser.SkipObjectResolution)
 			if err != nil {

@@ -33,7 +33,6 @@ type Block struct {
 	Content     string            `json:"content"`
 	Metadata    map[string]any    `json:"metadata"`
 	Scope       string            `json:"scope"`
-	ContentHash string            `json:"content_hash,omitempty"`
 	GuardStatus string            `json:"guard_status,omitempty"`
 	// Sensitivity + SensitivitySource (M055, F3-P3): trust-gate classification.
 	// Only the paths that RETURN the columns fill them (upsert/update/get);

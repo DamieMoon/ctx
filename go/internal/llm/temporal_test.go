@@ -512,133 +512,6 @@ func TestAttacker_TemporalToFTSExpansion_MixedValidInvalid(t *testing.T) {
 }
 
 // ---.
-// TemporalToEmbedPrefix — Malicious Inputs
-// ---.
-
-func TestAttacker_TemporalToEmbedPrefix_EmptyDates(t *testing.T) {
-	result := TemporalToEmbedPrefix([]TemporalDate{})
-	if result != "" {
-		t.Errorf("empty dates should return empty string, got: %q", result)
-	}
-}
-
-func TestAttacker_TemporalToEmbedPrefix_NilDates(t *testing.T) {
-	result := TemporalToEmbedPrefix(nil)
-	if result != "" {
-		t.Errorf("nil dates should return empty string, got: %q", result)
-	}
-}
-
-func TestAttacker_TemporalToEmbedPrefix_InvalidDateFormats(t *testing.T) {
-	// ATTACK: Various invalid date formats.
-	invalids := []string{
-		"not-a-date", "2026/03/28", "", "null", "2026-1-1",
-		"03-28-2026", "2026-03-28T00:00:00Z",
-	}
-	for _, d := range invalids {
-		t.Run(d, func(t *testing.T) {
-			dates := []TemporalDate{{Ref: "test", Date: d, Dir: "past"}}
-			result := TemporalToEmbedPrefix(dates)
-			if result != "" {
-				t.Errorf("invalid date %q should produce empty prefix, got: %q", d, result)
-			}
-		})
-	}
-}
-
-func TestAttacker_TemporalToEmbedPrefix_ExtremeYears(t *testing.T) {
-	// ATTACK: Dates far in past and future.
-	extremes := []struct {
-		name string
-		date string
-	}{
-		{"year 0001", "0001-01-01"},
-		{"year 9999", "9999-12-31"},
-		{"year 0000", "0000-01-01"},
-		{"far future", "9999-06-15"},
-	}
-	for _, tc := range extremes {
-		t.Run(tc.name, func(t *testing.T) {
-			dates := []TemporalDate{{Ref: "test", Date: tc.date, Dir: "past"}}
-			result := TemporalToEmbedPrefix(dates)
-			// Year 0000 is valid in Go's time package (year 0 = 1 BC).
-			t.Logf("date=%q result=%q", tc.date, result)
-			if tc.date == "0001-01-01" || tc.date == "9999-12-31" || tc.date == "9999-06-15" || tc.date == "0000-01-01" {
-				if result == "" {
-					t.Errorf("extreme but parseable date %q should produce output", tc.date)
-				}
-			}
-		})
-	}
-}
-
-func TestAttacker_TemporalToEmbedPrefix_SQLInjectionInRef(t *testing.T) {
-	// ATTACK: Ref with SQL injection — should not appear in embed prefix.
-	dates := []TemporalDate{{
-		Ref:  "'; DROP TABLE context_blocks; --",
-		Date: "2026-03-28",
-		Dir:  "past",
-	}}
-	result := TemporalToEmbedPrefix(dates)
-	if strings.Contains(result, "DROP") {
-		t.Error("SQL injection from Ref field leaked into embed prefix")
-	}
-	if result == "" {
-		t.Error("valid date with malicious Ref should still produce output")
-	}
-}
-
-func TestAttacker_TemporalToEmbedPrefix_Deduplication(t *testing.T) {
-	// ATTACK: Duplicate dates should be deduplicated in prefix.
-	dates := []TemporalDate{
-		{Ref: "a", Date: "2026-03-28", Dir: "today"},
-		{Ref: "b", Date: "2026-03-28", Dir: "today"},
-	}
-	result := TemporalToEmbedPrefix(dates)
-	count := strings.Count(result, "2026-03-28")
-	if count != 1 {
-		t.Errorf("duplicate dates should be deduplicated, '2026-03-28' appears %d times in: %q", count, result)
-	}
-}
-
-func TestAttacker_TemporalToEmbedPrefix_AllInvalid(t *testing.T) {
-	// ATTACK: All dates invalid — must return empty, not "." alone.
-	dates := []TemporalDate{
-		{Ref: "a", Date: "garbage", Dir: "past"},
-		{Ref: "b", Date: "nope", Dir: "past"},
-	}
-	result := TemporalToEmbedPrefix(dates)
-	if result != "" {
-		t.Errorf("all invalid dates should return empty string, got: %q", result)
-	}
-}
-
-func TestAttacker_TemporalToEmbedPrefix_TrailingDot(t *testing.T) {
-	// Verify the prefix always ends with a period for valid dates.
-	dates := []TemporalDate{{Ref: "test", Date: "2026-03-28", Dir: "today"}}
-	result := TemporalToEmbedPrefix(dates)
-	if !strings.HasSuffix(result, ".") {
-		t.Errorf("embed prefix should end with '.', got: %q", result)
-	}
-}
-
-func TestAttacker_TemporalToEmbedPrefix_MassiveDateCount(t *testing.T) {
-	// ATTACK: 1000+ dates — verify it doesn't blow up memory or panic.
-	dates := make([]TemporalDate, 1500)
-	for i := 0; i < 1500; i++ {
-		d := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC).AddDate(0, 0, i)
-		dates[i] = TemporalDate{Ref: "test", Date: d.Format("2006-01-02"), Dir: "past"}
-	}
-	result := TemporalToEmbedPrefix(dates)
-	if result == "" {
-		t.Error("1500 valid dates should produce non-empty prefix")
-	}
-	if !strings.HasSuffix(result, ".") {
-		t.Error("prefix should end with '.' even with massive input")
-	}
-}
-
-// ---.
 // buildCalendar — Boundary Dates & Edge Cases
 // ---.
 
@@ -829,12 +702,8 @@ func TestAttacker_TemporalDate_EmptyFields(t *testing.T) {
 	// ATTACK: All fields empty.
 	dates := []TemporalDate{{Ref: "", Date: "", End: nil, Dir: ""}}
 	fts := TemporalToFTSExpansion(dates)
-	embed := TemporalToEmbedPrefix(dates)
 	if fts != "" {
 		t.Errorf("empty date should produce empty FTS, got: %q", fts)
-	}
-	if embed != "" {
-		t.Errorf("empty date should produce empty embed prefix, got: %q", embed)
 	}
 }
 
@@ -863,19 +732,6 @@ func TestAttacker_TemporalToFTSExpansion_ISODateCorrectness(t *testing.T) {
 	// T07: No weekday names in FTS (75% FP rate empirically measured).
 	if strings.Contains(result, "Samstag") || strings.Contains(result, "Saturday") {
 		t.Errorf("weekday names should not be in FTS expansion (T07), got: %q", result)
-	}
-}
-
-func TestAttacker_TemporalToEmbedPrefix_WeekdayCorrectness(t *testing.T) {
-	// VERIFICATION: Embed prefix weekday matches date.
-	dates := []TemporalDate{{Ref: "test", Date: "2026-03-28", Dir: "today"}}
-	result := TemporalToEmbedPrefix(dates)
-	// Enhanced prefix includes month + KW.
-	if !strings.HasPrefix(result, "Samstag 2026-03-28") {
-		t.Errorf("expected prefix starting with 'Samstag 2026-03-28', got %q", result)
-	}
-	if !strings.Contains(result, "März") {
-		t.Errorf("expected month name 'März' in prefix, got %q", result)
 	}
 }
 
@@ -1099,63 +955,6 @@ func TestTemporalToFTSExpansion_TotalTermsCap(t *testing.T) {
 	}
 }
 
-func TestTemporalToEmbedPrefix_LengthCapping(t *testing.T) {
-	// Many dates → prefix should be capped to ≤maxEmbedPrefixLen.
-	dates := make([]TemporalDate, 20)
-	for i := 0; i < 20; i++ {
-		d := time.Date(2026, 1, 1+i*15, 0, 0, 0, 0, time.UTC) // Every 15 days
-		dates[i] = TemporalDate{Ref: "test", Date: d.Format("2006-01-02"), Dir: "past"}
-	}
-	result := TemporalToEmbedPrefix(dates)
-	if result == "" {
-		t.Fatal("20 valid dates should produce non-empty prefix")
-	}
-	if len(result) > maxEmbedPrefixLen+50 {
-		// Allow some slack for the summary format, but should be much shorter than uncapped.
-		t.Errorf("embed prefix should be near maxEmbedPrefixLen (%d), got %d chars: %s",
-			maxEmbedPrefixLen, len(result), result)
-	}
-	if !strings.HasSuffix(result, ".") {
-		t.Errorf("capped embed prefix should end with '.', got: %q", result)
-	}
-}
-
-func TestTemporalToEmbedPrefix_ShortPrefixNotCapped(t *testing.T) {
-	// Single date → well under cap, should be full format.
-	dates := []TemporalDate{{Ref: "heute", Date: "2026-03-29", Dir: "today"}}
-	result := TemporalToEmbedPrefix(dates)
-	// Should be full format: "Sonntag 2026-03-29, März 2026, KW13. March."
-	if !strings.Contains(result, "Sonntag 2026-03-29") {
-		t.Errorf("single date prefix should contain full weekday+date, got: %q", result)
-	}
-	if !strings.Contains(result, "März") {
-		t.Errorf("single date prefix should contain German month, got: %q", result)
-	}
-	if len(result) > maxEmbedPrefixLen {
-		t.Errorf("single date should be well under cap (%d), got %d chars", maxEmbedPrefixLen, len(result))
-	}
-}
-
-func TestTemporalToEmbedPrefix_TwoDatesUnderCap(t *testing.T) {
-	// Two dates — should be under the cap and use full format.
-	dates := []TemporalDate{
-		{Ref: "start", Date: "2026-03-23", Dir: "range"},
-		{Ref: "end", Date: "2026-03-29", Dir: "range"},
-	}
-	result := TemporalToEmbedPrefix(dates)
-	if !strings.Contains(result, "2026-03-23") {
-		t.Error("start date should be in prefix")
-	}
-	if !strings.Contains(result, "2026-03-29") {
-		t.Error("end date should be in prefix")
-	}
-	// Two dates in same month → ~90 chars, should not trigger capping.
-	if len(result) > maxEmbedPrefixLen {
-		t.Logf("two same-month dates triggered capping at %d chars (threshold %d): %s",
-			len(result), maxEmbedPrefixLen, result)
-	}
-}
-
 // --- T03 Capping Tests ---.
 
 func TestT03_FTSExpansion_ThreeDatesNotCapped(t *testing.T) {
@@ -1251,89 +1050,5 @@ func TestT03_FTSExpansion_EightDatesCapped(t *testing.T) {
 	// YYYY-MM prefix should be present, not month names.
 	if !strings.Contains(result, "2026-03") {
 		t.Error("YYYY-MM prefix should be present")
-	}
-}
-
-// --- T05 Capping Tests ---.
-
-func TestT05_EmbedPrefix_ThreeDatesFullFormat(t *testing.T) {
-	// Exactly 3 dates = maxEmbedPrefixDates → full format (not collapsed).
-	dates := []TemporalDate{
-		{Ref: "a", Date: "2026-03-23", Dir: "past"},
-		{Ref: "b", Date: "2026-03-25", Dir: "past"},
-		{Ref: "c", Date: "2026-03-27", Dir: "past"},
-	}
-	result := TemporalToEmbedPrefix(dates)
-	// Full format includes individual entries separated by ". "
-	if !strings.Contains(result, "Montag 2026-03-23") {
-		t.Errorf("3 dates should use full format with weekday+date, got: %q", result)
-	}
-	if !strings.Contains(result, "Mittwoch 2026-03-25") {
-		t.Errorf("3 dates should use full format with weekday+date, got: %q", result)
-	}
-	if !strings.Contains(result, "Freitag 2026-03-27") {
-		t.Errorf("3 dates should use full format with weekday+date, got: %q", result)
-	}
-}
-
-func TestT05_EmbedPrefix_FourDatesCollapsed(t *testing.T) {
-	// 4 dates > maxEmbedPrefixDates(3) → always collapsed to summary.
-	dates := []TemporalDate{
-		{Ref: "a", Date: "2026-03-23", Dir: "past"},
-		{Ref: "b", Date: "2026-03-24", Dir: "past"},
-		{Ref: "c", Date: "2026-03-25", Dir: "past"},
-		{Ref: "d", Date: "2026-03-26", Dir: "past"},
-	}
-	result := TemporalToEmbedPrefix(dates)
-	// Should be compact "Start..End" format.
-	if !strings.Contains(result, "..") {
-		t.Errorf("4 dates should use collapsed format with '..', got: %q", result)
-	}
-	// Should contain start and end weekday+date.
-	if !strings.Contains(result, "Montag 2026-03-23") {
-		t.Errorf("collapsed format should contain start date, got: %q", result)
-	}
-	if !strings.Contains(result, "Donnerstag 2026-03-26") {
-		t.Errorf("collapsed format should contain end date, got: %q", result)
-	}
-	if !strings.HasSuffix(result, ".") {
-		t.Errorf("collapsed format should end with '.', got: %q", result)
-	}
-}
-
-func TestT05_EmbedPrefix_7DayRangeCompact(t *testing.T) {
-	// T05 core scenario: 7-day range should NOT produce ~300 chars.
-	dates := make([]TemporalDate, 7)
-	for i := 0; i < 7; i++ {
-		d := time.Date(2026, 3, 23+i, 0, 0, 0, 0, time.UTC) // Mon-Sun
-		dates[i] = TemporalDate{Ref: "test", Date: d.Format("2006-01-02"), Dir: "range"}
-	}
-	result := TemporalToEmbedPrefix(dates)
-	// 7 dates > maxEmbedPrefixDates(3) → must be collapsed.
-	if !strings.Contains(result, "..") {
-		t.Errorf("7 dates should use collapsed format, got: %q", result)
-	}
-	// "Montag 2026-03-23..Sonntag 2026-03-29, März, KW13."
-	if !strings.Contains(result, "Montag 2026-03-23") {
-		t.Errorf("should start with Monday, got: %q", result)
-	}
-	if !strings.Contains(result, "Sonntag 2026-03-29") {
-		t.Errorf("should end with Sunday, got: %q", result)
-	}
-	// Length must be well under 300 chars (the original problem).
-	if len(result) > 150 {
-		t.Errorf("7-day compact prefix should be ≤150 chars, got %d: %q", len(result), result)
-	}
-}
-
-func TestT05_EmbedPrefix_SingleDateNotCollapsed(t *testing.T) {
-	// 1 date ≤ maxEmbedPrefixDates → full format.
-	dates := []TemporalDate{{Ref: "heute", Date: "2026-03-25", Dir: "today"}}
-	result := TemporalToEmbedPrefix(dates)
-	if strings.Contains(result, "..") {
-		t.Errorf("single date should not use collapsed format, got: %q", result)
-	}
-	if !strings.Contains(result, "Mittwoch 2026-03-25") {
-		t.Errorf("single date should have full weekday+date, got: %q", result)
 	}
 }

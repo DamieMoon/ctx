@@ -32,6 +32,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/GottZ/ctx/internal/pgxdb"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -180,6 +181,57 @@ func PutBlockParent(ctx context.Context, tx pgx.Tx, childID, parentID string, al
 		parentID, childID)
 	if err != nil {
 		return fmt.Errorf("set block parent: %w", err)
+	}
+	return nil
+}
+
+// ParentLinkable reports whether parentID may become the parent of the block a
+// write addresses — the row its upsert key (childCategory, childTitle,
+// childScope) resolves to. nil = linkable. Unknown id, archived block, foreign
+// scope, a malformed uuid and the write's OWN identity ALL collapse into
+// ErrLinkScopeViolation — the same uniform verdict PutBlockParent gives, so the
+// difference cannot be used to probe a foreign block id for existence
+// (§4.3/§5.2).
+//
+// The identity comparison is what makes the self-parent case a refusal BEFORE
+// the write rather than after it: a client that names the very block its
+// category+title address would otherwise get its content (and its claimed type)
+// upserted and THEN a refusal from PutBlockParent's childID == parentID line —
+// an orphan of exactly the kind the claim gate exists to prevent. Same scope
+// plus same category plus same title is the same row, because that triple is the
+// partial unique key of the live corpus.
+//
+// It is a PRE-check for the one caller that cannot compose the link into its
+// write's own transaction: handler /api/store, where store.UpsertBlock owns its
+// Tx and the link is a second bracket (context_store.go). Checking first is what
+// keeps the routine refusals — typo, foreign parent, archived parent — BEFORE
+// the block exists, instead of answering an error next to a block that was
+// written anyway.
+//
+// It grants nothing and replaces nothing: PutBlockParent re-validates inside the
+// transaction that performs the write, and its verdict is the authoritative one.
+// The extra condition here is is_archived, which PutBlockParent does not read —
+// deliberately stricter, because an archived parent is exactly the parent a
+// caller must not hang new blocks under, and InsertCommentBlock excludes it too.
+func ParentLinkable(ctx context.Context, q pgxdb.Rower, parentID, childScope, childCategory, childTitle string) error {
+	if !IsFullUUID(parentID) {
+		return ErrLinkScopeViolation
+	}
+	var parentScope, parentCategory, parentTitle string
+	err := q.QueryRow(ctx,
+		`SELECT scope, category, title FROM context_blocks WHERE id = $1::uuid AND NOT is_archived`,
+		parentID).Scan(&parentScope, &parentCategory, &parentTitle)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrLinkScopeViolation
+	}
+	if err != nil {
+		return fmt.Errorf("structural link: parent lookup: %w", err)
+	}
+	if parentScope != childScope {
+		return ErrLinkScopeViolation
+	}
+	if parentCategory == childCategory && parentTitle == childTitle {
+		return ErrLinkScopeViolation
 	}
 	return nil
 }

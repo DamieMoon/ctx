@@ -63,6 +63,38 @@ func TestComposeDeclaresEveryRegistryKey(t *testing.T) {
 	}
 }
 
+// TestComposeDeclaresEveryEnvOnlyServerName is TestComposeDeclaresEveryRegistryKey's
+// sibling for the other half of the reachable surface: the seventeen names in
+// EnvOnlyServerNames() carry no settings key and no registry default, so
+// FromEnv never puts them within reach — the ctx service `environment:` block
+// is the ONLY declaration that can. A name missing here is not a stale
+// default copy (that class belongs to the registry gate above); it is a knob
+// nobody can turn from .env at all, silently, because envonly.go's own
+// comment names the class without a test enforcing it.
+//
+// Found by measurement, not assumed: seven of seventeen were undeclared
+// before this gate existed (the six CTX_OAUTH_* lifetime/rate/mode knobs plus
+// CTX_TRUSTED_PROXY) — none of them wired since EnvOnlyServerNames() grew
+// past the ten names T05-5 carried forward byte-for-byte from the block that
+// existed before the registry gate was built.
+func TestComposeDeclaresEveryEnvOnlyServerName(t *testing.T) {
+	declared := ctxServiceEnvNames(t)
+	var missing []string
+	for _, want := range EnvOnlyServerNames() {
+		if !declared[want] {
+			missing = append(missing, want)
+		}
+	}
+	for _, name := range missing {
+		t.Errorf("%s missing from the ctx service environment: block — an env-only server name with no registry fallback is unreachable through compose",
+			name)
+	}
+	if len(missing) > 0 {
+		t.Errorf("%d of %d env-only server names are undeclared; add them to the env-only section of docker-compose.yml",
+			len(missing), len(EnvOnlyServerNames()))
+	}
+}
+
 // TestComposeCopiesNoRegistryDefault is the single-source gate, the negative
 // twin of the one above: the compose block declares every knob and repeats no
 // default. A `${NAME:-<value>}` whose value equals the registry default is a

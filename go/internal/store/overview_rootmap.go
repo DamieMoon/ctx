@@ -362,6 +362,14 @@ func cappedCountTx(ctx context.Context, pool *pgxpool.Pool, timeout time.Duratio
 	// always had (context.WithoutCancel) and gains pgxdb's grace bound. An
 	// empty begin label means a failed BeginTx travels back unwrapped, as it
 	// did before.
+	//
+	// The grace bound only turns a cancelled cctx (activeCountGrace above)
+	// into a real ROLLBACK when the cancel lands BETWEEN statements. A cancel
+	// while the QueryRow below is still in flight has already reached pgx's
+	// own context watcher for that call — the connection is broken before
+	// this deferred rollback ever runs, grace bound or not, and the pool
+	// discards it rather than reusing it (pgxdb/tx.go WriteOpts doc, ROLLBACK
+	// POLICY, has the full mechanism and the T04-4k-Prüfung measurement).
 	if err := pgxdb.Probe(ctx, pool, "", func(tx pgx.Tx) error {
 		if timeout > 0 {
 			ms := timeout.Milliseconds()

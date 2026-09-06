@@ -38,7 +38,7 @@ import (
 // Scan area: the ctxd package closure (design/05 §4.6), via
 // serverRuntimePackages from envonly_test.go — the server runtime is exactly
 // where reading this field would decide something. internal/cli is not in the
-// closure, and nonTestGoFiles keeps test files out: store_test.go reads
+// closure, and NonTestGoFiles keeps test files out: store_test.go reads
 // c.Contract.Mode legitimately (a branded field in the snapshot-race
 // fixture), and an assertion about the registry value is not an enforcement
 // decision.
@@ -91,7 +91,7 @@ func contractModeReaders(pkgs []ScanPackage) ([]contractModeRef, error) {
 	fset := token.NewFileSet()
 	var out []contractModeRef
 	for _, pkg := range pkgs {
-		files, err := nonTestGoFiles(pkg.Dir)
+		files, err := NonTestGoFiles(pkg.Dir)
 		if err != nil {
 			return nil, err
 		}

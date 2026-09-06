@@ -182,7 +182,7 @@ func mcpUpdateHandler(cfg MCPConfig) mcp.ToolHandlerFor[updateInput, any] {
 		// metadata replacement can plant the provenance key just as a create
 		// can. The tool carries no `type`, so that arm of claimReject is inert
 		// here. Ahead of the stage branch, so a flagged key gets no card either.
-		if rej := claimReject(nil, strOrEmpty(data.Category), "", data.Metadata); rej != nil {
+		if rej := claimReject(nil, strOrEmpty(data.Category), "", "", data.Metadata); rej != nil {
 			return errResultReject(rej), nil, nil
 		}
 

@@ -94,7 +94,7 @@ func ScanEnvNames(pkgs []ScanPackage, allow map[string]bool, opts ...ScanOption)
 	fset := token.NewFileSet()
 	var out []EnvNameRef
 	for _, pkg := range pkgs {
-		files, err := nonTestGoFiles(pkg.Dir)
+		files, err := NonTestGoFiles(pkg.Dir)
 		if err != nil {
 			return nil, err
 		}
@@ -109,9 +109,15 @@ func ScanEnvNames(pkgs []ScanPackage, allow map[string]bool, opts ...ScanOption)
 	return out, nil
 }
 
-// nonTestGoFiles lists the .go files of one directory, test files excluded,
+// NonTestGoFiles lists the .go files of one directory, test files excluded,
 // sorted so that a failure list is stable across runs.
-func nonTestGoFiles(dir string) ([]string, error) {
+//
+// Exported because it is the file set BOTH halves of the env fence judge, and
+// the second half lives in another package: cmd/envnames_test.go and
+// cmd/dbaccess_test.go walk the same directories from outside internal/config.
+// It carried a byte-identical copy there until NZ-3; one scanner, one file set,
+// one definition (masterplan K10).
+func NonTestGoFiles(dir string) ([]string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, fmt.Errorf("env scan: read %s: %w", dir, err)

@@ -182,7 +182,7 @@ func (h *IngestHandler) HandleIngest(w http.ResponseWriter, r *http.Request) {
 	// metadata predicate), alongside the per-chunk hash check this endpoint
 	// already runs.
 	for i, chunk := range req.Chunks {
-		if rej := claimReject(nil, chunk.Category, "", chunk.Metadata); rej != nil {
+		if rej := claimReject(nil, chunk.Category, "", "", chunk.Metadata); rej != nil {
 			writeJSONReject(w, rej.prefixed(fmt.Sprintf("chunk[%d]: ", i)))
 			return
 		}

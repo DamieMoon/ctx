@@ -182,56 +182,6 @@ UPDATE graph_cluster_topic t
   ) f
  WHERE f.topic_id = t.topic_id`
 
-// fallbackLabelExprUncapped drops the 120-rune cap. Test use only: it is the
-// shape that lets an unbounded tag break gct_label_len inside the persist
-// transaction.
-//
-//nolint:unused // reader is topic_label_integration_test.go:189 (//go:build
-// integration) — the tag-less golangci-lint run of CI and .hooks/pre-commit
-// never compiles that file, so `unused` cannot see it. Cutting this kills the
-// G1b red probe.
-var fallbackLabelExprUncapped = `COALESCE(
-             ` + sqlStage(fallbackTagStage) + `,
-             ` + sqlStage(fallbackCategoryStage) + `,
-             ` + sqlStage(fallbackTitleStage) + `,
-             '` + fallbackLastResort + `'
-           )`
-
-// fallbackTagStageLegacy is the pre-K1-1 tag rung: emptiness tested on the RAW
-// token with btrim/1, which only knows U+0020. Test use only.
-//
-//nolint:unused // read by fallbackLabelExprLegacy below, whose only reader is
-// topic_label_integration_test.go:430 (//go:build integration) — the tag-less
-// golangci-lint run never compiles that file, so the whole chain reads as dead
-// to `unused`. Falls or stays with fallbackLabelExprLegacy.
-var fallbackTagStageLegacy = `(SELECT string_agg(x.tg, ' · ' ORDER BY x.cnt DESC, x.tg)
-                 FROM (SELECT tg.tg, count(*) AS cnt
-                         FROM unnest(n.core_blocks) AS cb
-                         JOIN context_blocks b ON b.id = cb AND b.scope = n.scope
-                          AND b.sensitivity IN ('internal','public')
-                         CROSS JOIN LATERAL unnest(b.tags) AS tg(tg)
-                        WHERE btrim(tg.tg) <> ''
-                        GROUP BY tg.tg
-                        ORDER BY count(*) DESC, tg.tg
-                        LIMIT 3) x)`
-
-// fallbackLabelExprLegacy is the pre-K1-1 shape, kept for the negative probe:
-// the emptiness tests run on the RAW text, the normalisation runs after the
-// COALESCE has already committed to a stage, and the constant sits INSIDE the
-// COALESCE where a blank-but-not-NULL stage skips right past it. Test use only
-// — production never renders it.
-//
-//nolint:unused // reader is topic_label_integration_test.go:430 (//go:build
-// integration) — the tag-less golangci-lint run of CI and .hooks/pre-commit
-// never compiles that file, so `unused` cannot see it. Cutting this kills the
-// K1-1 red probe.
-var fallbackLabelExprLegacy = `btrim(left(btrim(regexp_replace(COALESCE(
-             ` + fallbackTagStageLegacy + `,
-             ` + fallbackCategoryStage + `,
-             nullif(btrim(n.repr_title), ''),
-             '` + fallbackLastResort + `'
-           ), '\s+', ' ', 'g')), 120))`
-
 // writeFallbackLabels runs the W5 statement for this run's shape. It has to run
 // AFTER the node aggregation — the cascade reads core_blocks, category_counts
 // and repr_title off the freshly written node rows — and inside the same
