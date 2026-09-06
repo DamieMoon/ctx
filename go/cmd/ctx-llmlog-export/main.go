@@ -34,7 +34,7 @@ import (
 	"time"
 
 	"github.com/GottZ/ctx/internal/config"
-	"github.com/GottZ/ctx/internal/llmlog"
+	"github.com/GottZ/ctx/internal/llmlogexport"
 	"github.com/GottZ/ctx/internal/toolboot"
 )
 
@@ -72,7 +72,7 @@ func run(args []string, stderr io.Writer) int {
 		say("ctx-llmlog-export: -out ist Pflicht")
 		return 1
 	}
-	opts := llmlog.ExportOptions{BatchSize: *batch, Strict: *strict, SinceID: *sinceID}
+	opts := llmlogexport.ExportOptions{BatchSize: *batch, Strict: *strict, SinceID: *sinceID}
 	var err error
 	if *sinceStr != "" {
 		if opts.Since, err = time.Parse(time.RFC3339Nano, *sinceStr); err != nil {
@@ -80,7 +80,7 @@ func run(args []string, stderr io.Writer) int {
 		}
 	}
 	if *sinceID != "" && *sinceStr == "" {
-		return fail("-since-id", llmlog.ErrSinceID)
+		return fail("-since-id", llmlogexport.ErrSinceID)
 	}
 	if *untilStr != "" {
 		if opts.Until, err = time.Parse(time.RFC3339Nano, *untilStr); err != nil {
@@ -96,11 +96,11 @@ func run(args []string, stderr io.Writer) int {
 	// Perimeter ZUERST — vor jeder DB-Verbindung (fail-closed); die Datei
 	// selbst entsteht erst nach erfolgreichem Verbindungsaufbau, damit ein
 	// Config-/DB-Fehler keine leere O_EXCL-Leiche hinterlässt.
-	if err := llmlog.CheckExportDir(filepath.Dir(*outPath)); err != nil {
+	if err := llmlogexport.CheckExportDir(filepath.Dir(*outPath)); err != nil {
 		return fail("perimeter", err)
 	}
 	if *summary != "" {
-		if err := llmlog.CheckExportDir(filepath.Dir(*summary)); err != nil {
+		if err := llmlogexport.CheckExportDir(filepath.Dir(*summary)); err != nil {
 			return fail("perimeter (-summary)", err)
 		}
 	}
@@ -126,17 +126,17 @@ func run(args []string, stderr io.Writer) int {
 	}
 	defer sess.Stop()
 
-	out, err := llmlog.CreateExportFile(*outPath)
+	out, err := llmlogexport.CreateExportFile(*outPath)
 	if err != nil {
 		return fail("out", err)
 	}
 	defer func() { _ = out.Close() }()
 
-	sum, exportErr := llmlog.Export(ctx, sess.Pool, out, opts)
+	sum, exportErr := llmlogexport.Export(ctx, sess.Pool, out, opts)
 	syncErr := out.Sync()
 
 	// Zähl-Kontrakt IMMER zuerst — gerade auf Fehlerpfaden ist er der Beleg.
-	line := llmlog.MarshalSummary(sum)
+	line := llmlogexport.MarshalSummary(sum)
 	say(string(line))
 	if syncErr != nil {
 		say("ctx-llmlog-export: fsync:", syncErr)
@@ -155,10 +155,10 @@ func run(args []string, stderr io.Writer) int {
 		// vollständig, behalten" — das ist ohne erfolgreichen fsync nicht
 		// belegt; ein Persistenz-Fehler ist immer Exit 1.
 		return 1
-	case errors.Is(exportErr, llmlog.ErrBodiesEvicted):
+	case errors.Is(exportErr, llmlogexport.ErrBodiesEvicted):
 		say("ctx-llmlog-export: ALARM:", exportErr)
 		return 2
-	case errors.Is(exportErr, llmlog.ErrCountGate):
+	case errors.Is(exportErr, llmlogexport.ErrCountGate):
 		say("ctx-llmlog-export: GATE:", exportErr)
 		return 3
 	case exportErr != nil:
@@ -169,7 +169,7 @@ func run(args []string, stderr io.Writer) int {
 }
 
 func writeSummary(path string, line []byte) error {
-	sf, err := llmlog.CreateExportFile(path)
+	sf, err := llmlogexport.CreateExportFile(path)
 	if err != nil {
 		return err
 	}

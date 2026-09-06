@@ -1,4 +1,4 @@
-package llmlog
+package llmlogexport
 
 import (
 	"errors"

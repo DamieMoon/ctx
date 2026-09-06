@@ -1,4 +1,12 @@
-package llmlog
+// Package llmlogexport ist der Bulk-Leser von context_llm_log: der
+// Keyset-JSONL-Export, sein Zähl-Gate und der Datei-Perimeter, den die
+// DB-direkten Werkzeuge teilen. Er steht NEBEN internal/llmlog, nicht
+// darin: dort schreibt der Server seine Zeilen, hier liest ein Werkzeug
+// sie wieder heraus (E06-2 A). Der Schnitt IST der Zweck des Pakets —
+// kein Server-Binär erreicht es, also liegt es im tool-only-Graphen und
+// der vierte Zaun (cmd/dbaccess_test.go) prüft jede DB-Öffnung hier auf
+// READ ONLY.
+package llmlogexport
 
 import (
 	"bufio"
@@ -201,10 +209,10 @@ func pageSQL(where string, args []any, cursor bool, lastTS time.Time, lastID str
 }
 
 // Export schreibt alle Zeilen des Fensters als JSONL nach w und liefert den
-// Zähl-Kontrakt. Jede Seite und das count(*)-Gate laufen in einer eigenen,
-// kurzen READ ONLY-Transaktion: kein Schreibpfad ist by construction
-// möglich, und kein Mehrstunden-Snapshot pinnt den xmin-Horizont der
-// Datenbank (Autovacuum, Retention-Janitor). Die Menge ist trotzdem stabil:
+// Zähl-Kontrakt. Der Until-Pin, jede Seite und das count(*)-Gate laufen in
+// einer eigenen, kurzen READ ONLY-Transaktion: kein Schreibpfad ist by
+// construction möglich, und kein Mehrstunden-Snapshot pinnt den xmin-Horizont
+// der Datenbank (Autovacuum, Retention-Janitor). Die Menge ist trotzdem stabil:
 // das Fenster ist rechts geschlossen (Until mit Marge), die Tabelle im
 // Fenster append-only, und Retention NULLt Bodies statt Zeilen zu löschen.
 //
@@ -234,7 +242,9 @@ func Export(ctx context.Context, pool *pgxpool.Pool, w io.Writer, opts ExportOpt
 	// (created_at liegt dann unter dem Watermark) oder lässt das count(*)-Gate
 	// grundlos reißen. Das Summary trägt das EFFEKTIVE Until.
 	var pin time.Time
-	if err := pool.QueryRow(ctx, `SELECT now() - $1::interval`, margin).Scan(&pin); err != nil {
+	if err := pgxdb.Read(ctx, pool, pgxdb.Stages{Begin: "begin"}, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT now() - $1::interval`, margin).Scan(&pin)
+	}); err != nil {
 		return sum, fmt.Errorf("llmlog export: pin until: %w", err)
 	}
 	until := opts.Until

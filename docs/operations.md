@@ -254,9 +254,9 @@ The config is validated in full before the first database contact: an error-seve
 `internal/config` — the cross-field rules included — is printed and ends the run with exit ≠ 0
 before any pool is opened.
 
-It reads the DSN from the same config source as `ctxd` (`CONTEXT_DB*`). Every page and the
-final `count(*)` gate run in their own short `READ ONLY` transaction (no write path by
-construction; no hours-long snapshot pinning the database's xmin horizon on large tables). The
+It reads the DSN from the same config source as `ctxd` (`CONTEXT_DB*`). The `-until` pin, every
+page and the final `count(*)` gate run in their own short `READ ONLY` transaction (no write path
+by construction; no hours-long snapshot pinning the database's xmin horizon on large tables). The
 window is stable regardless: `-until` defaults to the database `now()` **minus one minute**
 (commit margin — `created_at` is the insert's transaction start, the commit may land up to the
 insert timeout later) and an explicit `-until` later than that is **clamped to the same margin**
@@ -360,6 +360,9 @@ the JSON file are written on `3` and `4` as well — they are the evidence.
 The rule behind all three: DB-direct tools open `READ ONLY` (`pgxdb.Read`, or a connection that sets
 `default_transaction_read_only`), and the only writing exception is `ctx-distillreset` — a list
 `cmd/dbaccess_test.go` pins site by site, so a new direct write is a line with a reason or a red test.
+The fence judges packages no server binary reaches, which is why the JSONL export reader lives in
+`internal/llmlogexport` rather than in `internal/llmlog` (the package `ctxd` writes its log rows
+through): the reader is a tool, the writer is the server, and only the tool answers to this rule.
 
 ### Shadow-retype reset: ctx-distillreset
 

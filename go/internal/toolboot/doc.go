@@ -25,7 +25,7 @@
 // os.Interrupt + syscall.SIGTERM, and the derived context arrives here as the
 // first parameter. So does the exit form — os.Exit(1) in a main, return 1 out
 // of a run(...) int. So does every perimeter check a tool runs before it
-// touches a database at all (llmlog.CheckExportDir in ctx-armcost and
+// touches a database at all (llmlogexport.CheckExportDir in ctx-armcost and
 // ctx-llmlog-export). And so does the settings overlay: callers that need the
 // env issues for settings.Bootstrap keep them from the report callback, which
 // is the one place they pass by.

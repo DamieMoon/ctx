@@ -1,6 +1,6 @@
 //go:build !linux
 
-package llmlog
+package llmlogexport
 
 // setUmask ist auf Nicht-Linux ein No-op; die Modus-Assertion läuft dort
 // gegen die Default-umask und ist entsprechend schwächer (Review F9 — ohne

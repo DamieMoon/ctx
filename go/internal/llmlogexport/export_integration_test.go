@@ -1,7 +1,7 @@
 //go:build integration
 
 // External test package (import cycle via testdb, see evict_integration_test.go).
-package llmlog_test
+package llmlogexport_test
 
 import (
 	"bytes"
@@ -16,7 +16,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/GottZ/ctx/internal/llmlog"
+	"github.com/GottZ/ctx/internal/llmlogexport"
 	"github.com/GottZ/ctx/internal/testdb"
 )
 
@@ -99,7 +99,7 @@ func TestExportKW1(t *testing.T) {
 
 	t.Run("classifier: 1 candidate, 1 slim, 0 null; fields == live schema; count gate", func(t *testing.T) {
 		var buf bytes.Buffer
-		sum, err := llmlog.Export(ctx, pool, &buf, llmlog.ExportOptions{BatchSize: 1})
+		sum, err := llmlogexport.Export(ctx, pool, &buf, llmlogexport.ExportOptions{BatchSize: 1})
 		if err != nil {
 			t.Fatalf("export: %v", err)
 		}
@@ -149,7 +149,7 @@ func TestExportKW1(t *testing.T) {
 
 	t.Run("window: pipeline filter + until pin", func(t *testing.T) {
 		var buf bytes.Buffer
-		sum, err := llmlog.Export(ctx, pool, &buf, llmlog.ExportOptions{Pipelines: []string{"slim"}})
+		sum, err := llmlogexport.Export(ctx, pool, &buf, llmlogexport.ExportOptions{Pipelines: []string{"slim"}})
 		if err != nil {
 			t.Fatalf("export: %v", err)
 		}
@@ -158,7 +158,7 @@ func TestExportKW1(t *testing.T) {
 		}
 		// until pinned before the newest row → newest excluded, count gate still holds
 		buf.Reset()
-		sum, err = llmlog.Export(ctx, pool, &buf, llmlog.ExportOptions{Until: time.Now().Add(-25 * time.Minute)})
+		sum, err = llmlogexport.Export(ctx, pool, &buf, llmlogexport.ExportOptions{Until: time.Now().Add(-25 * time.Minute)})
 		if err != nil {
 			t.Fatalf("export: %v", err)
 		}
@@ -169,7 +169,7 @@ func TestExportKW1(t *testing.T) {
 		// DB-now()−Marge gedeckelt — das Summary trägt das effektive Until.
 		buf.Reset()
 		before := time.Now()
-		sum, err = llmlog.Export(ctx, pool, &buf, llmlog.ExportOptions{Until: time.Now().Add(time.Hour), UntilMargin: 30 * time.Minute})
+		sum, err = llmlogexport.Export(ctx, pool, &buf, llmlogexport.ExportOptions{Until: time.Now().Add(time.Hour), UntilMargin: 30 * time.Minute})
 		if err != nil {
 			t.Fatalf("export: %v", err)
 		}
@@ -183,8 +183,8 @@ func TestExportKW1(t *testing.T) {
 
 	t.Run("rescue-first: full export, THEN error", func(t *testing.T) {
 		var buf bytes.Buffer
-		sum, err := llmlog.Export(ctx, pool, &buf, llmlog.ExportOptions{BatchSize: 2})
-		if !errors.Is(err, llmlog.ErrBodiesEvicted) {
+		sum, err := llmlogexport.Export(ctx, pool, &buf, llmlogexport.ExportOptions{BatchSize: 2})
+		if !errors.Is(err, llmlogexport.ErrBodiesEvicted) {
 			t.Fatalf("expected ErrBodiesEvicted, got %v", err)
 		}
 		if sum.RowsTotal != 5 || sum.RowsBody != 2 || sum.RowsBodylessSlim != 2 || sum.RowsBodylessNull != 1 {
@@ -201,8 +201,8 @@ func TestExportKW1(t *testing.T) {
 
 	t.Run("strict: abort at first NULL", func(t *testing.T) {
 		var buf bytes.Buffer
-		sum, err := llmlog.Export(ctx, pool, &buf, llmlog.ExportOptions{Strict: true, BatchSize: 100})
-		if !errors.Is(err, llmlog.ErrBodiesEvicted) {
+		sum, err := llmlogexport.Export(ctx, pool, &buf, llmlogexport.ExportOptions{Strict: true, BatchSize: 100})
+		if !errors.Is(err, llmlogexport.ErrBodiesEvicted) {
 			t.Fatalf("expected ErrBodiesEvicted, got %v", err)
 		}
 		// evicted row is the youngest → the abort happens on the last row;
@@ -266,7 +266,7 @@ func TestExportKeysetTiesAndResume(t *testing.T) {
 	}
 
 	var full bytes.Buffer
-	sum, err := llmlog.Export(ctx, pool, &full, llmlog.ExportOptions{BatchSize: 2})
+	sum, err := llmlogexport.Export(ctx, pool, &full, llmlogexport.ExportOptions{BatchSize: 2})
 	if err != nil {
 		t.Fatalf("full export: %v", err)
 	}
@@ -278,7 +278,7 @@ func TestExportKeysetTiesAndResume(t *testing.T) {
 	// Part A: only the tie group, cut by an explicit until between t0 and the
 	// later rows; its watermark is the LAST tie row.
 	var partA bytes.Buffer
-	sumA, err := llmlog.Export(ctx, pool, &partA, llmlog.ExportOptions{BatchSize: 2, Until: time.Now().Add(-45 * time.Minute)})
+	sumA, err := llmlogexport.Export(ctx, pool, &partA, llmlogexport.ExportOptions{BatchSize: 2, Until: time.Now().Add(-45 * time.Minute)})
 	if err != nil {
 		t.Fatalf("part A: %v", err)
 	}
@@ -288,7 +288,7 @@ func TestExportKeysetTiesAndResume(t *testing.T) {
 
 	// Part B (exact cursor): since+since-id — union must equal the full export.
 	var partB bytes.Buffer
-	sumB, err := llmlog.Export(ctx, pool, &partB, llmlog.ExportOptions{
+	sumB, err := llmlogexport.Export(ctx, pool, &partB, llmlogexport.ExportOptions{
 		BatchSize: 2, Since: *sumA.Watermark, SinceID: sumA.WatermarkID, Until: sum.Until,
 	})
 	if err != nil {
@@ -305,7 +305,7 @@ func TestExportKeysetTiesAndResume(t *testing.T) {
 	// -since alone (inclusive): the whole created_at group of the watermark
 	// comes back — 5 tie rows + 3 later = 8, i.e. duplicates in a concatenation.
 	var partC bytes.Buffer
-	sumC, err := llmlog.Export(ctx, pool, &partC, llmlog.ExportOptions{BatchSize: 2, Since: *sumA.Watermark, Until: sum.Until})
+	sumC, err := llmlogexport.Export(ctx, pool, &partC, llmlogexport.ExportOptions{BatchSize: 2, Since: *sumA.Watermark, Until: sum.Until})
 	if err != nil {
 		t.Fatalf("part C: %v", err)
 	}
@@ -318,7 +318,7 @@ func TestExportKeysetTiesAndResume(t *testing.T) {
 	cctx, cancel := context.WithCancel(ctx)
 	cancel()
 	var partD bytes.Buffer
-	sumD, err := llmlog.Export(cctx, pool, &partD, llmlog.ExportOptions{BatchSize: 2})
+	sumD, err := llmlogexport.Export(cctx, pool, &partD, llmlogexport.ExportOptions{BatchSize: 2})
 	if err == nil {
 		t.Fatal("cancelled export must fail")
 	}

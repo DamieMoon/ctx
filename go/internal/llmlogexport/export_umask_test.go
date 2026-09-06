@@ -1,6 +1,6 @@
 //go:build linux
 
-package llmlog
+package llmlogexport
 
 import "syscall"
 

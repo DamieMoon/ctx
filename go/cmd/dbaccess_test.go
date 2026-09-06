@@ -59,13 +59,17 @@
 //
 // # What is deliberately NOT in the scan area
 //
-// internal/llmlog. cmd/ctx-llmlog-export runs its export through it, but ctxd
-// writes log rows through the same package (llmlog.go:160,208), so it is a
-// server package and its DB calls answer to the server's rules, not to the
-// tooling rule. The consequence is honest and worth naming: the DB access of
-// ctx-llmlog-export is unfenced HERE because it does not live in a tool-only
-// package. TestDBFenceScanAreaIsToolOnly pins that exclusion so it stays a
-// decision.
+// internal/llmlog. ctxd writes log rows through it (llmlog.go:160,208), so it
+// is a server package and its DB calls answer to the server's rules, not to
+// the tooling rule.
+//
+// What this paragraph used to name as the honest consequence — that the DB
+// access of ctx-llmlog-export was unfenced HERE, because its reader sat in
+// that same server package — is no longer true. NZ-2 split the reader out:
+// internal/llmlogexport holds the keyset export, its count gate and the file
+// perimeter, no server binary reaches it, and so the fence judges it like
+// every other tool. TestDBFenceScanAreaIsToolOnly pins both halves — llmlog
+// stays out, llmlogexport is in — so neither half can drift back silently.
 package cmd
 
 import (
@@ -281,6 +285,7 @@ func TestDBFenceScanAreaIsToolOnly(t *testing.T) {
 		"cmd/ctx-armcost", "cmd/ctx-armsweep", "cmd/ctx-distillreset",
 		"cmd/ctx-goldbench", "cmd/ctx-goldset", "cmd/ctx-llmlog-export",
 		"internal/armsweep", "internal/distillreset", "internal/goldbench", "internal/goldset",
+		"internal/llmlogexport",
 	} {
 		if !paths[envScanModulePath+"/"+want] {
 			t.Errorf("tool-only graph misses %s — its DB calls would be unfenced", want)

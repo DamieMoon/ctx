@@ -42,7 +42,7 @@ import (
 	"time"
 
 	"github.com/GottZ/ctx/internal/config"
-	"github.com/GottZ/ctx/internal/llmlog"
+	"github.com/GottZ/ctx/internal/llmlogexport"
 	"github.com/GottZ/ctx/internal/toolboot"
 )
 
@@ -102,7 +102,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	// Perimeter ZUERST — vor jeder DB-Verbindung (fail-closed); die Datei
 	// selbst entsteht erst nach dem Report, damit ein Config-/DB-Fehler keine
 	// leere O_EXCL-Leiche hinterlässt.
-	if err := llmlog.CheckExportDir(filepath.Dir(*outPath)); err != nil {
+	if err := llmlogexport.CheckExportDir(filepath.Dir(*outPath)); err != nil {
 		return fail("perimeter", err)
 	}
 
@@ -175,7 +175,7 @@ func writeReportFile(path string, rep Report) error {
 	if err != nil {
 		return err
 	}
-	f, err := llmlog.CreateExportFile(path)
+	f, err := llmlogexport.CreateExportFile(path)
 	if err != nil {
 		return err
 	}
