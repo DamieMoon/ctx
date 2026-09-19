@@ -70,7 +70,7 @@ func deleteStaleLinks(ctx context.Context, tx pgx.Tx, sourceID string, keptTarge
 }
 
 // replaceStaleLinks deletes unpinned context_dream_links for sourceID that
-// are not in keptTargets and reverts ApplySupersedes-side-effects for any
+// are not in keptTargets and reconciles ApplySupersedes-side-effects for any
 // deleted supersedes-links (pinned links survive the sweep, see
 // deleteStaleLinks).
 //
@@ -88,19 +88,8 @@ func replaceStaleLinks(ctx context.Context, tx pgx.Tx, sourceID string, keptTarg
 		if d.Relationship != "supersedes" {
 			continue
 		}
-		// Revert target: snapshot → 'knowledge'. Since M070 the lifecycle
-		// state machine is NOT NULL — the pre-M070 revert wrote NULL here,
-		// which produced exactly the NULL rows M070 backfilled away.
-		_, revertErr := tx.Exec(ctx,
-			`UPDATE context_blocks
-			SET lifecycle_state = 'knowledge', superseded_by = NULL
-			WHERE id = $1::uuid
-			  AND lifecycle_state = 'snapshot'
-			  AND superseded_by = $2::uuid`,
-			d.TargetID, sourceID)
-		if revertErr != nil {
-			slog.Warn("dream: snapshot revert failed (non-fatal)",
-				"source", sourceID, "target", d.TargetID, "error", revertErr)
+		if err := reconcileSupersedesState(ctx, tx, d.TargetID); err != nil {
+			return fmt.Errorf("dream: reconcile stale supersedes target: %w", err)
 		}
 	}
 	return nil
@@ -206,10 +195,14 @@ func WriteLinks(ctx context.Context, pool interface {
 			var targetCategory, targetTypeName string
 			var targetUpdatedAt, targetCreatedAt time.Time
 			var targetTitle string
+			var previousRelationship *string
 			err := tx.QueryRow(ctx,
-				`SELECT scope, is_archived, quality_score, category, updated_at, created_at, title, type_name FROM context_blocks WHERE id = $1`,
-				link.TargetID,
-			).Scan(&targetScope, &targetArchived, &targetQuality, &targetCategory, &targetUpdatedAt, &targetCreatedAt, &targetTitle, &targetTypeName)
+				`SELECT scope, is_archived, quality_score, category, updated_at, created_at, title, type_name,
+				        (SELECT relationship FROM context_dream_links
+				          WHERE source_block_id = $2::uuid AND target_block_id = $1::uuid)
+				 FROM context_blocks WHERE id = $1`,
+				link.TargetID, sourceID,
+			).Scan(&targetScope, &targetArchived, &targetQuality, &targetCategory, &targetUpdatedAt, &targetCreatedAt, &targetTitle, &targetTypeName, &previousRelationship)
 			if err != nil {
 				slog.Warn("dream: target block not found", "target_id", link.TargetID)
 				continue
@@ -301,7 +294,7 @@ func WriteLinks(ctx context.Context, pool interface {
 			// authoritative, B=target=outdated. The TARGET is the block to retire as
 			// snapshot, with superseded_by pointing to the source (the replacement).
 			// Only apply at high confidence to prevent false-positive snapshot marking.
-			if link.Relationship == "supersedes" && weightedConfidence >= 0.7 {
+			if link.Relationship == "supersedes" && weightedConfidence >= supersedesSnapshotConfidence {
 				_, err = tx.Exec(ctx,
 					`UPDATE context_blocks SET lifecycle_state = 'snapshot', superseded_by = $1::uuid
 					WHERE id = $2::uuid AND lifecycle_state != 'snapshot'`,
@@ -315,6 +308,13 @@ func WriteLinks(ctx context.Context, pool interface {
 					"target_block_id", link.TargetID,
 					"superseded_by_source", sourceID,
 				)
+			}
+			needsSupersedesReconcile := link.Relationship == "supersedes" ||
+				(previousRelationship != nil && *previousRelationship == "supersedes")
+			if needsSupersedesReconcile {
+				if err := reconcileSupersedesState(ctx, tx, link.TargetID); err != nil {
+					return err
+				}
 			}
 		}
 

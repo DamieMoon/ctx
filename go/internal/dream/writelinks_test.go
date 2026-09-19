@@ -54,10 +54,10 @@ func expectSourceFetchTyped(mock pgxmock.PgxPoolIface, sid, cat string, updated,
 
 // expectTargetFetch sets up the target-block lookup (type_name='knowledge').
 func expectTargetFetch(mock pgxmock.PgxPoolIface, tid, scope string, archived bool, quality float64, cat string, updated, created time.Time, title string) {
-	rows := mock.NewRows([]string{"scope", "is_archived", "quality_score", "category", "updated_at", "created_at", "title", "type_name"}).
-		AddRow(scope, archived, quality, cat, updated, created, title, "knowledge")
-	mock.ExpectQuery(`SELECT scope, is_archived, quality_score, category, updated_at, created_at, title, type_name FROM context_blocks WHERE id = \$1`).
-		WithArgs(tid).
+	rows := mock.NewRows([]string{"scope", "is_archived", "quality_score", "category", "updated_at", "created_at", "title", "type_name", "previous_relationship"}).
+		AddRow(scope, archived, quality, cat, updated, created, title, "knowledge", nil)
+	mock.ExpectQuery(`SELECT scope, is_archived, quality_score, category, updated_at, created_at, title, type_name,`).
+		WithArgs(tid, sourceID).
 		WillReturnRows(rows)
 }
 
@@ -328,6 +328,13 @@ func TestWriteLinks_SupersedesRevert_WritesKnowledge_NotNull(t *testing.T) {
 	mock.ExpectQuery(`DELETE FROM context_dream_links`).
 		WithArgs(anyArgs(2)...).
 		WillReturnRows(staleRows)
+	mock.ExpectQuery(`SELECT lifecycle_state, superseded_by::text, is_archived, scope`).
+		WithArgs(otherID).
+		WillReturnRows(mock.NewRows([]string{"lifecycle_state", "superseded_by", "is_archived", "scope"}).
+			AddRow("snapshot", sourceID, false, "private"))
+	mock.ExpectQuery(`SELECT dl.source_block_id::text`).
+		WithArgs(otherID, 0.7, "private").
+		WillReturnRows(mock.NewRows([]string{"source_block_id"}))
 	// The contract under test: SET lifecycle_state = 'knowledge' — a revert
 	// that still wrote NULL would not match this expectation and fail.
 	mock.ExpectExec(`SET lifecycle_state = 'knowledge', superseded_by = NULL`).

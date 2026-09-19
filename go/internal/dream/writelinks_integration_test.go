@@ -61,6 +61,31 @@ func countLinks(t *testing.T, pool *pgxpool.Pool, sourceID string) int {
 	return n
 }
 
+func seedSupersedesFixture(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	tEarly := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	tLate := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	insertBlock(t, pool, icSourceID, "private", "decisions", "state v2", tLate, tLate)
+	insertBlock(t, pool, icTargetID, "private", "decisions", "state v1", tEarly, tEarly)
+	insertBlock(t, pool, icOtherID, "private", "decisions", "state v3", tLate, tLate)
+}
+
+func assertKnowledgeState(t *testing.T, pool *pgxpool.Pool, id string) {
+	t.Helper()
+	lifecycle, supersededBy := readSnapshotState(t, pool, id)
+	if lifecycle != "knowledge" || supersededBy != "" {
+		t.Fatalf("got lifecycle=%q superseded_by=%v, want knowledge/NULL", lifecycle, supersededBy)
+	}
+}
+
+func assertSnapshotState(t *testing.T, pool *pgxpool.Pool, id, sourceID string) {
+	t.Helper()
+	lifecycle, supersededBy := readSnapshotState(t, pool, id)
+	if lifecycle != "snapshot" || supersededBy != sourceID {
+		t.Fatalf("got lifecycle=%q superseded_by=%v, want snapshot/%s", lifecycle, supersededBy, sourceID)
+	}
+}
+
 // TestWriteLinks_TxAbort_BehaviourMatchesContract verifies that when a per-link
 // INSERT fails inside the transaction, the deferred Rollback (or the failing
 // Commit) actually leaves the DB clean — i.e. no partial writes survive. The
@@ -225,6 +250,50 @@ func TestWriteLinks_OnConflictUpsert_BehaviourMatchesContract(t *testing.T) {
 	}
 }
 
+func TestWriteLinks_PersistsWeightedAndRawConfidenceSeparately(t *testing.T) {
+	pool := testdb.SetupTestDB(t)
+	ctx := context.Background()
+
+	tEarly := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	tLate := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	insertBlock(t, pool, icSourceID, "private", "topic", "src", tEarly, tEarly)
+	insertBlock(t, pool, icTargetID, "private", "topic", "tgt", tLate, tLate)
+
+	written, err := dream.WriteLinks(ctx, pool, icBuiltinSet, icSourceID, "private", 0.5,
+		[]dream.Link{{TargetID: icTargetID, Relationship: "topical", Confidence: 0.8}})
+	if err != nil || written != 1 {
+		t.Fatalf("write: written=%d err=%v", written, err)
+	}
+
+	var confidence, rawConfidence float64
+	if err := pool.QueryRow(ctx,
+		`SELECT confidence, raw_confidence FROM context_dream_links
+		 WHERE source_block_id=$1::uuid AND target_block_id=$2::uuid`,
+		icSourceID, icTargetID,
+	).Scan(&confidence, &rawConfidence); err != nil {
+		t.Fatalf("read confidence columns: %v", err)
+	}
+	if math.Abs(confidence-0.4) > 0.001 {
+		t.Errorf("confidence=%f, want weighted 0.4", confidence)
+	}
+	if math.Abs(rawConfidence-0.8) > 0.001 {
+		t.Errorf("raw_confidence=%f, want raw 0.8", rawConfidence)
+	}
+}
+
+func TestWriteLinks_SupersedesBoundaryConfidence_PreservesSnapshot(t *testing.T) {
+	pool := testdb.SetupTestDB(t)
+	ctx := context.Background()
+	seedSupersedesFixture(t, pool)
+
+	written, err := dream.WriteLinks(ctx, pool, icBuiltinSet, icSourceID, "private", 1.0,
+		[]dream.Link{{TargetID: icTargetID, Relationship: "supersedes", Confidence: 0.7}})
+	if err != nil || written != 1 {
+		t.Fatalf("boundary supersedes: written=%d err=%v", written, err)
+	}
+	assertSnapshotState(t, pool, icTargetID, icSourceID)
+}
+
 // TestWriteLinks_ReplaceSemantics_RealUUIDs_BehaviourMatchesContract verifies
 // the stale-DELETE clause `target_block_id != ALL($2::uuid[])` against real
 // UUID arrays. Two-run scenario: first run writes two links, second run
@@ -356,6 +425,127 @@ func TestWriteLinks_SnapshotRevert_Idempotent_BehaviourMatchesContract(t *testin
 	if bt != "knowledge" || sb != "" {
 		t.Errorf("step 3 revert (target): got lifecycle_state=%q superseded_by=%q, want knowledge/NULL", bt, sb)
 	}
+}
+
+func TestWriteLinks_SupersedesReclassification_RestoresSnapshot(t *testing.T) {
+	pool := testdb.SetupTestDB(t)
+	ctx := context.Background()
+	seedSupersedesFixture(t, pool)
+
+	if written, err := dream.WriteLinks(ctx, pool, icBuiltinSet, icSourceID, "private", 1.0,
+		[]dream.Link{{TargetID: icTargetID, Relationship: "supersedes", Confidence: 0.95}}); err != nil || written != 1 {
+		t.Fatalf("initial supersedes: written=%d err=%v", written, err)
+	}
+	assertSnapshotState(t, pool, icTargetID, icSourceID)
+
+	if written, err := dream.WriteLinks(ctx, pool, icBuiltinSet, icSourceID, "private", 1.0,
+		[]dream.Link{{TargetID: icTargetID, Relationship: "topical", Confidence: 0.95}}); err != nil || written != 1 {
+		t.Fatalf("topical reclassification: written=%d err=%v", written, err)
+	}
+	assertKnowledgeState(t, pool, icTargetID)
+}
+
+func TestWriteLinks_SupersedesToRecurrent_RestoresSnapshot(t *testing.T) {
+	pool := testdb.SetupTestDB(t)
+	ctx := context.Background()
+	seedSupersedesFixture(t, pool)
+
+	if written, err := dream.WriteLinks(ctx, pool, icBuiltinSet, icSourceID, "private", 1.0,
+		[]dream.Link{{TargetID: icTargetID, Relationship: "supersedes", Confidence: 0.95}}); err != nil || written != 1 {
+		t.Fatalf("initial supersedes: written=%d err=%v", written, err)
+	}
+	if written, err := dream.WriteLinks(ctx, pool, icBuiltinSet, icSourceID, "private", 1.0,
+		[]dream.Link{{TargetID: icTargetID, Relationship: "recurrent", Confidence: 0.95}}); err != nil || written != 1 {
+		t.Fatalf("recurrent reclassification: written=%d err=%v", written, err)
+	}
+	assertKnowledgeState(t, pool, icTargetID)
+}
+
+func TestWriteLinks_Reclassification_PreservesOtherSuperseder(t *testing.T) {
+	pool := testdb.SetupTestDB(t)
+	ctx := context.Background()
+	seedSupersedesFixture(t, pool)
+
+	for _, sourceID := range []string{icSourceID, icOtherID} {
+		if written, err := dream.WriteLinks(ctx, pool, icBuiltinSet, sourceID, "private", 1.0,
+			[]dream.Link{{TargetID: icTargetID, Relationship: "supersedes", Confidence: 0.95}}); err != nil || written != 1 {
+			t.Fatalf("initial supersedes from %s: written=%d err=%v", sourceID, written, err)
+		}
+	}
+	if written, err := dream.WriteLinks(ctx, pool, icBuiltinSet, icSourceID, "private", 1.0,
+		[]dream.Link{{TargetID: icTargetID, Relationship: "topical", Confidence: 0.95}}); err != nil || written != 1 {
+		t.Fatalf("topical reclassification: written=%d err=%v", written, err)
+	}
+	assertSnapshotState(t, pool, icTargetID, icOtherID)
+}
+
+func TestWriteLinks_StaleSupersedesRemoval_RestoresSnapshot(t *testing.T) {
+	pool := testdb.SetupTestDB(t)
+	ctx := context.Background()
+	seedSupersedesFixture(t, pool)
+
+	if written, err := dream.WriteLinks(ctx, pool, icBuiltinSet, icSourceID, "private", 1.0,
+		[]dream.Link{{TargetID: icTargetID, Relationship: "supersedes", Confidence: 0.95}}); err != nil || written != 1 {
+		t.Fatalf("initial supersedes: written=%d err=%v", written, err)
+	}
+	if written, err := dream.WriteLinks(ctx, pool, icBuiltinSet, icSourceID, "private", 1.0,
+		[]dream.Link{{TargetID: icOtherID, Relationship: "topical", Confidence: 0.95}}); err != nil || written != 1 {
+		t.Fatalf("stale-link replacement: written=%d err=%v", written, err)
+	}
+	assertKnowledgeState(t, pool, icTargetID)
+}
+
+func TestWriteLinks_ValidSupersedesRewrite_PreservesSnapshot(t *testing.T) {
+	pool := testdb.SetupTestDB(t)
+	ctx := context.Background()
+	seedSupersedesFixture(t, pool)
+
+	if written, err := dream.WriteLinks(ctx, pool, icBuiltinSet, icSourceID, "private", 1.0,
+		[]dream.Link{{TargetID: icTargetID, Relationship: "supersedes", Confidence: 0.95}}); err != nil || written != 1 {
+		t.Fatalf("initial supersedes: written=%d err=%v", written, err)
+	}
+	if written, err := dream.WriteLinks(ctx, pool, icBuiltinSet, icSourceID, "private", 1.0,
+		[]dream.Link{{TargetID: icTargetID, Relationship: "supersedes", Confidence: 0.8}}); err != nil || written != 1 {
+		t.Fatalf("valid supersedes rewrite: written=%d err=%v", written, err)
+	}
+	assertSnapshotState(t, pool, icTargetID, icSourceID)
+}
+
+func TestCleanupDanglingLinks_ArchivedTargetDoesNotResurrect(t *testing.T) {
+	pool := testdb.SetupTestDB(t)
+	ctx := context.Background()
+	seedSupersedesFixture(t, pool)
+
+	if written, err := dream.WriteLinks(ctx, pool, icBuiltinSet, icSourceID, "private", 1.0,
+		[]dream.Link{{TargetID: icTargetID, Relationship: "supersedes", Confidence: 0.95}}); err != nil || written != 1 {
+		t.Fatalf("initial supersedes: written=%d err=%v", written, err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE context_blocks SET is_archived = true WHERE id = $1::uuid`, icTargetID); err != nil {
+		t.Fatalf("archive target: %v", err)
+	}
+	if removed, err := dream.CleanupDanglingLinks(ctx, pool); err != nil || removed != 1 {
+		t.Fatalf("cleanup: removed=%d err=%v", removed, err)
+	}
+	lifecycle, supersededBy := readSnapshotState(t, pool, icTargetID)
+	if lifecycle != "snapshot" || supersededBy != icSourceID {
+		t.Fatalf("archived target was resurrected or cleared: lifecycle=%q superseded_by=%q", lifecycle, supersededBy)
+	}
+}
+
+func TestWriteLinks_SupersedesConfidenceDowngrade_RestoresSnapshot(t *testing.T) {
+	pool := testdb.SetupTestDB(t)
+	ctx := context.Background()
+	seedSupersedesFixture(t, pool)
+
+	if written, err := dream.WriteLinks(ctx, pool, icBuiltinSet, icSourceID, "private", 1.0,
+		[]dream.Link{{TargetID: icTargetID, Relationship: "supersedes", Confidence: 0.95}}); err != nil || written != 1 {
+		t.Fatalf("initial supersedes: written=%d err=%v", written, err)
+	}
+	if written, err := dream.WriteLinks(ctx, pool, icBuiltinSet, icSourceID, "private", 0.5,
+		[]dream.Link{{TargetID: icTargetID, Relationship: "supersedes", Confidence: 0.95}}); err != nil || written != 1 {
+		t.Fatalf("downgraded supersedes: written=%d err=%v", written, err)
+	}
+	assertKnowledgeState(t, pool, icTargetID)
 }
 
 // readSnapshotState fetches lifecycle_state and superseded_by for the given block,

@@ -15,6 +15,7 @@ import (
 	"github.com/GottZ/ctx/internal/embed"
 	"github.com/GottZ/ctx/internal/embedcache"
 	"github.com/GottZ/ctx/internal/llm"
+	"github.com/GottZ/ctx/internal/pgxdb"
 	"github.com/GottZ/ctx/internal/rrf"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -1244,14 +1245,47 @@ func QueueDepth(ctx context.Context, pool *pgxpool.Pool, scopes, linkable []stri
 // Welle 45: extended from target-only to both sides — Audit (2026-05-22)
 // uncovered 2 links where both endpoints were archived but never cleaned up.
 func CleanupDanglingLinks(ctx context.Context, pool *pgxpool.Pool) (int, error) {
-	tag, err := pool.Exec(ctx,
-		`DELETE FROM context_dream_links
-		WHERE source_block_id IN (SELECT id FROM context_blocks WHERE is_archived)
-		   OR target_block_id IN (SELECT id FROM context_blocks WHERE is_archived)`)
+	removed := 0
+	err := pgxdb.Write(ctx, pool, pgxdb.Stages{
+		Begin:  "dream: begin dangling-link cleanup",
+		Commit: "dream: commit dangling-link cleanup",
+	}, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx,
+			`DELETE FROM context_dream_links
+			 WHERE source_block_id IN (SELECT id FROM context_blocks WHERE is_archived)
+			    OR target_block_id IN (SELECT id FROM context_blocks WHERE is_archived)
+			 RETURNING target_block_id::text, relationship`)
+		if err != nil {
+			return fmt.Errorf("dream: cleanup dangling links: %w", err)
+		}
+		defer rows.Close()
+
+		var supersedesTargets []string
+		for rows.Next() {
+			var targetID, relationship string
+			if err := rows.Scan(&targetID, &relationship); err != nil {
+				return fmt.Errorf("dream: cleanup dangling link: %w", err)
+			}
+			removed++
+			if relationship == "supersedes" {
+				supersedesTargets = append(supersedesTargets, targetID)
+			}
+		}
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("dream: cleanup dangling links: %w", err)
+		}
+		rows.Close()
+		for _, targetID := range supersedesTargets {
+			if err := reconcileSupersedesState(ctx, tx, targetID); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 	if err != nil {
-		return 0, fmt.Errorf("dream: cleanup dangling links: %w", err)
+		return 0, err
 	}
-	return int(tag.RowsAffected()), nil
+	return removed, nil
 }
 
 // UpdateQualityScore adjusts a block's quality_score based on its dream link profile.
