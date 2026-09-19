@@ -2,6 +2,7 @@ package dream
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
@@ -15,7 +16,7 @@ const supersedesSnapshotConfidence = 0.7
 // remains the separate query-side map gate.
 func reconcileSupersedesState(ctx context.Context, tx pgx.Tx, targetID string) error {
 	var lifecycle, scope string
-	var supersededBy *string
+	var supersededBy sql.NullString
 	var archived bool
 	if err := tx.QueryRow(ctx,
 		`SELECT lifecycle_state, superseded_by::text, is_archived, scope
@@ -61,7 +62,7 @@ func reconcileSupersedesState(ctx context.Context, tx pgx.Tx, targetID string) e
 	}
 
 	if len(valid) == 0 {
-		if lifecycle == "snapshot" && supersededBy != nil {
+		if lifecycle == "snapshot" && supersededBy.Valid {
 			if _, err := tx.Exec(ctx,
 				`UPDATE context_blocks
 				 SET lifecycle_state = 'knowledge', superseded_by = NULL
@@ -76,16 +77,16 @@ func reconcileSupersedesState(ctx context.Context, tx pgx.Tx, targetID string) e
 	}
 
 	chosen := valid[0]
-	if supersededBy != nil {
+	if supersededBy.Valid {
 		for _, sourceID := range valid {
-			if sourceID == *supersededBy {
+			if sourceID == supersededBy.String {
 				chosen = sourceID
 				break
 			}
 		}
 	}
 
-	if lifecycle != "snapshot" || supersededBy == nil || *supersededBy != chosen {
+	if lifecycle != "snapshot" || !supersededBy.Valid || supersededBy.String != chosen {
 		if _, err := tx.Exec(ctx,
 			`UPDATE context_blocks
 			 SET lifecycle_state = 'snapshot', superseded_by = $1::uuid
