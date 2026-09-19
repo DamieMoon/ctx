@@ -68,7 +68,7 @@ func reconcileSupersedesState(ctx context.Context, tx pgx.Tx, targetID string) e
 				 SET lifecycle_state = 'knowledge', superseded_by = NULL
 				 WHERE id = $1::uuid
 				   AND lifecycle_state = 'snapshot'
-				   AND superseded_by IS NOT NULL`, targetID,
+				   AND superseded_by = $2::uuid`, targetID, supersededBy.String,
 			); err != nil {
 				return fmt.Errorf("dream: reconcile supersedes restore: %w", err)
 			}
