@@ -113,21 +113,22 @@ var bodyPins = map[string]struct {
 	decls []string
 	sha   string
 }{
-	"llm.classifySystemPrompt":         {decls: []string{"classifySystemPrompt"}, sha: "405dc65451808a2c"},
-	"llm.translationSystemPrompt":      {decls: []string{"translationSystemPrompt"}, sha: "6676c6ad05963d78"},
-	"llm.temporalPromptTemplate":       {decls: []string{"temporalPromptTemplate"}, sha: "408151a74a83fb15"},
-	"llm.systemPromptV52":              {decls: []string{"systemPromptV52"}, sha: "43d61b3933ab77ac"},
-	"llm.systemPromptV6":               {decls: []string{"systemPromptV6"}, sha: "7ca8b734e6802895"},
-	"rrf.rerankSystemPrompt":           {decls: []string{"rerankSystemPrompt", "rerankHarden"}, sha: "704af02a4a835956"},
-	"events.distillSystemPrompt":       {decls: []string{"distillSystemPrompt"}, sha: "43baaac40914addd"},
-	"dream.temporalValidationPrompt":   {decls: []string{"temporalValidationPrompt"}, sha: "01760f56ce9bc305"},
-	"dream.recurrenceSystemPrompt":     {decls: []string{"recurrenceSystemPrompt"}, sha: "7554cbdc9272a364"},
-	"dream.keywordSystemPrompt":        {decls: []string{"keywordSystemPrompt"}, sha: "689196d3a2a42fc8"},
-	"dream.dailySynthesisSystemPrompt": {decls: []string{"dailySynthesisSystemPrompt"}, sha: "943ca266a09f0e83"},
-	"dream.dailySynthesisPromptIntl":   {decls: []string{"dailySynthesisPromptFor"}, sha: "800f50380c204724"},
-	"dream.dreamSystemPrompt":          {decls: []string{"dreamSystemPrompt"}, sha: "a3a0c9e4e6941edb"},
-	"dream.decideEvalSystemPrompt":     {decls: []string{"decideEvalSystemPrompt"}, sha: "84d14295d57bf9df"},
-	"topiclabel.systemPromptFor":       {decls: []string{"systemPromptFor", "clusterHarden"}, sha: "8cdb18e4db04bb57"},
+	"llm.classifySystemPrompt":           {decls: []string{"classifySystemPrompt"}, sha: "405dc65451808a2c"},
+	"llm.translationSystemPrompt":        {decls: []string{"translationSystemPrompt"}, sha: "6676c6ad05963d78"},
+	"llm.temporalPromptTemplate":         {decls: []string{"temporalPromptTemplate"}, sha: "408151a74a83fb15"},
+	"llm.systemPromptV52":                {decls: []string{"systemPromptV52"}, sha: "43d61b3933ab77ac"},
+	"llm.systemPromptV6":                 {decls: []string{"systemPromptV6"}, sha: "7ca8b734e6802895"},
+	"rrf.rerankSystemPrompt":             {decls: []string{"rerankSystemPrompt", "rerankHarden"}, sha: "704af02a4a835956"},
+	"events.distillSystemPrompt":         {decls: []string{"distillSystemPrompt"}, sha: "43baaac40914addd"},
+	"dream.temporalValidationPrompt":     {decls: []string{"temporalValidationPrompt"}, sha: "01760f56ce9bc305"},
+	"dream.recurrenceSystemPrompt":       {decls: []string{"recurrenceSystemPrompt"}, sha: "7554cbdc9272a364"},
+	"dream.keywordSystemPrompt":          {decls: []string{"keywordSystemPrompt"}, sha: "689196d3a2a42fc8"},
+	"dream.dailySynthesisSystemPrompt":   {decls: []string{"dailySynthesisSystemPrompt"}, sha: "943ca266a09f0e83"},
+	"dream.dailySynthesisPromptIntl":     {decls: []string{"dailySynthesisPromptFor"}, sha: "800f50380c204724"},
+	"dream.dreamSystemPrompt":            {decls: []string{"dreamSystemPrompt"}, sha: "a3a0c9e4e6941edb"},
+	"dream.decideEvalSystemPrompt":       {decls: []string{"decideEvalSystemPrompt"}, sha: "84d14295d57bf9df"},
+	"dream.decideRecurrenceSystemPrompt": {decls: []string{"decideRecurrenceSystemPrompt"}, sha: "9262b8dca36bb537"},
+	"topiclabel.systemPromptFor":         {decls: []string{"systemPromptFor", "clusterHarden"}, sha: "8cdb18e4db04bb57"},
 }
 
 // --- scan model.

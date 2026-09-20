@@ -84,6 +84,11 @@ var (
 		"D": "topical",
 	}
 	decideNoneLabel = "E"
+	// decideLinkNames is decideLinkTypes plus the no-link label, for the
+	// llmlog stamp.
+	decideLinkNames = map[string]string{
+		"A": "supersedes", "B": "causal", "C": "factual", "D": "topical", "E": "none",
+	}
 )
 
 // errDecideFallback marks a decide attempt whose answer could not be read as
@@ -171,17 +176,18 @@ func decisionToLink(candID string, d llm.Decision) (Link, bool) {
 }
 
 // stampDecision writes the decision read-out onto the llmlog row so
-// calibration can be measured afterwards (metadata.decide_probs keyed by
-// relationship, plus mass/confidence/best).
-func stampDecision(entry *llmlog.Entry, d llm.Decision) {
+// calibration can be measured afterwards (metadata.decide_probs keyed by the
+// label NAMES the classifier uses — relationship types resp. verdicts — plus
+// mass/confidence/best). Labels absent from names keep their letter.
+func stampDecision(entry *llmlog.Entry, d llm.Decision, names map[string]string) {
 	if entry.Metadata == nil {
 		entry.Metadata = map[string]any{}
 	}
 	probs := make(map[string]float64, len(d.Probs))
 	for label, p := range d.Probs {
-		key := decideLinkTypes[label]
+		key := names[label]
 		if key == "" {
-			key = "none"
+			key = label
 		}
 		probs[key] = p
 	}
@@ -253,7 +259,7 @@ func decideOnePair(ctx context.Context, pool *pgxpool.Pool, r *Router, source, c
 		}
 		return Link{}, false, fmt.Errorf("dream: evaluate (decide): %w", err)
 	}
-	stampDecision(entry, d)
+	stampDecision(entry, d, decideLinkNames)
 	entry.Metadata["parse_format"] = "decide"
 	link, ok := decisionToLink(cand.ID, d)
 	if ok {

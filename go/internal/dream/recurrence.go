@@ -104,7 +104,21 @@ func DetectRecurrence(ctx context.Context, pool *pgxpool.Pool, r *Router, opts l
 
 	links := make([]Link, 0, len(candidates))
 	for _, c := range candidates {
-		verdict, vErr := confirmRecurrence(ctx, pool, r, opts, source, c)
+		var verdict recurrenceVerdict
+		var vErr error
+		if wantDecide(r, decideStageRecurrence) {
+			// Decide mode (dream.decide_mode all): the prefill-only confirm
+			// first; a backend without logprobs falls back to the generating
+			// prompt for this pair (decide_recurrence.go).
+			verdict, vErr = confirmRecurrenceDecide(ctx, pool, r, source, c)
+			if errors.Is(vErr, errDecideFallback) {
+				slog.Info("dream: recurrence decide unavailable on the serving backend — generating prompt for this pair",
+					"source", source.ID, "target", c.TargetID, "error", vErr)
+				verdict, vErr = confirmRecurrence(ctx, pool, r, opts, source, c)
+			}
+		} else {
+			verdict, vErr = confirmRecurrence(ctx, pool, r, opts, source, c)
+		}
 		if vErr != nil {
 			// Per-pair non-fatal skip (MW19 pin, design/02 §4.6
 			// dream-recurrence row): the verdict is lost, the candidate loop

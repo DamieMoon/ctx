@@ -35,6 +35,7 @@ var wantIdentities = []prompts.Identity{
 	{ID: "dream.dailySynthesisPromptIntl", Version: "2026-07-31", Owner: "github.com/GottZ/ctx/internal/dream"},
 	{ID: "dream.dailySynthesisSystemPrompt", Version: "2026-07-31", Owner: "github.com/GottZ/ctx/internal/dream"},
 	{ID: "dream.decideEvalSystemPrompt", Version: "2026-09-20", Owner: "github.com/GottZ/ctx/internal/dream"},
+	{ID: "dream.decideRecurrenceSystemPrompt", Version: "2026-09-20", Owner: "github.com/GottZ/ctx/internal/dream"},
 	{ID: "dream.dreamSystemPrompt", Version: "v5", Owner: "github.com/GottZ/ctx/internal/dream"},
 	{ID: "dream.keywordSystemPrompt", Version: "2026-08-25", Owner: "github.com/GottZ/ctx/internal/dream"},
 	{ID: "dream.recurrenceSystemPrompt", Version: "2026-05-06", Owner: "github.com/GottZ/ctx/internal/dream"},
