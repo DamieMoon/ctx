@@ -145,13 +145,6 @@ func decideCapable(r *Router, role string, required backends.Sensitivity) bool {
 	return false
 }
 
-// resetDecideIncapable clears the memo (tests).
-func resetDecideIncapable() {
-	decideIncapable.mu.Lock()
-	decideIncapable.seen = map[string]time.Time{}
-	decideIncapable.mu.Unlock()
-}
-
 // decideStage names the two classifiers for wantDecide.
 type decideStage int
 

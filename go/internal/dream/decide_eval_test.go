@@ -11,6 +11,13 @@ import (
 	"github.com/GottZ/ctx/internal/llm"
 )
 
+// resetDecideIncapable clears the process-wide capability memo between tests.
+func resetDecideIncapable() {
+	decideIncapable.mu.Lock()
+	decideIncapable.seen = map[string]time.Time{}
+	decideIncapable.mu.Unlock()
+}
+
 // decideRouter is newTestRouter with decide mode armed.
 func decideRouter(mode string) *Router {
 	r := newTestRouter()
