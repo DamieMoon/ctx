@@ -69,6 +69,15 @@ type Options struct {
 	// extra_body — a backend row's extra_body therefore still wins on key
 	// collision (applyOpenAIBodyExtras, last write wins).
 	Extra map[string]any `json:"-"`
+	// TopLogprobs > 0 asks the OpenAI wire for the top-N alternatives of
+	// every generated token (`logprobs:true, top_logprobs:N`). The decide
+	// primitive (decide.go) reads the FIRST token's alternatives as a
+	// probability distribution over answer labels — no text is decoded, the
+	// answer is a logit read. JSON-tagged off: Ollama's /api/chat options
+	// block has no such key, and the Ollama path never reports logprobs
+	// (ChatResponse.TopLogprobs stays nil there, which DecideChoice surfaces
+	// as ErrNoLogprobs so a caller can fall back to a generation prompt).
+	TopLogprobs int `json:"-"`
 }
 
 // ChatResponse is the unified response from any provider.
@@ -102,6 +111,22 @@ type ChatResponse struct {
 	CostUSD           *float64
 	ServedModel       string
 	ProviderRequestID string
+	// TopLogprobs are the provider's top-N alternatives for the FIRST
+	// generated token (token text + natural-log probability), present only
+	// when the request asked for them (Options.TopLogprobs > 0) AND the
+	// provider honoured it (OpenAI wire; SGLang, vLLM, llama.cpp server,
+	// most OpenRouter routes). nil otherwise — including the whole Ollama
+	// path. The sampled token itself is included when the provider lists it,
+	// which every OpenAI-compatible server does.
+	TopLogprobs []TokenLogprob
+}
+
+// TokenLogprob is one entry of a top-logprobs list: the token text as the
+// provider tokenizes it (leading space included where the tokenizer keeps
+// one) and its natural-log probability at that position.
+type TokenLogprob struct {
+	Token   string
+	Logprob float64
 }
 
 // --- Ollama wire format ---.
@@ -144,6 +169,11 @@ type openAIChatRequest struct {
 	FrequencyPenalty float64            `json:"frequency_penalty,omitempty"`
 	ResponseFormat   *respFormat        `json:"response_format,omitempty"`
 	Reasoning        *reasoningOption   `json:"reasoning,omitempty"`
+	// Logprobs/TopLogprobs mirror Options.TopLogprobs (decide primitive).
+	// Both omitted on ordinary chat: an OpenAI-compatible server that does
+	// not know them would otherwise reject or ignore the whole pair.
+	Logprobs    bool `json:"logprobs,omitempty"`
+	TopLogprobs int  `json:"top_logprobs,omitempty"`
 }
 
 // reasoningOption — OpenRouter-extension to disable thinking/reasoning models
@@ -173,6 +203,18 @@ type openAIChatResponse struct {
 		// field the SSE path reads per delta (stream.go). Only choice 0 is
 		// consumed, mirroring the Message above.
 		FinishReason string `json:"finish_reason"`
+		// Logprobs is the OpenAI logprobs object of this choice; nil unless
+		// requested. Only content[0].top_logprobs is consumed (decide.go).
+		Logprobs *struct {
+			Content []struct {
+				Token       string  `json:"token"`
+				Logprob     float64 `json:"logprob"`
+				TopLogprobs []struct {
+					Token   string  `json:"token"`
+					Logprob float64 `json:"logprob"`
+				} `json:"top_logprobs"`
+			} `json:"content"`
+		} `json:"logprobs"`
 	} `json:"choices"`
 	Usage struct {
 		CompletionTokens int      `json:"completion_tokens"`
@@ -284,6 +326,10 @@ func chatOpenAI(ctx context.Context, b backends.Backend, systemPrompt, userPromp
 	if format == "json" {
 		reqBody.ResponseFormat = &respFormat{Type: "json_object"}
 	}
+	if opts.TopLogprobs > 0 {
+		reqBody.Logprobs = true
+		reqBody.TopLogprobs = opts.TopLogprobs
+	}
 	// OpenRouter no-think: when think=false, disable reasoning + exclude reasoning
 	// tokens from response. Saves cost (reasoning tokens billed at completion rate)
 	// and avoids JSON-parse-errors when the model emits CoT in the reasoning field
@@ -351,6 +397,18 @@ func chatOpenAI(ctx context.Context, b backends.Backend, systemPrompt, userPromp
 		PromptTokens: result.Usage.PromptTokens,
 		FinishReason: result.Choices[0].FinishReason,
 	}
+	if lp := result.Choices[0].Logprobs; lp != nil && len(lp.Content) > 0 {
+		first := lp.Content[0]
+		out.TopLogprobs = make([]TokenLogprob, 0, len(first.TopLogprobs)+1)
+		for _, alt := range first.TopLogprobs {
+			out.TopLogprobs = append(out.TopLogprobs, TokenLogprob{Token: alt.Token, Logprob: alt.Logprob})
+		}
+		// Some servers list the sampled token only in content[0], not in its
+		// own top_logprobs; include it once so the distribution is complete.
+		if !hasToken(out.TopLogprobs, first.Token) {
+			out.TopLogprobs = append(out.TopLogprobs, TokenLogprob{Token: first.Token, Logprob: first.Logprob})
+		}
+	}
 	// Provider provenance is an openrouter-class contract (design 03 §2.7.4):
 	// local /v1 servers also echo a model string, but only OpenRouter's may
 	// legitimately differ from the requested one (models-fallback) — gating
@@ -361,6 +419,16 @@ func chatOpenAI(ctx context.Context, b backends.Backend, systemPrompt, userPromp
 		out.ProviderRequestID = result.ID
 	}
 	return out, nil
+}
+
+// hasToken reports whether the top-logprobs list already names tok.
+func hasToken(list []TokenLogprob, tok string) bool {
+	for _, t := range list {
+		if t.Token == tok {
+			return true
+		}
+	}
+	return false
 }
 
 // mergeJSONFields merges extra top-level fields into a marshaled JSON request
