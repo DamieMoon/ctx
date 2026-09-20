@@ -137,6 +137,8 @@ func TestDecideEval_HardCapFive(t *testing.T) {
 }
 
 func TestDecideEval_NoLogprobs_FallsBackToGeneration(t *testing.T) {
+	resetDecideIncapable()
+	t.Cleanup(resetDecideIncapable)
 	// First call: a backend that ignored top_logprobs. The block is then
 	// re-evaluated through the generating path, whose answer is a JSON array.
 	calls := decideSeam(t,
@@ -184,6 +186,61 @@ func TestDecideEval_WireError_Propagates(t *testing.T) {
 	}
 }
 
+func TestDecideEval_SupersedesSplit_FailsGate(t *testing.T) {
+	// supersedes wins the argmax at 26 % while P(link)=0.90: with the type's
+	// own probability the link fails the 0.7 gate and nothing is written.
+	decideSeam(t, decideResp(map[string]float64{"A": 0.26, "B": 0.15, "C": 0.24, "D": 0.25, "E": 0.10}))
+	links, err := EvaluateRelationships(context.Background(), nil, decideRouter(DecideModeEval), DreamOptions(),
+		srcBlock(uuidA), []BlockInfo{candBlock(uuidB)})
+	if err != nil || len(links) != 0 {
+		t.Fatalf("links=%+v err=%v", links, err)
+	}
+}
+
+func TestDecideEval_IncapableBackendMemo_SkipsDecideNextBlock(t *testing.T) {
+	resetDecideIncapable()
+	t.Cleanup(resetDecideIncapable)
+	calls := decideSeam(t,
+		&llm.ChatResponse{Message: llm.Message{Role: "assistant", Content: "D"}, EvalCount: 1, PromptTokens: 300}, // no logprobs
+		&llm.ChatResponse{Message: llm.Message{Role: "assistant", Content: "[]"}, EvalCount: 2, PromptTokens: 500},
+	)
+	r := decideRouter(DecideModeEval)
+	if _, err := EvaluateRelationships(context.Background(), nil, r, DreamOptions(), srcBlock(uuidA), []BlockInfo{candBlock(uuidB)}); err != nil {
+		t.Fatalf("first block: %v", err)
+	}
+	if len(*calls) != 2 {
+		t.Fatalf("first block: %d calls, want decide attempt + generating fallback", len(*calls))
+	}
+	// Second block on the same chain: the memo skips the decide attempt.
+	if _, err := EvaluateRelationships(context.Background(), nil, r, DreamOptions(), srcBlock(uuidA), []BlockInfo{candBlock(uuidC)}); err != nil {
+		t.Fatalf("second block: %v", err)
+	}
+	if len(*calls) != 3 || (*calls)[2].opts.TopLogprobs != 0 {
+		t.Fatalf("second block must go straight to generation: %d calls, last opts %+v", len(*calls), (*calls)[len(*calls)-1].opts)
+	}
+	if decideCapable(r, "dream", srcBlock(uuidA).Sensitivity) {
+		t.Fatal("memo must report the chain's first row as incapable")
+	}
+}
+
+func TestDecideEval_LowLabelMass_FallsBack(t *testing.T) {
+	// Prose start with a sliver of label mass → ErrNoLabelMass → generating
+	// path; no memo (a prompt property, not a backend property).
+	resetDecideIncapable()
+	t.Cleanup(resetDecideIncapable)
+	calls := decideSeam(t,
+		decideResp(map[string]float64{"The": 0.90, "D": 0.09, "E": 0.01}),
+		&llm.ChatResponse{Message: llm.Message{Role: "assistant", Content: "[]"}, EvalCount: 2, PromptTokens: 500},
+	)
+	r := decideRouter(DecideModeEval)
+	if _, err := EvaluateRelationships(context.Background(), nil, r, DreamOptions(), srcBlock(uuidA), []BlockInfo{candBlock(uuidB)}); err != nil {
+		t.Fatal(err)
+	}
+	if len(*calls) != 2 || !decideCapable(r, "dream", srcBlock(uuidA).Sensitivity) {
+		t.Fatalf("calls=%d capable=%v", len(*calls), decideCapable(r, "dream", srcBlock(uuidA).Sensitivity))
+	}
+}
+
 func TestDecideEval_ModeOff_UsesGeneration(t *testing.T) {
 	calls := decideSeam(t, &llm.ChatResponse{Message: llm.Message{Role: "assistant", Content: "[]"}, EvalCount: 2, PromptTokens: 500})
 	for _, mode := range []string{"", DecideModeOff} {
@@ -204,6 +261,13 @@ func TestDecisionToLink_ArgmaxTypeAndLinkProbability(t *testing.T) {
 	l, ok := decisionToLink(uuidB, d)
 	if !ok || l.Relationship != "topical" || math.Abs(l.Confidence-0.80) > 1e-9 || l.Floored {
 		t.Fatalf("%+v %v", l, ok)
+	}
+	// supersedes carries its own probability, not 1 − P(none): a 26 % split
+	// must not retire a block.
+	d = llm.Decision{Best: "A", Probs: map[string]float64{"A": 0.26, "B": 0.15, "C": 0.24, "D": 0.25, "E": 0.10}}
+	l, ok = decisionToLink(uuidB, d)
+	if !ok || l.Relationship != "supersedes" || math.Abs(l.Confidence-0.26) > 1e-9 {
+		t.Fatalf("supersedes confidence must be P(supersedes): %+v %v", l, ok)
 	}
 	if _, ok := decisionToLink(uuidB, llm.Decision{Best: "E", Probs: map[string]float64{"E": 0.9, "D": 0.1}}); ok {
 		t.Fatal("none must yield no link")

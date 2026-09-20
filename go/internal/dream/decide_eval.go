@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/GottZ/ctx/internal/backends"
@@ -96,6 +97,61 @@ var (
 // and runs the generating path once.
 var errDecideFallback = errors.New("dream: decide fallback")
 
+// decideIncapable remembers, per backend NAME, when a decide call last came
+// back without a readable decision (no logprobs). A router lives for one
+// cycle, so the memo is process-wide: without it a dream chain whose first
+// eligible row cannot report logprobs (Ollama) would pay one wasted prefill,
+// one error-marked llmlog row and one Info line PER BLOCK, forever. With it
+// the decide attempt is skipped while the chain's FIRST row is memoised,
+// re-probed after decideIncapableTTL so an upgraded backend is picked up
+// again without a restart. Only the no-logprobs signal memoises — a
+// no-label-mass answer is a property of one prompt, not of the backend.
+var decideIncapable = struct {
+	mu   sync.Mutex
+	seen map[string]time.Time
+}{seen: map[string]time.Time{}}
+
+const decideIncapableTTL = 15 * time.Minute
+
+// noteDecideIncapable records the fallback for the backend that answered.
+func noteDecideIncapable(served *backends.Backend, err error) {
+	if served == nil || !errors.Is(err, llm.ErrNoLogprobs) {
+		return
+	}
+	decideIncapable.mu.Lock()
+	decideIncapable.seen[served.Name] = time.Now()
+	decideIncapable.mu.Unlock()
+}
+
+// decideCapable reports whether a decide attempt is worth making: the chain
+// the call would walk must exist, and its first row must not be memoised as
+// incapable within the TTL. A chain error is left to the call itself (its
+// error path is the ordinary one).
+func decideCapable(r *Router, role string, required backends.Sensitivity) bool {
+	chain, err := r.Pool.Chain(role, required, r.Tenant)
+	if err != nil || len(chain) == 0 {
+		return true
+	}
+	decideIncapable.mu.Lock()
+	defer decideIncapable.mu.Unlock()
+	at, ok := decideIncapable.seen[chain[0].Name]
+	if !ok {
+		return true
+	}
+	if time.Since(at) > decideIncapableTTL {
+		delete(decideIncapable.seen, chain[0].Name)
+		return true
+	}
+	return false
+}
+
+// resetDecideIncapable clears the memo (tests).
+func resetDecideIncapable() {
+	decideIncapable.mu.Lock()
+	decideIncapable.seen = map[string]time.Time{}
+	decideIncapable.mu.Unlock()
+}
+
 // decideStage names the two classifiers for wantDecide.
 type decideStage int
 
@@ -154,6 +210,14 @@ func buildDecideEvalPrompt(source, cand BlockInfo) (system, user string) {
 // retrieval gate) ask about, and it is a probability read from the model,
 // never a parser floor (Floored stays false by construction). No link when
 // "none" is the most probable answer.
+//
+// supersedes is the exception: it is the one relationship with a side effect
+// beyond the edge — WriteLinks retires the TARGET block as a snapshot at
+// weighted confidence ≥ 0.7 — so its confidence is P(supersedes) itself, not
+// "some link exists". A first-token split like supersedes 0.26 / topical 0.25
+// / none 0.10 would otherwise retire a block from 26 % belief; with the type's
+// own probability the same split fails the 0.7 gate and writes nothing,
+// which is what the generating prompt's type-specific confidence did.
 func decisionToLink(candID string, d llm.Decision) (Link, bool) {
 	if d.Best == decideNoneLabel || d.Best == "" {
 		return Link{}, false
@@ -168,10 +232,14 @@ func decisionToLink(candID string, d llm.Decision) (Link, bool) {
 			bestType, bestP = rel, p
 		}
 	}
+	conf := 1 - d.Probs[decideNoneLabel]
+	if bestType == "supersedes" {
+		conf = bestP
+	}
 	return Link{
 		TargetID:     candID,
 		Relationship: bestType,
-		Confidence:   1 - d.Probs[decideNoneLabel],
+		Confidence:   conf,
 	}, true
 }
 
@@ -255,6 +323,7 @@ func decideOnePair(ctx context.Context, pool *pgxpool.Pool, r *Router, source, c
 		entry.Err = fmt.Errorf("decide: %w", err)
 		if llm.IsDecideFallback(err) {
 			entry.Metadata["decide_fallback"] = err.Error()
+			noteDecideIncapable(served, err)
 			return Link{}, false, fmt.Errorf("%w: %w (backend %s)", errDecideFallback, err, backendName(served))
 		}
 		return Link{}, false, fmt.Errorf("dream: evaluate (decide): %w", err)
@@ -274,16 +343,26 @@ func decideOnePair(ctx context.Context, pool *pgxpool.Pool, r *Router, source, c
 // after parseLinks — minus applyLinkFloor, which lifts parser-floored links
 // only and a decision is never floored. Shared with the goldbench decide axis
 // so the bench scores exactly what production would write.
+//
+// Telemetry: the generating path stamps supersedes_direction_downgraded,
+// links_dropped_invalid and links_capped on its ONE llmlog row. Decide mode
+// has one row per pair and these counts are per block, so they go to a
+// structured log line instead (one per block with at least one decided link)
+// — grep "dream: decide links finished" for the gate effects.
 func finishDecideLinks(source BlockInfo, candidates []BlockInfo, links []Link) []Link {
 	candidateIDs := make(map[string]bool, len(candidates))
 	for _, c := range candidates {
 		candidateIDs[c.ID] = true
 	}
+	decided := len(links)
 	links, downgraded := enforceSupersedesDirection(links, source.CreatedAt, candidates)
-	if downgraded > 0 {
-		slog.Debug("dream: decide — supersedes direction downgraded", "block_id", source.ID, "count", downgraded)
-	}
 	valid := filterValidCandidates(links, candidateIDs)
-	capped, _ := applyHardCap(valid, MaxLinksPerCycle)
+	capped, cappedN := applyHardCap(valid, MaxLinksPerCycle)
+	if decided > 0 {
+		slog.Info("dream: decide links finished",
+			"block_id", source.ID, "candidates", len(candidates), "decided", decided,
+			"supersedes_direction_downgraded", downgraded,
+			"links_dropped_invalid", decided-len(valid), "links_capped", cappedN, "written", len(capped))
+	}
 	return capped
 }

@@ -183,10 +183,10 @@ func (r *Router) chat(ctx context.Context, role string, required backends.Sensit
 }
 
 // chatPlain is the same walk without the JSON-mode marker on the wire — the
-// call of a stage whose answer is PROSE and is never decoded. Today that is
-// the daily synthesis alone (synthesize_report.go); asking a grammar-enforcing
-// backend for a JSON object there does not validate anything, it corrupts the
-// stored report.
+// call of a stage whose answer is NOT a JSON document: the daily synthesis
+// (synthesize_report.go; prose stored verbatim, a grammar there corrupts the
+// report) and the two decide classifiers (decide_eval.go, decide_recurrence.go;
+// a single letter read from the logprobs, which a JSON grammar would forbid).
 func (r *Router) chatPlain(ctx context.Context, role string, required backends.Sensitivity,
 	systemPrompt, userPrompt string, baseOpts llm.Options, defTimeout time.Duration,
 ) (*llm.ChatResponse, *backends.Backend, []llm.ChainAttempt, error) {

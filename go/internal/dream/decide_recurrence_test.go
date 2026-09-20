@@ -49,6 +49,8 @@ func TestDecideRecurrence_NoneVerdict(t *testing.T) {
 }
 
 func TestDecideRecurrence_NoLogprobs_IsFallbackSignal(t *testing.T) {
+	resetDecideIncapable()
+	t.Cleanup(resetDecideIncapable)
 	decideSeam(t, &llm.ChatResponse{Message: llm.Message{Role: "assistant", Content: "A"}, EvalCount: 1})
 	_, err := confirmRecurrenceDecide(context.Background(), nil, decideRouter(DecideModeAll), srcBlock(uuidA), recCand(uuidB))
 	if !errors.Is(err, errDecideFallback) || !errors.Is(err, llm.ErrNoLogprobs) {
@@ -67,9 +69,14 @@ func TestDecideRecurrence_WireError_NotFallback(t *testing.T) {
 }
 
 func TestDecisionToRecurrenceVerdict(t *testing.T) {
+	// supersedes carries P(supersedes), not 1 − P(none).
 	v := decisionToRecurrenceVerdict(llm.Decision{Best: "B", Probs: map[string]float64{"A": 0.2, "B": 0.75, "C": 0.05}})
-	if v.Verdict != "supersedes" || math.Abs(v.Confidence-0.95) > 1e-9 || v.Pattern != "" {
+	if v.Verdict != "supersedes" || math.Abs(v.Confidence-0.75) > 1e-9 || v.Pattern != "" {
 		t.Fatalf("%+v", v)
+	}
+	v = decisionToRecurrenceVerdict(llm.Decision{Best: "B", Probs: map[string]float64{"A": 0.33, "B": 0.35, "C": 0.32}})
+	if v.Verdict != "supersedes" || math.Abs(v.Confidence-0.35) > 1e-9 || v.Confidence >= recurrenceWriteFloor(true, "supersedes") {
+		t.Fatalf("a 35 %% supersedes split must not pass the 0.7 gate: %+v", v)
 	}
 	// Best is a link label but supersedes edges out recurrent only when it is
 	// the more probable of the two.
@@ -80,8 +87,11 @@ func TestDecisionToRecurrenceVerdict(t *testing.T) {
 }
 
 func TestRecurrenceWriteFloor(t *testing.T) {
-	if recurrenceWriteFloor(true, "recurrent") != DecideRecurrenceFloor || recurrenceWriteFloor(true, "supersedes") != DecideRecurrenceFloor {
-		t.Fatal("decided verdicts use the decide floor")
+	if recurrenceWriteFloor(true, "recurrent") != DecideRecurrenceFloor {
+		t.Fatal("decided recurrent uses the decide floor")
+	}
+	if recurrenceWriteFloor(true, "supersedes") != 0.7 {
+		t.Fatal("decided supersedes keeps minRawConfidence — it retires a block")
 	}
 	if recurrenceWriteFloor(false, "recurrent") != 0.8 || recurrenceWriteFloor(false, "supersedes") != 0.7 {
 		t.Fatal("generated verdicts keep minRawConfidence")

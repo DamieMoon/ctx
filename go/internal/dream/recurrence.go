@@ -107,7 +107,7 @@ func DetectRecurrence(ctx context.Context, pool *pgxpool.Pool, r *Router, opts l
 		var verdict recurrenceVerdict
 		var vErr error
 		decided := false
-		if wantDecide(r, decideStageRecurrence) {
+		if wantDecide(r, decideStageRecurrence) && decideCapable(r, backends.RoleDream, backends.MaxSensitivity(source.Sensitivity, c.TargetSens)) {
 			// Decide mode (dream.decide_mode all): the prefill-only confirm
 			// first; a backend without logprobs falls back to the generating
 			// prompt for this pair (decide_recurrence.go).

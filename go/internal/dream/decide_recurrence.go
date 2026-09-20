@@ -49,26 +49,38 @@ var (
 	decideRecurrenceNone = "C"
 )
 
-// DecideRecurrenceFloor is the write gate of a DECIDED recurrence verdict on
-// its confidence 1 − P(none). It replaces minRawConfidence (0.8 recurrent /
-// 0.7 supersedes) on this path only: those gates were tuned to the generating
-// prompt's self-reported confidence, which sits at 0.85–0.95 whatever the
-// pair looks like, so they never bit; a read probability is calibrated
-// differently and the same numbers cut 22 % of true recurrents (goldbench
-// recurrence, 96 cases: gated accuracy 0.823 at 0.8 vs 0.885 at 0.5, none-FP
-// 0.0 at every threshold — the largest 1 − P(none) among gold-none pairs is
-// 0.07). 0.5 is the argmax boundary: a verdict is written exactly when the
-// model finds a pattern more likely than none. The margin is what makes it
-// safe here and not for link evaluation: Phase 1 already requires a shared
-// temporal value and title similarity above 0.5, so the pair prior is high
-// and the none-probability sharply bimodal; RRF-retrieved eval candidates
-// have no such prefilter and keep the shared 0.7 gate.
+// DecideRecurrenceFloor is the write gate of a DECIDED recurrent verdict on
+// its confidence 1 − P(none). It replaces minRawConfidence's 0.8 on this path
+// only: that gate was tuned to the generating prompt's self-reported
+// confidence, which sits at 0.85–0.95 whatever the pair looks like, so it
+// never bit; a read probability is calibrated differently and the same number
+// cuts 22 % of true recurrents (goldbench recurrence, 96 cases: gated accuracy
+// 0.823 at 0.8 vs 0.885 at 0.5, none-FP 0.0 at every threshold — the largest
+// 1 − P(none) among gold-none pairs is 0.07). 0.5 is the argmax boundary: a
+// verdict is written exactly when the model finds a pattern more likely than
+// none. The margin is what makes it safe here and not for link evaluation:
+// Phase 1 already requires a shared temporal value and title similarity above
+// 0.5, so the pair prior is high and the none-probability sharply bimodal;
+// RRF-retrieved eval candidates have no such prefilter and keep the shared
+// 0.7 gate.
+//
+// supersedes keeps minRawConfidence (0.7) on P(supersedes): it retires the
+// target block (WriteLinks snapshot marking), the evidence above is about
+// recurrent, and the gold set holds 10 supersedes pairs of which the decide
+// prompt finds 2 — no basis to lower a destructive gate.
+//
+// Retrieval is a separate gate: graph.min_confidence_recurrent (default 0.8)
+// filters traversal on the stored raw confidence, so a decided recurrent link
+// with 1 − P(none) in [0.5, 0.8) is written and shown but not expanded until
+// an operator lowers that key. The two gates were tuned to the same
+// self-reported scale; only the write side moves here.
 const DecideRecurrenceFloor = 0.5
 
 // recurrenceWriteFloor is the per-verdict write gate the DetectRecurrence loop
-// applies: the decide floor for a decided verdict, minRawConfidence otherwise.
+// applies: the decide floor for a DECIDED recurrent verdict, minRawConfidence
+// for everything else (generated verdicts, and supersedes on either path).
 func recurrenceWriteFloor(decided bool, verdict string) float64 {
-	if decided {
+	if decided && verdict == "recurrent" {
 		return DecideRecurrenceFloor
 	}
 	return minRawConfidence[verdict]
@@ -96,21 +108,20 @@ func buildDecideRecurrencePrompt(source BlockInfo, c recurrenceCandidate) (syste
 // decisionToRecurrenceVerdict maps the decision to the verdict shape the
 // DetectRecurrence loop already consumes. Mirrors decisionToLink: when the
 // most probable answer is none the verdict is none; otherwise the verdict is
-// the more probable of recurrent/supersedes and the confidence is the
-// probability that a pattern link exists at all, 1 − P(none) — the quantity
-// the write gate (DecideRecurrenceFloor) and the retrieval gate
-// (graph.min_confidence_recurrent) ask about. Pattern is not derivable from a
-// three-way answer and is never persisted anyway.
+// the more probable of recurrent/supersedes. A recurrent verdict carries the
+// probability that a pattern link exists at all, 1 − P(none); a supersedes
+// verdict carries P(supersedes) itself, because it retires the target block
+// (see DecideRecurrenceFloor). Pattern is not derivable from a three-way
+// answer and is never persisted anyway.
 func decisionToRecurrenceVerdict(d llm.Decision) recurrenceVerdict {
 	pNone := d.Probs[decideRecurrenceNone]
 	if d.Best == decideRecurrenceNone || d.Best == "" {
 		return recurrenceVerdict{Verdict: "none", Confidence: 1 - pNone}
 	}
-	verdict := "recurrent"
 	if d.Probs["B"] > d.Probs["A"] {
-		verdict = "supersedes"
+		return recurrenceVerdict{Verdict: "supersedes", Confidence: d.Probs["B"]}
 	}
-	return recurrenceVerdict{Verdict: verdict, Confidence: 1 - pNone}
+	return recurrenceVerdict{Verdict: "recurrent", Confidence: 1 - pNone}
 }
 
 // confirmRecurrenceDecide is confirmRecurrence's decide-mode twin: one plain
@@ -152,6 +163,7 @@ func confirmRecurrenceDecide(ctx context.Context, pool *pgxpool.Pool, r *Router,
 		entry.Err = fmt.Errorf("decide: %w", err)
 		if llm.IsDecideFallback(err) {
 			entry.Metadata["decide_fallback"] = err.Error()
+			noteDecideIncapable(served, err)
 			return recurrenceVerdict{}, fmt.Errorf("%w: %w (backend %s)", errDecideFallback, err, backendName(served))
 		}
 		return recurrenceVerdict{}, err

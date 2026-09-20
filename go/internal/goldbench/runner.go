@@ -713,7 +713,12 @@ type dumpRecord struct {
 	// -samples N>1 vorhanden (omitempty) — outputs/usage bleiben flach.
 	Samples      [][]string    `json:"samples,omitempty"`
 	SamplesUsage [][]CallUsage `json:"samples_usage,omitempty"`
-	Gen          *GenStamp     `json:"gen,omitempty"`
+	// Tops (Decide-Achsen): Top-Logprobs des ersten Antwort-Tokens je Slot —
+	// die Primärquelle, aus der diese Achsen scoren; ohne sie wäre ein
+	// Resume/Re-Score eines Decide-Dumps eine Fallback-Nullmessung.
+	// omitempty: Dumps ohne Decide-Achsen bleiben byte-identisch.
+	Tops [][]llm.TokenLogprob `json:"tops,omitempty"`
+	Gen  *GenStamp            `json:"gen,omitempty"`
 }
 
 // dumpOutputs persistiert die rohen Modell-Antworten aller gefahrenen Achsen
@@ -771,6 +776,7 @@ type doneRec struct {
 	Usage        []CallUsage
 	Samples      [][]string
 	SamplesUsage [][]CallUsage
+	Tops         [][]llm.TokenLogprob
 }
 
 // dumpDone ist das Done-Set einer Append-Datei.
@@ -901,7 +907,7 @@ func loadDumpDone(path string, gen *GenStamp) (*dumpDone, error) {
 			if _, dup := d.recs[rec.Axis][rec.ID]; dup {
 				return nil, fmt.Errorf("goldbench: dump-append: Zeile %d: Duplikat (%s,%s) — zwei vollständige Records", n, rec.Axis, rec.ID)
 			}
-			d.recs[rec.Axis][rec.ID] = doneRec{Outputs: rec.Outputs, Usage: rec.Usage, Samples: rec.Samples, SamplesUsage: rec.SamplesUsage}
+			d.recs[rec.Axis][rec.ID] = doneRec{Outputs: rec.Outputs, Usage: rec.Usage, Samples: rec.Samples, SamplesUsage: rec.SamplesUsage, Tops: rec.Tops}
 			d.total++
 		}
 		off += int64(len(line))
@@ -936,8 +942,13 @@ func (r *caseRun) adopt(rec doneRec) {
 	if rec.Samples != nil {
 		r.samples, r.samplesUsage = rec.Samples, rec.SamplesUsage
 	}
-	for _, u := range r.usages {
-		if u.Finish == "length" {
+	if rec.Tops != nil {
+		copy(r.tops, rec.Tops)
+	}
+	for i, u := range r.usages {
+		// Ein Decide-Slot (Tops vorhanden) stoppt erwartungsgemäß mit
+		// "length" — kein Riss, wie in runCase.
+		if u.Finish == "length" && (i >= len(r.tops) || len(r.tops[i]) == 0) {
 			r.truncated++
 		}
 		if u.ThinkStripped {
@@ -1063,6 +1074,12 @@ func newDumpRecord(axis string, r caseRun, gen *GenStamp) dumpRecord {
 	}
 	if r.samples != nil {
 		rec.Samples, rec.SamplesUsage = r.samples, r.samplesUsage
+	}
+	for _, tp := range r.tops {
+		if len(tp) > 0 {
+			rec.Tops = r.tops
+			break
+		}
 	}
 	return rec
 }

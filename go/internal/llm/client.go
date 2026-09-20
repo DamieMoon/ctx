@@ -121,13 +121,6 @@ type ChatResponse struct {
 	TopLogprobs []TokenLogprob
 }
 
-// TokenLogprob is one entry of a top-logprobs list: the token text as the
-// provider tokenizes it (leading space included where the tokenizer keeps
-// one) and its natural-log probability at that position.
-type TokenLogprob struct {
-	Token   string
-	Logprob float64
-}
 
 // --- Ollama wire format ---.
 
@@ -207,11 +200,14 @@ type openAIChatResponse struct {
 		// requested. Only content[0].top_logprobs is consumed (decide.go).
 		Logprobs *struct {
 			Content []struct {
-				Token       string  `json:"token"`
-				Logprob     float64 `json:"logprob"`
+				Token string `json:"token"`
+				// Pointers on purpose: llama.cpp serialises a masked token's
+				// −∞ as JSON null, and a plain float64 would read it as 0 =
+				// probability 1 (FirstTokenLogprobs drops nil).
+				Logprob     *float64 `json:"logprob"`
 				TopLogprobs []struct {
-					Token   string  `json:"token"`
-					Logprob float64 `json:"logprob"`
+					Token   string   `json:"token"`
+					Logprob *float64 `json:"logprob"`
 				} `json:"top_logprobs"`
 			} `json:"content"`
 		} `json:"logprobs"`
@@ -399,15 +395,14 @@ func chatOpenAI(ctx context.Context, b backends.Backend, systemPrompt, userPromp
 	}
 	if lp := result.Choices[0].Logprobs; lp != nil && len(lp.Content) > 0 {
 		first := lp.Content[0]
-		out.TopLogprobs = make([]TokenLogprob, 0, len(first.TopLogprobs)+1)
+		alts := make([]TokenLogprob, 0, len(first.TopLogprobs))
 		for _, alt := range first.TopLogprobs {
-			out.TopLogprobs = append(out.TopLogprobs, TokenLogprob{Token: alt.Token, Logprob: alt.Logprob})
+			if alt.Logprob == nil {
+				continue
+			}
+			alts = append(alts, TokenLogprob{Token: alt.Token, Logprob: *alt.Logprob})
 		}
-		// Some servers list the sampled token only in content[0], not in its
-		// own top_logprobs; include it once so the distribution is complete.
-		if !hasToken(out.TopLogprobs, first.Token) {
-			out.TopLogprobs = append(out.TopLogprobs, TokenLogprob{Token: first.Token, Logprob: first.Logprob})
-		}
+		out.TopLogprobs = FirstTokenLogprobs(first.Token, first.Logprob, alts)
 	}
 	// Provider provenance is an openrouter-class contract (design 03 §2.7.4):
 	// local /v1 servers also echo a model string, but only OpenRouter's may
@@ -419,16 +414,6 @@ func chatOpenAI(ctx context.Context, b backends.Backend, systemPrompt, userPromp
 		out.ProviderRequestID = result.ID
 	}
 	return out, nil
-}
-
-// hasToken reports whether the top-logprobs list already names tok.
-func hasToken(list []TokenLogprob, tok string) bool {
-	for _, t := range list {
-		if t.Token == tok {
-			return true
-		}
-	}
-	return false
 }
 
 // mergeJSONFields merges extra top-level fields into a marshaled JSON request

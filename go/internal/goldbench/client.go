@@ -113,11 +113,11 @@ type wireResponse struct {
 		FinishReason string      `json:"finish_reason"`
 		Logprobs     *struct {
 			Content []struct {
-				Token       string  `json:"token"`
-				Logprob     float64 `json:"logprob"`
+				Token       string   `json:"token"`
+				Logprob     *float64 `json:"logprob"` // null = maskiert (llama.cpp), siehe llm.FirstTokenLogprobs
 				TopLogprobs []struct {
-					Token   string  `json:"token"`
-					Logprob float64 `json:"logprob"`
+					Token   string   `json:"token"`
+					Logprob *float64 `json:"logprob"`
 				} `json:"top_logprobs"`
 			} `json:"content"`
 		} `json:"logprobs"`
@@ -287,16 +287,17 @@ func (c *Client) ChatWithUsage(ctx context.Context, req ChatRequest) (ChatResult
 		ThinkStripped:    thinkStripped,
 	}
 	if lp := wr.Choices[0].Logprobs; lp != nil && len(lp.Content) > 0 {
+		// Dieselbe Ableseregel wie der Produktions-Client (llm/client.go), damit
+		// die Achse dieselbe Verteilung misst, die der Modus schreiben würde.
 		first := lp.Content[0]
-		out.TopLogprobs = make([]llm.TokenLogprob, 0, len(first.TopLogprobs)+1)
-		seen := false
+		alts := make([]llm.TokenLogprob, 0, len(first.TopLogprobs))
 		for _, alt := range first.TopLogprobs {
-			out.TopLogprobs = append(out.TopLogprobs, llm.TokenLogprob{Token: alt.Token, Logprob: alt.Logprob})
-			seen = seen || alt.Token == first.Token
+			if alt.Logprob == nil {
+				continue
+			}
+			alts = append(alts, llm.TokenLogprob{Token: alt.Token, Logprob: *alt.Logprob})
 		}
-		if !seen {
-			out.TopLogprobs = append(out.TopLogprobs, llm.TokenLogprob{Token: first.Token, Logprob: first.Logprob})
-		}
+		out.TopLogprobs = llm.FirstTokenLogprobs(first.Token, first.Logprob, alts)
 	}
 	return out, nil
 }

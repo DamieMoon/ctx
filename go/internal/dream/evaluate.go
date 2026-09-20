@@ -227,7 +227,7 @@ func evaluateRelationships(ctx context.Context, pool *pgxpool.Pool, r *Router, o
 	// that lands on a backend without logprobs (llm.IsDecideFallback). Any
 	// other error is the same failure class the generating call would have
 	// and returns straight through.
-	if wantDecide(r, decideStageEval) {
+	if wantDecide(r, decideStageEval) && decideCapable(r, backends.RoleDream, foldSensitivity(source, candidates)) {
 		links, err := evaluateRelationshipsDecide(ctx, pool, r, source, candidates, capped)
 		if err == nil || !errors.Is(err, errDecideFallback) {
 			return links, err
@@ -269,6 +269,18 @@ func evaluateRelationships(ctx context.Context, pool *pgxpool.Pool, r *Router, o
 // chain resolves at (max over source + every candidate — a zero value folds to
 // credentials, fail-closed) and the candidate-id set the answer is filtered
 // against.
+// foldSensitivity is the chain sensitivity of a source-plus-candidates call
+// (max over all, zero folds to credentials) — the same fold buildEvalRequest
+// computes, exposed for the decide capability probe.
+func foldSensitivity(source BlockInfo, candidates []BlockInfo) backends.Sensitivity {
+	parts := make([]backends.Sensitivity, 0, 1+len(candidates))
+	parts = append(parts, source.Sensitivity)
+	for _, c := range candidates {
+		parts = append(parts, c.Sensitivity)
+	}
+	return backends.MaxSensitivity(parts...)
+}
+
 func buildEvalRequest(source BlockInfo, candidates []BlockInfo, capped int) *evalRequest {
 	system, user := buildEvalPrompt(source, candidates)
 	blockIDs := make([]string, 0, 1+len(candidates))

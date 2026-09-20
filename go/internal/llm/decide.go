@@ -33,10 +33,52 @@ import (
 // prompt for the same question.
 var ErrNoLogprobs = errors.New("llm: decide: response carries no top-logprobs")
 
-// ErrNoLabelMass is returned when the provider reported logprobs but none of
-// the caller's labels appears among them — the model answered something else
-// entirely (a thinking tag, prose, a code fence). Also a fallback signal.
+// ErrNoLabelMass is returned when the provider reported logprobs but the
+// caller's labels captured less than MinLabelMass of the first token's belief
+// — the model answered something else (a thinking tag, prose, a code fence)
+// with at most a sliver on the vocabulary. Also a fallback signal: a
+// renormalisation of 9 % belief is not a decision.
 var ErrNoLabelMass = errors.New("llm: decide: no probability mass on any label")
+
+// MinLabelMass is the share of first-token probability the labels must
+// capture for DecideChoice to return a decision. Measured in-vocabulary answers
+// carry 0.96–1.00 (goldbench decide axes, mean 0.996); an answer that starts
+// with prose or a thinking tag leaves the labels far below 0.5. Half is the
+// point where "the model chose among the labels" stops being the majority
+// reading of the token.
+const MinLabelMass = 0.5
+
+// TokenLogprob is one entry of a top-logprobs list: the token text as the
+// provider tokenizes it (leading space included where the tokenizer keeps
+// one) and its natural-log probability at that position.
+type TokenLogprob struct {
+	Token   string  `json:"token"`
+	Logprob float64 `json:"logprob"`
+}
+
+// FirstTokenLogprobs assembles the read-out list of ONE token position from
+// the provider's shape: the sampled token (with its log-probability, nil when
+// the provider sent JSON null — how llama.cpp serialises −∞ for a masked
+// token) and the listed alternatives. Entries with a nil or positive
+// log-probability are dropped rather than decoded as 0 (= probability 1);
+// the sampled token is appended once when the alternatives do not list it.
+// Shared by the production client and the goldbench client so both read the
+// same distribution.
+func FirstTokenLogprobs(sampled string, sampledLogprob *float64, alts []TokenLogprob) []TokenLogprob {
+	out := make([]TokenLogprob, 0, len(alts)+1)
+	seen := false
+	for _, a := range alts {
+		if a.Logprob > 0 || math.IsNaN(a.Logprob) {
+			continue
+		}
+		out = append(out, a)
+		seen = seen || a.Token == sampled
+	}
+	if !seen && sampledLogprob != nil && *sampledLogprob <= 0 && !math.IsNaN(*sampledLogprob) {
+		out = append(out, TokenLogprob{Token: sampled, Logprob: *sampledLogprob})
+	}
+	return out
+}
 
 // DecideOptions is the sampling preset of a decide call: greedy, ONE output
 // token, top-20 alternatives. NumPredict is CapLocked so a serving row's
@@ -109,8 +151,8 @@ func DecideChoice(top []TokenLogprob, labels []string) (Decision, error) {
 		raw[i] += p
 		mass += p
 	}
-	if mass <= 0 {
-		return Decision{}, ErrNoLabelMass
+	if mass < MinLabelMass {
+		return Decision{}, fmt.Errorf("%w (mass %.3f < %.2f)", ErrNoLabelMass, mass, MinLabelMass)
 	}
 	d := Decision{Probs: make(map[string]float64, len(labels)), Mass: math.Min(mass, 1)}
 	best, peak := 0, -1.0

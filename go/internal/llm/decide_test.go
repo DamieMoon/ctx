@@ -69,7 +69,7 @@ func TestDecideChoice_ConfidenceEdges(t *testing.T) {
 	if uni.Best != "A" {
 		t.Fatalf("tie must resolve to first label, got %q", uni.Best)
 	}
-	single, _ := DecideChoice([]TokenLogprob{{Token: "Yes", Logprob: lp(0.4)}}, []string{"Yes"})
+	single, _ := DecideChoice([]TokenLogprob{{Token: "Yes", Logprob: lp(0.6)}}, []string{"Yes"})
 	if single.Confidence != 1 {
 		t.Fatalf("n=1 confidence is the renormalised peak (1), got %v", single.Confidence)
 	}
@@ -81,6 +81,13 @@ func TestDecideChoice_Errors(t *testing.T) {
 	}
 	if _, err := DecideChoice([]TokenLogprob{{Token: "<think>", Logprob: lp(0.99)}}, []string{"A", "B"}); !errors.Is(err, ErrNoLabelMass) {
 		t.Fatalf("no label mass: %v", err)
+	}
+	// A sliver of label mass under prose is not a decision either.
+	if _, err := DecideChoice([]TokenLogprob{{Token: "The", Logprob: lp(0.90)}, {Token: "D", Logprob: lp(0.09)}, {Token: "E", Logprob: lp(0.01)}}, []string{"D", "E"}); !errors.Is(err, ErrNoLabelMass) {
+		t.Fatalf("mass 0.10 must be a fallback, got %v", err)
+	}
+	if d, err := DecideChoice([]TokenLogprob{{Token: "D", Logprob: lp(0.45)}, {Token: "E", Logprob: lp(0.06)}, {Token: "x", Logprob: lp(0.49)}}, []string{"D", "E"}); err != nil || d.Best != "D" {
+		t.Fatalf("mass 0.51 is above the floor: %+v %v", d, err)
 	}
 	if _, err := DecideChoice([]TokenLogprob{{Token: "A", Logprob: 0}}, nil); err == nil {
 		t.Fatal("no labels must error")
@@ -181,5 +188,47 @@ func TestOllamaOptions_TopLogprobsNotOnWire(t *testing.T) {
 		if _, has := m[k]; has {
 			t.Fatalf("Options marshal leaks %q: %s", k, raw)
 		}
+	}
+}
+
+func TestFirstTokenLogprobs_DropsNullAndPositive(t *testing.T) {
+	neg := -0.2
+	pos := 0.3
+	got := FirstTokenLogprobs("B", nil, []TokenLogprob{{Token: "A", Logprob: -1.0}, {Token: "C", Logprob: pos}})
+	if len(got) != 1 || got[0].Token != "A" {
+		t.Fatalf("null sampled + positive alt must be dropped: %+v", got)
+	}
+	got = FirstTokenLogprobs("B", &neg, []TokenLogprob{{Token: "A", Logprob: -1.0}})
+	if len(got) != 2 || got[1].Token != "B" || got[1].Logprob != neg {
+		t.Fatalf("sampled token appended once: %+v", got)
+	}
+	got = FirstTokenLogprobs("A", &neg, []TokenLogprob{{Token: "A", Logprob: -1.0}})
+	if len(got) != 1 {
+		t.Fatalf("sampled token already listed must not duplicate: %+v", got)
+	}
+}
+
+// TestChatOpenAI_NullLogprobIsNotProbabilityOne pins the llama.cpp shape: a
+// masked token arrives as logprob null and must vanish, not swamp the
+// distribution as exp(0) = 1.
+func TestChatOpenAI_NullLogprobIsNotProbabilityOne(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"D"},
+			"logprobs":{"content":[{"token":"D","logprob":-0.1,
+				"top_logprobs":[{"token":"D","logprob":-0.1},{"token":"B","logprob":null},{"token":"E","logprob":-2.5}]}]}}],
+			"usage":{"completion_tokens":1,"prompt_tokens":10}}`))
+	}))
+	t.Cleanup(srv.Close)
+	b := backends.Backend{Host: srv.URL, Protocol: backends.ProtocolOpenAI, Model: "m", Trust: backends.TrustFull}
+	resp, err := Chat(context.Background(), b, "sys", "usr", DecideOptions(), 5*time.Second)
+	if err != nil {
+		t.Fatalf("chat: %v", err)
+	}
+	if len(resp.TopLogprobs) != 2 {
+		t.Fatalf("null entry must be dropped: %+v", resp.TopLogprobs)
+	}
+	d, err := Decide(resp, []string{"A", "B", "C", "D", "E"})
+	if err != nil || d.Best != "D" || d.Probs["B"] != 0 {
+		t.Fatalf("decide: %+v %v", d, err)
 	}
 }
