@@ -14,6 +14,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/GottZ/ctx/internal/llm"
 )
 
 // Report ist das Gesamt-Ergebnis eines Benchmark-Laufs.
@@ -288,7 +290,7 @@ func buildRuns(cfg Config, axes []string, registry map[string]axisDef, done *dum
 			if err != nil {
 				return nil, nil, nil, 0, err
 			}
-			runs[i] = caseRun{c: c, reqs: reqs, outputs: make([]string, len(reqs))}
+			runs[i] = caseRun{c: c, reqs: reqs, outputs: make([]string, len(reqs)), tops: make([][]llm.TokenLogprob, len(reqs))}
 			if rec, ok := done.lookup(axis, c.ID); ok && !cfg.DryRun {
 				// Resume: Fall liegt im Dump — Output/usage übernehmen, kein
 				// Call, kein erneutes Schreiben (Skip VOR dem Job-Bau).
@@ -427,13 +429,17 @@ func (c *caller) runCase(ctx context.Context, run *caseRun, reqs []ChatRequest) 
 				}
 				break
 			}
-			if res.FinishReason == "length" {
+			// finish_reason "length" ist bei einem Decide-Request (max_tokens 1,
+			// Antwort aus den Logprobs) der erwartete Stop, kein gerissenes
+			// Budget — er zählt nicht als Riss.
+			if res.FinishReason == "length" && req.Opts.TopLogprobs == 0 {
 				run.truncated++
 			}
 			if res.ThinkStripped {
 				run.thinkStrip++
 			}
 			run.outputs[i] = res.Content
+			run.tops[i] = res.TopLogprobs
 		}
 		// F9: ein Fall, der nicht mehr geschrieben werden kann (Fall-Fehler; mit
 		// Sink auch Sample-Fehler), bekommt keine weiteren Slots — spart k× Calls.

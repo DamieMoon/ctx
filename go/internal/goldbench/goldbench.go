@@ -140,6 +140,7 @@ const caseLineMaxBytes = 4 * 1024 * 1024
 // LoadCases lädt die Gold-Fälle einer Achse aus <dir>/<axis>.jsonl und
 // validiert das axis-Feld jeder Zeile.
 func LoadCases(dir, axis string) ([]*Case, error) {
+	axis = DataAxis(axis)
 	path := filepath.Join(dir, axis+".jsonl")
 	f, err := os.Open(path)
 	if err != nil {
@@ -210,7 +211,7 @@ func DatasetHash(dir string, axes []string) (string, error) {
 	sort.Strings(names)
 	h := sha256.New()
 	for _, a := range names {
-		b, err := os.ReadFile(filepath.Join(dir, a+".jsonl"))
+		b, err := os.ReadFile(filepath.Join(dir, DataAxis(a)+".jsonl"))
 		if err != nil {
 			return "", fmt.Errorf("goldbench: dataset hash: %w", err)
 		}

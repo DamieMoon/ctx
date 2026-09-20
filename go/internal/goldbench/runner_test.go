@@ -42,7 +42,20 @@ func fakeChatServer(t *testing.T) *httptest.Server {
 		system, user := req.Messages[0].Content, req.Messages[1].Content
 
 		var answer string
+		// Decide-Achsen: ein Buchstabe plus Top-Logprobs des ersten Tokens.
+		var logprobs map[string]any
+		decide := func(letter string, alt string) {
+			answer = letter
+			logprobs = map[string]any{"content": []map[string]any{{
+				"token": letter, "logprob": -0.1,
+				"top_logprobs": []map[string]any{{"token": letter, "logprob": -0.1}, {"token": alt, "logprob": -2.5}},
+			}}}
+		}
 		switch {
+		case strings.Contains(system, "ONE candidate block"):
+			decide("E", "D")
+		case strings.Contains(system, "recurring pattern") && strings.Contains(system, "exactly one letter"):
+			decide("A", "C")
 		case strings.Contains(system, "temporal reference extractor"):
 			answer = `{"dates":[{"date":"2026-07-25","source":"explicit"}],"directions":[],"false_positives":[]}`
 		case strings.Contains(system, "temporal reference resolver"):
@@ -80,8 +93,12 @@ func fakeChatServer(t *testing.T) *httptest.Server {
 			return
 		}
 
+		choice := map[string]any{"message": map[string]any{"role": "assistant", "content": answer}, "finish_reason": "stop"}
+		if logprobs != nil {
+			choice["logprobs"] = logprobs
+		}
 		resp := map[string]any{
-			"choices": []map[string]any{{"message": map[string]any{"role": "assistant", "content": answer}, "finish_reason": "stop"}},
+			"choices": []map[string]any{choice},
 			"usage": map[string]any{
 				"prompt_tokens": 100 + len(user)/4, "completion_tokens": 7,
 				"completion_tokens_details": map[string]any{"reasoning_tokens": 3},

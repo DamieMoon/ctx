@@ -3,6 +3,8 @@ package goldbench
 import (
 	"encoding/json"
 	"fmt"
+
+	"github.com/GottZ/ctx/internal/llm"
 )
 
 // caseRun ist das Ergebnis der LLM-Calls eines Falls, Input für den Scorer.
@@ -13,6 +15,11 @@ type caseRun struct {
 	reqs    []ChatRequest // die gebauten Requests (Dump-v2: system/user/params je Slot)
 	outputs []string      // ein Eintrag pro ChatRequest der Achse
 	usages  []CallUsage   // parallel zu outputs: usage/finish/think_stripped je Request
+	// tops (Decide-Achsen): parallel zu outputs die Top-Logprobs des ersten
+	// Antwort-Tokens je Request; nil, wenn nicht angefordert oder vom Server
+	// nicht geliefert (die Achse wertet das als Fallback-Signal, nie als leere
+	// Verteilung).
+	tops [][]llm.TokenLogprob
 	// samples/samplesUsage (KW4): [Request][Sample] inkl. Sample 0 — nur bei
 	// Samples>1 belegt; temp-0-Requests tragen genau ein Element.
 	samples      [][]string
@@ -74,6 +81,11 @@ type AxisResult struct {
 type axisDef struct {
 	name        string
 	prospective bool
+	// data ist die Achse, deren Gold-Datei diese Achse liest (leer = name).
+	// Varianten-Achsen mit eigener Datei (tagging-v2) lassen es leer; die
+	// Decide-Achsen lesen die Gold-Fälle ihrer generierenden Basisachse
+	// (links, recurrence) — dieselben Fälle, ein anderer Wire-Pfad.
+	data string
 	build       func(c *Case) ([]ChatRequest, error)
 	score       func(runs []caseRun) (AxisResult, []CaseScore)
 }
@@ -101,12 +113,26 @@ func axisRegistry() map[string]axisDef {
 		// Basis-Achsen rerank und cluster-label.
 		axisTaggingV2(),
 		axisTitleV2(),
+		// Decide-Modus der beiden Dream-Klassifikatoren (axis_decide.go):
+		// prospektiv, bis dream.decide_mode promotet ist.
+		axisLinksDecide(),
+		axisRecurrenceDecide(),
 	}
 	m := make(map[string]axisDef, len(defs))
 	for _, d := range defs {
 		m[d.name] = d
 	}
 	return m
+}
+
+// DataAxis liefert den Namen der Gold-Datei (ohne .jsonl) einer Achse: ihr
+// data-Feld, sonst der eigene Name. Unbekannte Achsen bilden auf sich selbst
+// ab, damit der Aufrufer seinen „Achse unbekannt"-Fehler unverändert liefert.
+func DataAxis(axis string) string {
+	if d, ok := axisRegistry()[axis]; ok && d.data != "" {
+		return d.data
+	}
+	return axis
 }
 
 // decodeInto dekodiert ein Roh-JSON-Feld in das Achsen-Schema.

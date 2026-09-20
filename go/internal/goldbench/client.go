@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/GottZ/ctx/internal/llm"
 )
 
 // SamplingOpts sind die pro Achse festgelegten Sampling-Parameter. Sie
@@ -31,6 +33,11 @@ type SamplingOpts struct {
 	// trügen alle N Wire-Requests denselben Seed und Server, die seed honorieren,
 	// lieferten N identische Samples.
 	Seed int64 `json:"seed,omitempty"`
+	// TopLogprobs > 0 fordert logprobs/top_logprobs an (Decide-Achsen, die
+	// die Antwort aus den Alternativen des ersten Tokens lesen —
+	// llm.DecideOptions). 0 = weglassen; die Byte-Form bestehender Dumps
+	// bleibt damit stabil.
+	TopLogprobs int `json:"top_logprobs,omitempty"`
 }
 
 // ChatRequest ist ein einzelner Prompt-Abruf (System + User + Sampling).
@@ -96,12 +103,24 @@ type wireRequest struct {
 	ResponseFormat *struct {
 		Type string `json:"type"`
 	} `json:"response_format,omitempty"`
+	Logprobs    bool `json:"logprobs,omitempty"`
+	TopLogprobs int  `json:"top_logprobs,omitempty"`
 }
 
 type wireResponse struct {
 	Choices []struct {
 		Message      wireMessage `json:"message"`
 		FinishReason string      `json:"finish_reason"`
+		Logprobs     *struct {
+			Content []struct {
+				Token       string  `json:"token"`
+				Logprob     float64 `json:"logprob"`
+				TopLogprobs []struct {
+					Token   string  `json:"token"`
+					Logprob float64 `json:"logprob"`
+				} `json:"top_logprobs"`
+			} `json:"content"`
+		} `json:"logprobs"`
 	} `json:"choices"`
 	Usage struct {
 		PromptTokens            int `json:"prompt_tokens"`
@@ -124,6 +143,10 @@ type ChatResult struct {
 	ReasoningTokens  int // aus usage.completion_tokens_details (0 wenn Server es nicht liefert)
 	FinishReason     string
 	ThinkStripped    bool // Content enthielt <think>-Blöcke (client-seitig entfernt)
+	// TopLogprobs sind die Alternativen des ersten Antwort-Tokens (nur wenn
+	// TopLogprobs angefordert und vom Server geliefert; sonst nil) — dieselbe
+	// Form wie llm.ChatResponse.TopLogprobs, inkl. des gesampelten Tokens.
+	TopLogprobs []llm.TokenLogprob
 }
 
 // stripThink entfernt <think>…</think>-Blöcke aus dem Content — auch einen
@@ -193,6 +216,10 @@ func (c *Client) ChatWithUsage(ctx context.Context, req ChatRequest) (ChatResult
 			Type string `json:"type"`
 		}{Type: "json_object"}
 	}
+	if req.Opts.TopLogprobs > 0 {
+		body.Logprobs = true
+		body.TopLogprobs = req.Opts.TopLogprobs
+	}
 	payload, err := json.Marshal(body)
 	if err != nil {
 		return ChatResult{}, fmt.Errorf("goldbench: marshal request: %w", err)
@@ -251,14 +278,27 @@ func (c *Client) ChatWithUsage(ctx context.Context, req ChatRequest) (ChatResult
 		return ChatResult{}, fmt.Errorf("goldbench: chat response without choices")
 	}
 	content, thinkStripped := stripThink(wr.Choices[0].Message.Content)
-	return ChatResult{
+	out := ChatResult{
 		Content:          content,
 		PromptTokens:     wr.Usage.PromptTokens,
 		CompletionTokens: wr.Usage.CompletionTokens,
 		ReasoningTokens:  wr.Usage.CompletionTokensDetails.ReasoningTokens,
 		FinishReason:     wr.Choices[0].FinishReason,
 		ThinkStripped:    thinkStripped,
-	}, nil
+	}
+	if lp := wr.Choices[0].Logprobs; lp != nil && len(lp.Content) > 0 {
+		first := lp.Content[0]
+		out.TopLogprobs = make([]llm.TokenLogprob, 0, len(first.TopLogprobs)+1)
+		seen := false
+		for _, alt := range first.TopLogprobs {
+			out.TopLogprobs = append(out.TopLogprobs, llm.TokenLogprob{Token: alt.Token, Logprob: alt.Logprob})
+			seen = seen || alt.Token == first.Token
+		}
+		if !seen {
+			out.TopLogprobs = append(out.TopLogprobs, llm.TokenLogprob{Token: first.Token, Logprob: first.Logprob})
+		}
+	}
+	return out, nil
 }
 
 // truncateErr kürzt Fehler-Bodies für die Fehlermeldung.

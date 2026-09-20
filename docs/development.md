@@ -195,7 +195,12 @@ the output with the real ctx parsers, and scores against 1127 anonymized gold ca
 the [ctx-bench](https://github.com/GottZ/ctx-bench) dataset repository (12 axes:
 temporal extraction on block and query level,
 keywords, tagging, title, dream links, recurrence, sensitivity classification,
-cluster labeling, rerank judging, synthesis contract, query translation).
+cluster labeling, rerank judging, synthesis contract, query translation), plus prospective
+variant axes — among them `links-decide` and `recurrence-decide`, the prefill-only decide
+mode of the two dream classifiers (`dream.decide_mode`): one single-letter request per pair,
+scored from the first token's top-logprobs through the production mapping (type gate and
+hard cap included), so the axis measures exactly what the mode would write. Requires an
+endpoint that reports `logprobs`; slots without them count as unparsed (`fallback_rate`).
 
 ```bash
 cd go && go build ./cmd/ctx-goldbench
