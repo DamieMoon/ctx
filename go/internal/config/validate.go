@@ -976,6 +976,9 @@ func validateDream(c *Config) []Issue {
 	// ceiling, and an enum check has no cross-field half to keep here).
 	issues = append(issues, validateDreamJSONMode(c)...)
 
+	// V21 — dream.decide_mode enum, same shape and doctrine as V20.
+	issues = append(issues, validateDreamDecideMode(c)...)
+
 	// V15 — dream.link_floor_confidence range. The value becomes the raw
 	// confidence of every link the LLM names without a strength signal; an
 	// out-of-range float would either die at the write gate (silent no-op
@@ -1098,6 +1101,20 @@ func validateDream(c *Config) []Issue {
 // renders their value, and the symptom they are chasing is a backend decoding
 // at half speed, which no log line attributes to this key. Fatal instead: boot
 // aborts, the settings PUT is a 422.
+func validateDreamDecideMode(c *Config) []Issue {
+	c.Dream.DecideMode = strings.ToLower(strings.TrimSpace(c.Dream.DecideMode))
+	switch c.Dream.DecideMode {
+	case "", dream.DecideModeOff, dream.DecideModeEval, dream.DecideModeAll:
+		return nil
+	default:
+		return []Issue{{Field: "dream.decide_mode", Severity: SeverityError,
+			Msg: fmt.Sprintf("decide mode %q must be %q, %q or %q — empty reads as %q",
+				c.Dream.DecideMode, dream.DecideModeOff, dream.DecideModeEval, dream.DecideModeAll, dream.DecideModeOff)}}
+	}
+}
+
+// validateDreamJSONMode is V20 — see below; validateDreamDecideMode above is
+// V21, its twin for dream.decide_mode.
 func validateDreamJSONMode(c *Config) []Issue {
 	c.Dream.JSONMode = strings.ToLower(strings.TrimSpace(c.Dream.JSONMode))
 	switch c.Dream.JSONMode {

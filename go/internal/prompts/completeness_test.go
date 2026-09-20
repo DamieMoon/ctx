@@ -126,6 +126,7 @@ var bodyPins = map[string]struct {
 	"dream.dailySynthesisSystemPrompt": {decls: []string{"dailySynthesisSystemPrompt"}, sha: "943ca266a09f0e83"},
 	"dream.dailySynthesisPromptIntl":   {decls: []string{"dailySynthesisPromptFor"}, sha: "800f50380c204724"},
 	"dream.dreamSystemPrompt":          {decls: []string{"dreamSystemPrompt"}, sha: "a3a0c9e4e6941edb"},
+	"dream.decideEvalSystemPrompt":     {decls: []string{"decideEvalSystemPrompt"}, sha: "84d14295d57bf9df"},
 	"topiclabel.systemPromptFor":       {decls: []string{"systemPromptFor", "clusterHarden"}, sha: "8cdb18e4db04bb57"},
 }
 

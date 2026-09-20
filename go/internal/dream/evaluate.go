@@ -222,6 +222,20 @@ func evaluateRelationships(ctx context.Context, pool *pgxpool.Pool, r *Router, o
 		return nil, nil
 	}
 
+	// Decide mode (dream.decide_mode eval|all): prefill-only pairwise
+	// decisions first; the generating path below is the fallback for a chain
+	// that lands on a backend without logprobs (llm.IsDecideFallback). Any
+	// other error is the same failure class the generating call would have
+	// and returns straight through.
+	if wantDecide(r, decideStageEval) {
+		links, err := evaluateRelationshipsDecide(ctx, pool, r, source, candidates, capped)
+		if err == nil || !errors.Is(err, errDecideFallback) {
+			return links, err
+		}
+		slog.Info("dream: decide mode unavailable on the serving backend — falling back to the generating prompt for this block",
+			"block_id", source.ID, "error", err)
+	}
+
 	req := buildEvalRequest(source, candidates, capped)
 
 	res := evalAttempt(ctx, pool, r, req, opts, false)

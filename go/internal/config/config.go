@@ -235,6 +235,27 @@ type DreamConfig struct {
 	// answer is prose stored verbatim, so JSON mode there is corruption, not
 	// validation (dream/synthesize_report.go).
 	JSONMode string `key:"dream.json_mode" env:"CTX_DREAM_JSON_MODE" default:"strict" mut:"hot" tenancy:"global-only"`
+	// DecideMode switches the two dream CLASSIFIERS — link evaluation and the
+	// recurrence confirm — from JSON-generating prompts to prefill-only
+	// decisions read off the first token's top-logprobs (llm.DecideChoice;
+	// dream/decide_eval.go). "off" (the default) is today's behavior byte for
+	// byte. "eval" decides link evaluation only, "all" both classifiers.
+	//
+	// Why: on the serving hardware one output token costs ~100× an input
+	// token, and a classification needs none; the JSON parse layer and its
+	// truncation/drift failures disappear with it. Measured 2026-09-20 on the
+	// goldbench gold sets: link_score 0.605 vs 0.599, recurrence accuracy
+	// 0.885 = 0.885, at zero output tokens and 2.1× the throughput
+	// (.project/bench-jev-2026-09-20/REPORT.md).
+	//
+	// Requires a backend that reports logprobs on the OpenAI wire (SGLang,
+	// vLLM, llama.cpp server, most OpenRouter routes); a chain landing on a
+	// backend without them (Ollama) falls back to the generating prompt per
+	// block, so the key is safe to flip on a mixed pool. Hot, so it can be
+	// A/B'd live; global-only, because the wire shape belongs to the operator
+	// of the backend. Unknown spellings are fatal at boot / 422 on the
+	// settings write (V21), same doctrine as dream.json_mode.
+	DecideMode string `key:"dream.decide_mode" env:"CTX_DREAM_DECIDE_MODE" default:"off" mut:"hot" tenancy:"global-only"`
 	// LinkFloorConfidence is the raw confidence assigned to relationship
 	// links the LLM names WITHOUT a strength signal (string-map drift form,
 	// absent confidence fields — PR #12). The default 0.9 keeps such links

@@ -100,6 +100,12 @@ type Router struct {
 	// parser's per-type floors (the conservative PR-#12 semantics) — routers
 	// built without config wiring (tests) change nothing.
 	LinkFloor float64
+	// DecideMode is config dream.decide_mode ("off" | "eval" | "all"), read by
+	// the caller that builds the router (scheduler: per-iteration, so the hot
+	// key is hot). Resolved per classifier via wantDecide (decide_eval.go):
+	// the zero value is off, so a router built without config wiring — every
+	// test, every caller predating the key — keeps the generating prompts.
+	DecideMode string
 	// CapRetryFactor scales the output cap of ONE retry after a link
 	// evaluation was truncated at that cap, read from config
 	// Dream.EvalCapRetryFactor by the caller that builds the router

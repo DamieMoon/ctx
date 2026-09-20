@@ -705,6 +705,7 @@ func (s *Scheduler) newRouter(cfg *config.Config, tenant string) *dream.Router {
 		Language:        cfg.Dream.Language,
 		JSONMode:        cfg.Dream.JSONMode,
 		LinkFloor:       cfg.Dream.LinkFloorConfidence,
+		DecideMode:      cfg.Dream.DecideMode,
 		CapRetryFactor:  cfg.Dream.EvalCapRetryFactor,
 		TemporalTimeout: cfg.Dream.TemporalTimeout,
 		CycleTimeout:    cfg.Dream.CycleTimeout,
