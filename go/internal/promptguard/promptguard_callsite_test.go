@@ -66,7 +66,14 @@ var pipelineMarkers = []string{"Pipeline:", "newChainEntry(", "newDreamEntry("}
 // of this wave. Both build prompts out of foreign text, so a gate that could
 // not see them described a smaller world than it claimed, exactly the way the
 // module-root cut below exists to prevent. constPipelineSites closes it.
-const wantPipelineSites = 14
+//
+// 16 since the dream decide mode (2026-09-20): dream-eval and dream-recurrence
+// each gained a second site — the prefill-only twin of their generating call
+// (dream/decide_eval.go decideOnePair, dream/decide_recurrence.go
+// confirmRecurrenceDecide). Same pipeline names, own prompt builders, each
+// wired to promptguard (Wrap/GuardLine/GuardText/Rule) in its own file, so the
+// per-file heuristic sees them as guarded without an exception entry.
+const wantPipelineSites = 16
 
 // noPromptGuard is the CLOSED list of pipelines whose site carries no guard
 // and needs none. One justification line each; a reason that does not survive
