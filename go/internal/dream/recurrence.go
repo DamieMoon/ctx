@@ -106,11 +106,13 @@ func DetectRecurrence(ctx context.Context, pool *pgxpool.Pool, r *Router, opts l
 	for _, c := range candidates {
 		var verdict recurrenceVerdict
 		var vErr error
+		decided := false
 		if wantDecide(r, decideStageRecurrence) {
 			// Decide mode (dream.decide_mode all): the prefill-only confirm
 			// first; a backend without logprobs falls back to the generating
 			// prompt for this pair (decide_recurrence.go).
 			verdict, vErr = confirmRecurrenceDecide(ctx, pool, r, source, c)
+			decided = vErr == nil
 			if errors.Is(vErr, errDecideFallback) {
 				slog.Info("dream: recurrence decide unavailable on the serving backend — generating prompt for this pair",
 					"source", source.ID, "target", c.TargetID, "error", vErr)
@@ -141,11 +143,11 @@ func DetectRecurrence(ctx context.Context, pool *pgxpool.Pool, r *Router, opts l
 		default:
 			continue
 		}
-		if verdict.Confidence < minRawConfidence[verdict.Verdict] {
+		if floor := recurrenceWriteFloor(decided, verdict.Verdict); verdict.Confidence < floor {
 			slog.Debug("dream: recurrence below threshold",
 				"source", source.ID, "target", c.TargetID,
 				"verdict", verdict.Verdict, "confidence", verdict.Confidence,
-				"floor", minRawConfidence[verdict.Verdict])
+				"floor", floor, "decided", decided)
 			continue
 		}
 		links = append(links, Link{
