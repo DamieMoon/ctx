@@ -75,12 +75,14 @@ func axisLinksDecide() axisDef {
 
 // scoreLinksDecide: Primärmetrik link_score wie scoreLinks, berechnet auf den
 // Links, die die Produktion schreiben würde (BenchDecideLinks: argmax-Typ,
-// Confidence 1−P(none), Typ-Gate, Hard-Cap). Sekundär: link_score_argmax
-// (Roh-Argmax ohne Gate, die Bench-Sicht des Vorabreports), mean_mass, mean
-// P(link) und fallback_rate (Slots ohne lesbare Entscheidung).
+// Confidence 1−P(none), Typ-Gate, Tie-Distanz mit dem Registry-Default,
+// Hard-Cap). Sekundär: link_score_argmax (Roh-Argmax ohne Gate, die
+// Bench-Sicht des Vorabreports), link_score_no_tie (dieselbe Abbildung mit
+// abgeschalteter Tie-Regel — der Vorher-Wert für dream.decide_tie_odds),
+// mean_mass, mean P(link) und fallback_rate (Slots ohne lesbare Entscheidung).
 func scoreLinksDecide(runs []caseRun) (AxisResult, []CaseScore) {
 	labels := dream.BenchDecideLinkLabels()
-	var scores, argmaxScores, masses, plinks []float64
+	var scores, argmaxScores, noTieScores, masses, plinks []float64
 	parsed, slots, fallbacks := 0, 0, 0
 	confusion := map[string]map[string]int{}
 	bump := func(gold, pred string) {
@@ -136,9 +138,10 @@ func scoreLinksDecide(runs []caseRun) (AxisResult, []CaseScore) {
 		}
 		parsed++
 		cs.Parsed = true
-		links := dream.BenchDecideLinks(source, candidates, decisions)
+		links := dream.BenchDecideLinks(source, candidates, decisions, dream.DecideTieOddsDefault)
 		cs.Score = scoreLinksCase(gold, links, bump)
 		scores = append(scores, cs.Score)
+		noTieScores = append(noTieScores, scoreLinksCase(gold, dream.BenchDecideLinks(source, candidates, decisions, 0), noBump))
 		argmaxScores = append(argmaxScores, scoreLinksCase(gold, rawLinks, noBump))
 		perCase = append(perCase, cs)
 	}
@@ -149,6 +152,7 @@ func scoreLinksDecide(runs []caseRun) (AxisResult, []CaseScore) {
 		PrimaryScore:  meanOrZero(scores),
 		Secondary: map[string]float64{
 			"link_score_argmax": meanOrZero(argmaxScores),
+			"link_score_no_tie": meanOrZero(noTieScores),
 			"mean_mass":         meanOrZero(masses),
 			"mean_p_link":       meanOrZero(plinks),
 			"fallback_rate":     ratioOrZero(fallbacks, slots),

@@ -322,6 +322,16 @@ func TestValidateTable(t *testing.T) {
 		{"V19 fractional above one ok", map[string]string{"dream.eval_cap_retry_factor": "1.5"}, "dream.eval_cap_retry_factor", -1},
 		{"V19 raised ok", map[string]string{"dream.eval_cap_retry_factor": "4"}, "dream.eval_cap_retry_factor", -1},
 		{"V19 negative rejected", map[string]string{"dream.eval_cap_retry_factor": "-2"}, "dream.eval_cap_retry_factor", SeverityError},
+
+		// V36 — dream.decide_tie_odds is an odds RATIO anchor:near-tie, so
+		// the readings are 0 (off) and >= 1 (1 = anchor and exact ties). In
+		// (0, 1) the limit would sit above the anchor and nothing is written.
+		{"V36 default ok", map[string]string{}, "dream.decide_tie_odds", -1},
+		{"V36 zero is off, not an issue", map[string]string{"dream.decide_tie_odds": "0"}, "dream.decide_tie_odds", -1},
+		{"V36 one is anchor-only, not an issue", map[string]string{"dream.decide_tie_odds": "1"}, "dream.decide_tie_odds", -1},
+		{"V36 raised ok", map[string]string{"dream.decide_tie_odds": "2.718"}, "dream.decide_tie_odds", -1},
+		{"V36 below one rejected", map[string]string{"dream.decide_tie_odds": "0.5"}, "dream.decide_tie_odds", SeverityError},
+		{"V36 negative rejected", map[string]string{"dream.decide_tie_odds": "-1"}, "dream.decide_tie_odds", SeverityError},
 	}
 
 	for _, c := range cases {
@@ -763,3 +773,12 @@ func TestValidateRerankHeartbeatWarnsRetired(t *testing.T) {
 // What is genuinely gone is the COMBINATION at config level — validate and dump
 // asserted in one pass — and it is gone because its precondition is: no config
 // key can carry a host any more.
+
+// TestDecideTieOddsDefaultMirrorsDream pins the registry default of
+// dream.decide_tie_odds to dream.DecideTieOddsDefault, the copy the goldbench
+// decide axis scores with — the bench must measure what production writes.
+func TestDecideTieOddsDefaultMirrorsDream(t *testing.T) {
+	if got := Defaults().Dream.DecideTieOdds; got != dream.DecideTieOddsDefault {
+		t.Fatalf("registry default %v != dream.DecideTieOddsDefault %v", got, dream.DecideTieOddsDefault)
+	}
+}

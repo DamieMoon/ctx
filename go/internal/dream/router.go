@@ -106,6 +106,13 @@ type Router struct {
 	// the zero value is off, so a router built without config wiring — every
 	// test, every caller predating the key — keeps the generating prompts.
 	DecideMode string
+	// DecideTieOdds is config dream.decide_tie_odds, read by the caller that
+	// builds the router (scheduler: per-iteration, so the hot key is hot):
+	// in decide mode only the most confident link and the candidates whose
+	// odds lie within this factor of it are written (applyTieDistance). The
+	// zero value disables the rule — routers without config wiring keep
+	// writing every gated link up to the hard cap.
+	DecideTieOdds float64
 	// CapRetryFactor scales the output cap of ONE retry after a link
 	// evaluation was truncated at that cap, read from config
 	// Dream.EvalCapRetryFactor by the caller that builds the router

@@ -301,3 +301,64 @@ func TestWantDecide(t *testing.T) {
 		t.Fatal("nil router must be off")
 	}
 }
+
+func TestApplyTieDistance(t *testing.T) {
+	phi := DecideTieOddsDefault
+	link := func(id string, c float64) Link { return Link{TargetID: id, Relationship: "topical", Confidence: c} }
+	ids := func(ls []Link) string {
+		out := make([]string, len(ls))
+		for i, l := range ls {
+			out[i] = l.TargetID
+		}
+		return strings.Join(out, ",")
+	}
+	cases := []struct {
+		name    string
+		links   []Link
+		odds    float64
+		want    string
+		dropped int
+	}{
+		// 0.97 → odds 32.3; 0.96 → 24 (ratio 1.35, tie); 0.95 → 19 (1.70, not
+		// a tie under φ); 0.80 → 4 (8.1).
+		{"off keeps all", []Link{link("a", .97), link("b", .80)}, 0, "a,b", 0},
+		{"phi keeps anchor and near-tie", []Link{link("a", .97), link("b", .96), link("c", .95), link("d", .80)}, phi, "a,b", 2},
+		{"anchor found anywhere, order kept", []Link{link("d", .80), link("b", .96), link("a", .97)}, phi, "b,a", 1},
+		{"one = anchor and exact ties", []Link{link("a", .9), link("b", .9), link("c", .89)}, 1, "a,b", 1},
+		{"relative, not absolute: low anchor keeps its tie", []Link{link("a", .75), link("b", .70)}, phi, "a,b", 0},
+		{"saturated anchor stays finite", []Link{link("a", 1), link("b", .999999999)}, phi, "a,b", 0},
+		{"single link untouched", []Link{link("a", .7)}, phi, "a", 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, dropped := applyTieDistance(c.links, c.odds)
+			if ids(got) != c.want || dropped != c.dropped {
+				t.Fatalf("got %s (dropped %d), want %s (dropped %d)", ids(got), dropped, c.want, c.dropped)
+			}
+		})
+	}
+}
+
+func TestDecideEval_TieDistance_WritesAnchorAndNearTies(t *testing.T) {
+	// Three gated links (all >= 0.7); under φ only the anchor 0.97 and its
+	// near-tie 0.96 are ties, 0.80 is not — the pre-rule path wrote all three.
+	decideSeam(t,
+		decideResp(map[string]float64{"D": 0.80, "E": 0.20}),
+		decideResp(map[string]float64{"D": 0.97, "E": 0.03}),
+		decideResp(map[string]float64{"D": 0.96, "E": 0.04}),
+	)
+	r := decideRouter(DecideModeAll)
+	r.DecideTieOdds = DecideTieOddsDefault
+	links, err := EvaluateRelationships(context.Background(), nil, r, DreamOptions(),
+		srcBlock(uuidA), []BlockInfo{candBlock(uuidB), candBlock(uuidC), candBlock(uuidD)})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got := map[string]bool{}
+	for _, l := range links {
+		got[l.TargetID] = true
+	}
+	if len(links) != 2 || !got[uuidC] || !got[uuidD] {
+		t.Fatalf("want anchor %s + near-tie %s, got %+v", uuidC, uuidD, links)
+	}
+}

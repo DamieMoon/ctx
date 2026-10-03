@@ -256,6 +256,21 @@ type DreamConfig struct {
 	// of the backend. Unknown spellings are fatal at boot / 422 on the
 	// settings write (V21), same doctrine as dream.json_mode.
 	DecideMode string `key:"dream.decide_mode" env:"CTX_DREAM_DECIDE_MODE" default:"off" mut:"hot" tenancy:"global-only"`
+	// DecideTieOdds is the near-tie distance of decide-mode link writing, as
+	// an odds ratio: of the gated links of one block, the most confident one
+	// (the anchor) is written, and every other one whose odds lie within this
+	// factor of the anchor's — beyond it a candidate is not a tie, whatever
+	// its absolute probability (dream.applyTieDistance). The default is the
+	// golden ratio φ: calibration 2026-10-03 (.project/bench-calib-2026-10-03)
+	// put the read probability at 33–41 % hits in 0.70–0.90, so a threshold
+	// cannot separate, but the per-block ranking can (gold link = top-1 in
+	// 50/54); φ took gold precision 0.61 → 0.73 at recall 0.87 → 0.85 and the
+	// live replay from 4.5 to 1.7 links per evaluation, heavy-tailed rather
+	// than pinned at the cap. A relative distance, not a cardinality, so the
+	// hard cap stays the resource bound only. 0 disables the rule; 1 writes the
+	// anchor and exact ties; values between 0 and 1 have no reading (V22).
+	// Only read in decide mode — the generating path is untouched.
+	DecideTieOdds float64 `key:"dream.decide_tie_odds" env:"CTX_DREAM_DECIDE_TIE_ODDS" default:"1.618034" mut:"hot" tenancy:"global-only"`
 	// LinkFloorConfidence is the raw confidence assigned to relationship
 	// links the LLM names WITHOUT a strength signal (string-map drift form,
 	// absent confidence fields — PR #12). The default 0.9 keeps such links

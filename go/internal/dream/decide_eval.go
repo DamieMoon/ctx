@@ -47,6 +47,11 @@ const (
 	DecideModeOff = "off"
 	// DecideModeEval runs link evaluation as decisions, recurrence unchanged.
 	DecideModeEval = "eval"
+	// DecideTieOddsDefault mirrors the registry default of
+	// dream.decide_tie_odds (φ, config.go; pinned equal by a config test) for
+	// callers without config wiring that must score what production writes —
+	// the goldbench decide axis.
+	DecideTieOddsDefault = 1.618034
 	// DecideModeAll runs link evaluation AND the recurrence confirm as
 	// decisions.
 	DecideModeAll = "all"
@@ -276,7 +281,7 @@ func evaluateRelationshipsDecide(ctx context.Context, pool *pgxpool.Pool, r *Rou
 			links = append(links, link)
 		}
 	}
-	return finishDecideLinks(source, candidates, links), nil
+	return finishDecideLinks(source, candidates, links, r.DecideTieOdds), nil
 }
 
 // decideOnePair is ONE decide wire call with its own llmlog row.
@@ -342,7 +347,11 @@ func decideOnePair(ctx context.Context, pool *pgxpool.Pool, r *Router, source, c
 // has one row per pair and these counts are per block, so they go to a
 // structured log line instead (one per block with at least one decided link)
 // — grep "dream: decide links finished" for the gate effects.
-func finishDecideLinks(source BlockInfo, candidates []BlockInfo, links []Link) []Link {
+//
+// tieOdds is config dream.decide_tie_odds: after the gate, only the anchor
+// and its near-ties survive (applyTieDistance); links_untied counts the rest.
+// The hard cap stays behind it as the resource bound.
+func finishDecideLinks(source BlockInfo, candidates []BlockInfo, links []Link, tieOdds float64) []Link {
 	candidateIDs := make(map[string]bool, len(candidates))
 	for _, c := range candidates {
 		candidateIDs[c.ID] = true
@@ -350,12 +359,14 @@ func finishDecideLinks(source BlockInfo, candidates []BlockInfo, links []Link) [
 	decided := len(links)
 	links, downgraded := enforceSupersedesDirection(links, source.CreatedAt, candidates)
 	valid := filterValidCandidates(links, candidateIDs)
-	capped, cappedN := applyHardCap(valid, MaxLinksPerCycle)
+	tied, untiedN := applyTieDistance(valid, tieOdds)
+	capped, cappedN := applyHardCap(tied, MaxLinksPerCycle)
 	if decided > 0 {
 		slog.Info("dream: decide links finished",
 			"block_id", source.ID, "candidates", len(candidates), "decided", decided,
 			"supersedes_direction_downgraded", downgraded,
-			"links_dropped_invalid", decided-len(valid), "links_capped", cappedN, "written", len(capped))
+			"links_dropped_invalid", decided-len(valid), "links_untied", untiedN,
+			"links_capped", cappedN, "written", len(capped))
 	}
 	return capped
 }

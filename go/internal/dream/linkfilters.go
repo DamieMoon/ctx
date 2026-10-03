@@ -102,6 +102,49 @@ func filterValidCandidates(links []Link, candidateIDs map[string]bool) []Link {
 	return valid
 }
 
+// applyTieDistance keeps the anchor (the most confident link) and every link
+// whose odds stay within maxOdds of the anchor's odds — the near-ties — and
+// drops the rest. Returns the kept links (input order preserved) and the
+// number dropped.
+//
+// Why a distance and not a fixed threshold: the decide-mode link probability
+// 1 − P(none) is overconfident (calibration 2026-10-03: the 0.70–0.90 bins hit
+// 33–41 %), so no single threshold separates good from weak links, but the
+// ranking does (gold link = top-1 in 50/54 cases). Measured on the odds scale
+// because the probabilities saturate near 1: 0.97 vs 0.93 looks close yet is
+// odds 32 vs 13. Being relative to each block's own anchor, the rule adapts to
+// how sharp that block's evidence is — a candidate within the factor is a tie
+// and is written, one beyond it is not a tie, whatever its absolute value.
+//
+// maxOdds <= 0 disables the rule (input returned untouched — routers without
+// config wiring keep the pre-rule behaviour byte for byte); 1 keeps the anchor
+// and exact ties only.
+func applyTieDistance(links []Link, maxOdds float64) ([]Link, int) {
+	if maxOdds <= 0 || len(links) < 2 {
+		return links, 0
+	}
+	anchor := links[0].Confidence
+	for _, l := range links[1:] {
+		anchor = math.Max(anchor, l.Confidence)
+	}
+	limit := logOdds(anchor) - math.Log(maxOdds)
+	out := make([]Link, 0, len(links))
+	for _, l := range links {
+		// 1e-12 absorbs float noise on exact ties at maxOdds == 1.
+		if logOdds(l.Confidence) >= limit-1e-12 {
+			out = append(out, l)
+		}
+	}
+	return out, len(links) - len(out)
+}
+
+// logOdds is ln(p / (1 − p)), clamped so p = 0 or 1 stays finite.
+func logOdds(p float64) float64 {
+	const eps = 1e-9
+	p = math.Min(math.Max(p, eps), 1-eps)
+	return math.Log(p / (1 - p))
+}
+
 // applyHardCap caps a link slice to max entries with tier-local
 // type-diversity tie-break. Returns the (possibly trimmed) slice and the
 // number of dropped entries. Output is confidence-DESC sorted.

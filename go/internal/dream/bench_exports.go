@@ -94,9 +94,10 @@ func BenchDecideLinkLabels() []string { return append([]string(nil), decideLinkL
 // BenchDecideLinks bildet je Kandidat die Entscheidung auf höchstens einen
 // Link ab (decisionToLink) und fährt danach dieselben Post-Parse-Constraints
 // wie die Produktion (finishDecideLinks: supersedes-Richtung, Kandidatenfilter
-// mit Typ-Gate, Hard-Cap). decisions ist parallel zu candidates; ein
-// Nil-Eintrag (Fallback-Signal) ergibt keinen Link.
-func BenchDecideLinks(source BlockInfo, candidates []BlockInfo, decisions []*llm.Decision) []Link {
+// mit Typ-Gate, Tie-Distanz, Hard-Cap). decisions ist parallel zu candidates;
+// ein Nil-Eintrag (Fallback-Signal) ergibt keinen Link. tieOdds ist
+// dream.decide_tie_odds (≤ 0 = Regel aus).
+func BenchDecideLinks(source BlockInfo, candidates []BlockInfo, decisions []*llm.Decision, tieOdds float64) []Link {
 	links := make([]Link, 0, len(candidates))
 	for i, c := range candidates {
 		if i >= len(decisions) || decisions[i] == nil {
@@ -106,7 +107,7 @@ func BenchDecideLinks(source BlockInfo, candidates []BlockInfo, decisions []*llm
 			links = append(links, l)
 		}
 	}
-	return finishDecideLinks(source, candidates, links)
+	return finishDecideLinks(source, candidates, links, tieOdds)
 }
 
 // BenchDecideLinkArgmax liefert den Relationship-Typ der Entscheidung ohne

@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -979,6 +980,9 @@ func validateDream(c *Config) []Issue {
 	// V21 — dream.decide_mode enum, same shape and doctrine as V20.
 	issues = append(issues, validateDreamDecideMode(c)...)
 
+	// V36 — dream.decide_tie_odds range (own function for the V20 reason).
+	issues = append(issues, validateDreamDecideTieOdds(c)...)
+
 	// V15 — dream.link_floor_confidence range. The value becomes the raw
 	// confidence of every link the LLM names without a strength signal; an
 	// out-of-range float would either die at the write gate (silent no-op
@@ -1111,6 +1115,21 @@ func validateDreamDecideMode(c *Config) []Issue {
 			Msg: fmt.Sprintf("decide mode %q must be %q, %q or %q — empty reads as %q",
 				c.Dream.DecideMode, dream.DecideModeOff, dream.DecideModeEval, dream.DecideModeAll, dream.DecideModeOff)}}
 	}
+}
+
+// validateDreamDecideTieOdds is V36: dream.decide_tie_odds is an odds RATIO
+// between the anchor link and a near-tie, so its readings are 0 (rule off)
+// and anything from 1 up (1 = anchor and exact ties). A value in (0, 1) would
+// put the limit ABOVE the anchor and silently write nothing at all; a
+// negative one, NaN or ±Inf has no reading. Fatal like V19/V21: boot aborts,
+// the settings PUT is a 422.
+func validateDreamDecideTieOdds(c *Config) []Issue {
+	f := c.Dream.DecideTieOdds
+	if f == 0 || (f >= 1 && !math.IsInf(f, 1)) {
+		return nil
+	}
+	return []Issue{{Field: "dream.decide_tie_odds", Severity: SeverityError,
+		Msg: fmt.Sprintf("decide tie odds %v must be 0 (off) or a finite odds ratio >= 1", f)}}
 }
 
 // validateDreamJSONMode is V20 — see below; validateDreamDecideMode above is
