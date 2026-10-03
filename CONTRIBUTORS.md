@@ -96,7 +96,15 @@ else's environment — that led to a fix landing in the repository.
   inflated every dream-eval prompt; the shipped fix keeps his pre-append
   guard, hardened with a pure fold helper whose table test discriminates the
   old and new folds (26–29 vs exactly 25) and with `candidates_capped`
-  llmlog telemetry so a cap that fires is countable.
+  llmlog telemetry so a cap that fires is countable. Also PR
+  [#44](https://github.com/GottZ/ctx/pull/44): a supersedes link re-classified
+  to `topical`/`recurrent` by a later dream cycle left its target frozen as a
+  `snapshot` — 27 of 38 live snapshots had no supersedes link left; the
+  shipped fix keeps his reconcile-after-every-relation-change invariant,
+  hardened with deadlock-free target locking (`FOR NO KEY UPDATE`, one
+  id-ordered pass at transaction end), an exit hysteresis against
+  quality-drift flip-flop, the operator's resolve-delete on the same
+  reconcile, and Migration 154 that heals the existing orphans once.
 - **DojoGenesis** ([@DojoGenesis](https://github.com/DojoGenesis)) —
   [#16](https://github.com/GottZ/ctx/issues/16) / PR
   [#17](https://github.com/GottZ/ctx/pull/17): first boot on a fresh database
