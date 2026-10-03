@@ -62,12 +62,68 @@ func reconcileSupersedesTargets(ctx context.Context, tx pgx.Tx, targetIDs []stri
 	return nil
 }
 
+// supersedesCandidates returns the sources of supersedes links into targetID
+// that can carry the snapshot side-effect — source not archived, source in the
+// target's scope. remaining holds all of them, valid the subset at or above
+// the weighted gate; both in (created_at, source id) order.
+func supersedesCandidates(ctx context.Context, tx pgx.Tx, targetID, scope string) (remaining, valid []string, err error) {
+	rows, err := tx.Query(ctx,
+		`SELECT dl.source_block_id::text,
+		        -- confidence is REAL on disk; cast the threshold to REAL so the
+		        -- persisted gate uses the same representation as ApplySupersedes.
+		        dl.confidence >= $2::real
+		 FROM context_dream_links dl
+		 JOIN context_blocks src ON src.id = dl.source_block_id
+		 WHERE dl.target_block_id = $1::uuid
+		   AND dl.relationship = 'supersedes'
+		   AND NOT src.is_archived
+		   AND src.scope = $3
+		 ORDER BY dl.created_at, dl.source_block_id`,
+		targetID, supersedesSnapshotConfidence, scope,
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("dream: reconcile supersedes candidates: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var sourceID string
+		var isValid bool
+		if err := rows.Scan(&sourceID, &isValid); err != nil {
+			return nil, nil, fmt.Errorf("dream: reconcile supersedes candidate: %w", err)
+		}
+		remaining = append(remaining, sourceID)
+		if isValid {
+			valid = append(valid, sourceID)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("dream: reconcile supersedes candidates: %w", err)
+	}
+	return remaining, valid, nil
+}
+
 // reconcileSupersedesState keeps the target lifecycle side-effect aligned with
-// the current high-confidence supersedes rows for that target. The confidence
-// column stores the weighted confidence used by ApplySupersedes; raw_confidence
-// remains the separate query-side map gate. Callers go through
-// reconcileSupersedesTargets, which holds the row lock already; the lock
-// clause here only re-asserts it.
+// the current supersedes rows for that target. The confidence column stores
+// the weighted confidence used by ApplySupersedes; raw_confidence remains the
+// separate query-side map gate. Callers go through reconcileSupersedesTargets,
+// which holds the row lock already; the lock clause here only re-asserts it.
+//
+// The state machine has an exit hysteresis (PR #44 review F3). The weighted
+// confidence is raw × source quality × target quality, and qualities drift
+// between dream cycles, so the same pair is re-written on both sides of the
+// 0.7 gate; a plain "valid superseder ⇔ snapshot" rule makes the target
+// flip-flop with every drift. Hence:
+//   - enter: a target that is not a dream snapshot (lifecycle 'snapshot' with
+//     superseded_by set) becomes one only when a VALID (≥ 0.7) superseder
+//     exists;
+//   - stay: a dream snapshot keeps state and pointer while its pointer's
+//     source still has ANY supersedes link into it (confidence irrelevant);
+//   - move: when the pointer's source no longer qualifies but others remain,
+//     the pointer moves to the first valid one, else to the first remaining
+//     one — the target stays a snapshot;
+//   - leave: only when no supersedes link from a non-archived source of the
+//     target's scope remains does the target return to knowledge/NULL.
 func reconcileSupersedesState(ctx context.Context, tx pgx.Tx, targetID, preferredSource string) error {
 	var lifecycle, scope string
 	var supersededBy sql.NullString
@@ -84,52 +140,37 @@ func reconcileSupersedesState(ctx context.Context, tx pgx.Tx, targetID, preferre
 		return nil
 	}
 
-	rows, err := tx.Query(ctx,
-		`SELECT dl.source_block_id::text
-		 FROM context_dream_links dl
-		 JOIN context_blocks src ON src.id = dl.source_block_id
-		 WHERE dl.target_block_id = $1::uuid
-		   AND dl.relationship = 'supersedes'
-		   -- confidence is REAL on disk; cast the threshold to REAL so the
-		   -- persisted gate uses the same representation as ApplySupersedes.
-		   AND dl.confidence >= $2::real
-		   AND NOT src.is_archived
-		   AND src.scope = $3
-		 ORDER BY dl.created_at, dl.source_block_id`,
-		targetID, supersedesSnapshotConfidence, scope,
-	)
+	remaining, valid, err := supersedesCandidates(ctx, tx, targetID, scope)
 	if err != nil {
-		return fmt.Errorf("dream: reconcile supersedes candidates: %w", err)
-	}
-	defer rows.Close()
-
-	var valid []string
-	for rows.Next() {
-		var sourceID string
-		if err := rows.Scan(&sourceID); err != nil {
-			return fmt.Errorf("dream: reconcile supersedes candidate: %w", err)
-		}
-		valid = append(valid, sourceID)
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("dream: reconcile supersedes candidates: %w", err)
+		return err
 	}
 
-	if len(valid) == 0 {
-		if lifecycle == "snapshot" && supersededBy.Valid {
+	if lifecycle == "snapshot" && supersededBy.Valid {
+		pointer := supersededBy.String
+		switch {
+		case slices.Contains(remaining, pointer):
+			return nil // stay
+		case len(remaining) == 0: // leave
 			if _, err := tx.Exec(ctx,
 				`UPDATE context_blocks
 				 SET lifecycle_state = 'knowledge', superseded_by = NULL
 				 WHERE id = $1::uuid
 				   AND lifecycle_state = 'snapshot'
-				   AND superseded_by = $2::uuid`, targetID, supersededBy.String,
+				   AND superseded_by = $2::uuid`, targetID, pointer,
 			); err != nil {
 				return fmt.Errorf("dream: reconcile supersedes restore: %w", err)
 			}
+			return nil
+		case len(valid) > 0: // move, a valid superseder first
+			return markSupersededSnapshot(ctx, tx, targetID, valid[0])
+		default: // move to a remaining sub-threshold superseder
+			return markSupersededSnapshot(ctx, tx, targetID, remaining[0])
 		}
-		return nil
 	}
 
+	if len(valid) == 0 {
+		return nil
+	}
 	chosen := valid[0]
 	switch {
 	case lifecycle != "snapshot" && slices.Contains(valid, preferredSource):
@@ -137,22 +178,27 @@ func reconcileSupersedesState(ctx context.Context, tx pgx.Tx, targetID, preferre
 	case supersededBy.Valid && slices.Contains(valid, supersededBy.String):
 		chosen = supersededBy.String
 	}
+	if err := markSupersededSnapshot(ctx, tx, targetID, chosen); err != nil {
+		return err
+	}
+	if lifecycle != "snapshot" {
+		slog.Info("dream: marked target block as snapshot",
+			"target_block_id", targetID,
+			"superseded_by_source", chosen,
+		)
+	}
+	return nil
+}
 
-	if lifecycle != "snapshot" || !supersededBy.Valid || supersededBy.String != chosen {
-		if _, err := tx.Exec(ctx,
-			`UPDATE context_blocks
-			 SET lifecycle_state = 'snapshot', superseded_by = $1::uuid
-			 WHERE id = $2::uuid
-			   AND NOT is_archived`, chosen, targetID,
-		); err != nil {
-			return fmt.Errorf("dream: reconcile supersedes snapshot: %w", err)
-		}
-		if lifecycle != "snapshot" {
-			slog.Info("dream: marked target block as snapshot",
-				"target_block_id", targetID,
-				"superseded_by_source", chosen,
-			)
-		}
+// markSupersededSnapshot sets the snapshot state with the given pointer.
+func markSupersededSnapshot(ctx context.Context, tx pgx.Tx, targetID, sourceID string) error {
+	if _, err := tx.Exec(ctx,
+		`UPDATE context_blocks
+		 SET lifecycle_state = 'snapshot', superseded_by = $1::uuid
+		 WHERE id = $2::uuid
+		   AND NOT is_archived`, sourceID, targetID,
+	); err != nil {
+		return fmt.Errorf("dream: reconcile supersedes snapshot: %w", err)
 	}
 	return nil
 }

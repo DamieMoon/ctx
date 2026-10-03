@@ -20,6 +20,7 @@ const (
 	icSourceID = "019d0000-0000-7000-9000-000000000001"
 	icTargetID = "019d0000-0000-7000-9000-000000000002"
 	icOtherID  = "019d0000-0000-7000-9000-000000000003"
+	icFourthID = "019d0000-0000-7000-9000-000000000004"
 )
 
 // icBuiltinSet is the compiled-in seed policy set (WF T8): all fixture
@@ -532,7 +533,17 @@ func TestCleanupDanglingLinks_ArchivedTargetDoesNotResurrect(t *testing.T) {
 	}
 }
 
-func TestWriteLinks_SupersedesConfidenceDowngrade_RestoresSnapshot(t *testing.T) {
+// TestWriteLinks_SupersedesConfidenceDowngrade_KeepsSnapshot pins the exit
+// hysteresis of the snapshot side-effect (PR #44 review F3). The persisted
+// confidence is WEIGHTED (raw × source quality × target quality), and the
+// qualities drift between dream cycles, so the same pair is re-written around
+// the 0.7 gate: live, 21 pairs straddled it and 315 pairs were written more
+// than once (up to 27×). Entering the snapshot state still needs a valid
+// (≥ 0.7) superseder; leaving it needs the supersedes link itself to go away
+// (re-classified, deleted, source archived or out of scope) — a re-write below
+// 0.7 keeps the snapshot. Without that the target flip-flops between snapshot
+// and knowledge with every quality drift.
+func TestWriteLinks_SupersedesConfidenceDowngrade_KeepsSnapshot(t *testing.T) {
 	pool := testdb.SetupTestDB(t)
 	ctx := context.Background()
 	seedSupersedesFixture(t, pool)
@@ -541,11 +552,93 @@ func TestWriteLinks_SupersedesConfidenceDowngrade_RestoresSnapshot(t *testing.T)
 		[]dream.Link{{TargetID: icTargetID, Relationship: "supersedes", Confidence: 0.95}}); err != nil || written != 1 {
 		t.Fatalf("initial supersedes: written=%d err=%v", written, err)
 	}
+	// Weighted 0.95 × 0.5 = 0.475 — below the gate, the link is still there.
 	if written, err := dream.WriteLinks(ctx, pool, icBuiltinSet, icSourceID, "private", 0.5,
 		[]dream.Link{{TargetID: icTargetID, Relationship: "supersedes", Confidence: 0.95}}); err != nil || written != 1 {
 		t.Fatalf("downgraded supersedes: written=%d err=%v", written, err)
 	}
+	assertSnapshotState(t, pool, icTargetID, icSourceID)
+
+	// The link going away is what restores the target.
+	if written, err := dream.WriteLinks(ctx, pool, icBuiltinSet, icSourceID, "private", 1.0,
+		[]dream.Link{{TargetID: icTargetID, Relationship: "topical", Confidence: 0.95}}); err != nil || written != 1 {
+		t.Fatalf("topical reclassification: written=%d err=%v", written, err)
+	}
 	assertKnowledgeState(t, pool, icTargetID)
+}
+
+// TestWriteLinks_SupersedesBelowThreshold_DoesNotSnapshot: the hysteresis is
+// exit-only — a first supersedes link below the weighted 0.7 gate does not
+// retire its target.
+func TestWriteLinks_SupersedesBelowThreshold_DoesNotSnapshot(t *testing.T) {
+	pool := testdb.SetupTestDB(t)
+	ctx := context.Background()
+	seedSupersedesFixture(t, pool)
+
+	if written, err := dream.WriteLinks(ctx, pool, icBuiltinSet, icSourceID, "private", 0.5,
+		[]dream.Link{{TargetID: icTargetID, Relationship: "supersedes", Confidence: 0.95}}); err != nil || written != 1 {
+		t.Fatalf("sub-threshold supersedes: written=%d err=%v", written, err)
+	}
+	assertKnowledgeState(t, pool, icTargetID)
+}
+
+// writeSupersedes writes one supersedes link source → icTargetID with the
+// given source quality (1.0 → weighted 0.95, valid; 0.5 → 0.475, below the
+// gate) and fails the test on anything but one written link.
+func writeSupersedes(t *testing.T, pool *pgxpool.Pool, sourceID string, sourceQuality float64) {
+	t.Helper()
+	if written, err := dream.WriteLinks(context.Background(), pool, icBuiltinSet, sourceID, "private", sourceQuality,
+		[]dream.Link{{TargetID: icTargetID, Relationship: "supersedes", Confidence: 0.95}}); err != nil || written != 1 {
+		t.Fatalf("supersedes from %s (quality %.2f): written=%d err=%v", sourceID, sourceQuality, written, err)
+	}
+}
+
+// reclassifyTopical re-writes the pair source → icTargetID as topical, which
+// removes the source from the target's supersedes set.
+func reclassifyTopical(t *testing.T, pool *pgxpool.Pool, sourceID string) {
+	t.Helper()
+	if written, err := dream.WriteLinks(context.Background(), pool, icBuiltinSet, sourceID, "private", 1.0,
+		[]dream.Link{{TargetID: icTargetID, Relationship: "topical", Confidence: 0.95}}); err != nil || written != 1 {
+		t.Fatalf("topical reclassification from %s: written=%d err=%v", sourceID, written, err)
+	}
+}
+
+// TestWriteLinks_SupersedesHysteresis_RepointsToRemainingSuperseder: when the
+// pointer's link goes away but a sub-threshold superseder remains, the target
+// stays a snapshot and the pointer moves to it; only the last supersedes link
+// going away restores the target.
+func TestWriteLinks_SupersedesHysteresis_RepointsToRemainingSuperseder(t *testing.T) {
+	pool := testdb.SetupTestDB(t)
+	seedSupersedesFixture(t, pool)
+
+	writeSupersedes(t, pool, icSourceID, 1.0)
+	writeSupersedes(t, pool, icOtherID, 0.5)
+	assertSnapshotState(t, pool, icTargetID, icSourceID)
+
+	reclassifyTopical(t, pool, icSourceID)
+	assertSnapshotState(t, pool, icTargetID, icOtherID)
+
+	reclassifyTopical(t, pool, icOtherID)
+	assertKnowledgeState(t, pool, icTargetID)
+}
+
+// TestWriteLinks_SupersedesHysteresis_RepointPrefersValidSuperseder: among
+// the remaining superseders a valid (≥ 0.7) one wins over an older
+// sub-threshold one; the ordering (created_at, source id) only decides within
+// the same class.
+func TestWriteLinks_SupersedesHysteresis_RepointPrefersValidSuperseder(t *testing.T) {
+	pool := testdb.SetupTestDB(t)
+	seedSupersedesFixture(t, pool)
+	tLate := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	insertBlock(t, pool, icFourthID, "private", "decisions", "state v4", tLate, tLate)
+
+	writeSupersedes(t, pool, icSourceID, 1.0)
+	writeSupersedes(t, pool, icOtherID, 0.5)  // older, below the gate
+	writeSupersedes(t, pool, icFourthID, 1.0) // newer, valid
+	assertSnapshotState(t, pool, icTargetID, icSourceID)
+
+	reclassifyTopical(t, pool, icSourceID)
+	assertSnapshotState(t, pool, icTargetID, icFourthID)
 }
 
 // readSnapshotState fetches lifecycle_state and superseded_by for the given block,

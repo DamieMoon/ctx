@@ -339,7 +339,7 @@ func TestWriteLinks_SupersedesRevert_WritesKnowledge_NotNull(t *testing.T) {
 			AddRow("snapshot", sourceID, false, "private"))
 	mock.ExpectQuery(`SELECT dl.source_block_id::text`).
 		WithArgs(otherID, 0.7, "private").
-		WillReturnRows(mock.NewRows([]string{"source_block_id"}))
+		WillReturnRows(mock.NewRows([]string{"source_block_id", "valid"}))
 	// The contract under test: SET lifecycle_state = 'knowledge' — a revert
 	// that still wrote NULL would not match this expectation and fail.
 	mock.ExpectExec(`SET lifecycle_state = 'knowledge', superseded_by = NULL`).
