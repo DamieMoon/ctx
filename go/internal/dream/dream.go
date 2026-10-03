@@ -17,6 +17,7 @@ import (
 	"github.com/GottZ/ctx/internal/llm"
 	"github.com/GottZ/ctx/internal/pgxdb"
 	"github.com/GottZ/ctx/internal/rrf"
+	"github.com/GottZ/ctx/internal/store"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -1277,8 +1278,9 @@ func CleanupDanglingLinks(ctx context.Context, pool *pgxpool.Pool) (int, error) 
 		rows.Close()
 		// One ordered lock pass over the deleted supersedes targets — the
 		// same discipline as WriteLinks, so a cleanup cannot deadlock with a
-		// concurrent dream batch (reconcileSupersedesTargets).
-		return reconcileSupersedesTargets(ctx, tx, supersedesTargets, "")
+		// concurrent dream batch (store.ReconcileSupersedesTargets).
+		_, err = store.ReconcileSupersedesTargets(ctx, tx, supersedesTargets, "")
+		return err
 	})
 	if err != nil {
 		return 0, err

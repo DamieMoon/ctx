@@ -28,7 +28,9 @@ type DreamLinkResolution struct {
 	Pinned       bool    `json:"pinned"`
 	Rationale    *string `json:"rationale,omitempty"`
 	// SupersedesReverted is true when a delete-resolve of a supersedes link
-	// undid the target's snapshot marking (the ApplySupersedes side-effect).
+	// returned its target from snapshot to knowledge — i.e. no superseder of
+	// the target remained (ReconcileSupersedesTargets). A target another
+	// block still supersedes stays a snapshot and reports false.
 	SupersedesReverted bool `json:"supersedes_reverted"`
 }
 
@@ -39,10 +41,13 @@ type DreamLinkResolution struct {
 //   - confirm: pinned=true (+ rationale when provided) — the link survives the
 //     dream replace sweep (dream/writelinks.go deleteStaleLinks WHERE NOT
 //     pinned, M119).
-//   - delete: the link is removed; for relationship=supersedes the
-//     ApplySupersedes side-effect is reverted (lifecycle_state 'snapshot' →
-//     'knowledge', superseded_by=NULL — only while it still points at THIS
-//     source), mirroring replaceStaleLinks' revert byte-for-byte.
+//   - delete: the link is removed; for relationship=supersedes the target's
+//     ApplySupersedes side-effect is reconciled against the REMAINING
+//     supersedes links by ReconcileSupersedesTargets — the same reconcile
+//     dream.WriteLinks runs after its stale-link sweep: the target returns to
+//     'knowledge' (superseded_by=NULL) only when no superseder is left; if
+//     the pointer named THIS source and another superseder remains, the
+//     pointer moves to it.
 //
 // Write gate: the SOURCE block's scope must be in writeScopes (visibility
 // doctrine — curation requires write access to the block whose dream cycle
@@ -127,23 +132,17 @@ func DreamLinkResolve(ctx context.Context, pool *pgxpool.Pool, sourceID, targetI
 				return fmt.Errorf("store: dream link resolve: delete: %w", err)
 			}
 			if storedRel == "supersedes" {
-				// Mirror of replaceStaleLinks' revert (dream/writelinks.go):
 				// Welle-46 convention "A supersedes B" → the TARGET was marked
-				// snapshot with superseded_by=source; undo only while that
-				// marking still points at THIS source (a supersedes by another
-				// block must not be reverted).
-				tag, err := tx.Exec(ctx,
-					`UPDATE context_blocks
-					 SET lifecycle_state = 'knowledge', superseded_by = NULL
-					 WHERE id = $1::uuid
-					   AND lifecycle_state = 'snapshot'
-					   AND superseded_by = $2::uuid`,
-					targetID, sourceID,
-				)
+				// snapshot. Whether it stays one depends on the supersedes
+				// links that REMAIN, not on this one alone (PR #44 review F2):
+				// a second superseder keeps the snapshot. Link row first (the
+				// FOR UPDATE above), target row in the reconcile — the lock
+				// order every supersedes path keeps.
+				restored, err := ReconcileSupersedesTargets(ctx, tx, []string{targetID}, "")
 				if err != nil {
-					return fmt.Errorf("store: dream link resolve: supersedes revert: %w", err)
+					return fmt.Errorf("store: dream link resolve: supersedes reconcile: %w", err)
 				}
-				res.SupersedesReverted = tag.RowsAffected() > 0
+				res.SupersedesReverted = len(restored) > 0
 			}
 		}
 		return nil

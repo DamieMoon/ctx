@@ -4,8 +4,11 @@
 //   - confirm pins the link (pinned=true) and stores the rationale; confirm
 //     without rationale keeps an earlier justification
 //   - delete removes the link; for relationship=supersedes the target's
-//     snapshot marking is reverted (lifecycle_state → 'knowledge',
-//     superseded_by → NULL) — only while it still points at THIS source
+//     snapshot state is reconciled against the REMAINING supersedes links
+//     (the same reconcile WriteLinks runs, PR #44): another superseder keeps
+//     the target a snapshot (pointer moves to it if it pointed at THIS
+//     source); no superseder left reverts it (lifecycle_state → 'knowledge',
+//     superseded_by → NULL)
 //   - foreign-scope, absent, malformed ids and a relationship mismatch all
 //     collapse into (nil, nil) — uniform not found, no existence oracle
 //   - empty write-scope set fails closed with ErrNoScopes (T07 line)
@@ -141,7 +144,10 @@ func TestDreamLinkResolve_Integration(t *testing.T) {
 		tgt := seedDreamBlock(t, pool, "resolve-del-keep-tgt", "private")
 		other := seedDreamBlock(t, pool, "resolve-del-keep-other", "private")
 		seedDreamLink(t, pool, src, tgt, "supersedes", "private")
-		// Snapshot marking points at ANOTHER source — must NOT be reverted.
+		// Snapshot marking points at ANOTHER source that still supersedes the
+		// target — must NOT be reverted. (A marking without any supersedes
+		// link behind it is an orphan; see the orphan subtest below.)
+		seedDreamLink(t, pool, other, tgt, "supersedes", "private")
 		if _, err := pool.Exec(ctx,
 			`UPDATE context_blocks SET lifecycle_state = 'snapshot', superseded_by = $1::uuid WHERE id = $2::uuid`,
 			other, tgt); err != nil {
@@ -162,6 +168,74 @@ func TestDreamLinkResolve_Integration(t *testing.T) {
 		}
 		if lifecycle != "snapshot" {
 			t.Errorf("foreign snapshot marking was reverted: lifecycle=%q", lifecycle)
+		}
+	})
+
+	// PR #44 review F2: the delete revert used to look at the pointer only
+	// (superseded_by = THIS source), so with two valid superseders deleting
+	// the pointer's link turned the target into knowledge although the other
+	// superseder still stands.
+	t.Run("delete of the pointer's supersedes link moves the snapshot to the remaining superseder", func(t *testing.T) {
+		src := seedDreamBlock(t, pool, "resolve-del-move-src", "private")
+		tgt := seedDreamBlock(t, pool, "resolve-del-move-tgt", "private")
+		other := seedDreamBlock(t, pool, "resolve-del-move-other", "private")
+		seedDreamLink(t, pool, src, tgt, "supersedes", "private")
+		seedDreamLink(t, pool, other, tgt, "supersedes", "private")
+		if _, err := pool.Exec(ctx,
+			`UPDATE context_blocks SET lifecycle_state = 'snapshot', superseded_by = $1::uuid WHERE id = $2::uuid`,
+			src, tgt); err != nil {
+			t.Fatalf("mark snapshot: %v", err)
+		}
+
+		res, err := store.DreamLinkResolve(ctx, pool, src, tgt, "supersedes", "delete", "", writeScopes)
+		if err != nil {
+			t.Fatalf("delete: %v", err)
+		}
+		if res == nil || res.SupersedesReverted {
+			t.Fatalf("delete result = %+v, want supersedes_reverted=false (other superseder remains)", res)
+		}
+		var lifecycle string
+		var supersededBy *string
+		if err := pool.QueryRow(ctx,
+			`SELECT lifecycle_state, superseded_by::text FROM context_blocks WHERE id = $1::uuid`, tgt,
+		).Scan(&lifecycle, &supersededBy); err != nil {
+			t.Fatalf("read target: %v", err)
+		}
+		if lifecycle != "snapshot" || supersededBy == nil || *supersededBy != other {
+			t.Errorf("target after delete: lifecycle=%q superseded_by=%v, want snapshot/%s", lifecycle, supersededBy, other)
+		}
+	})
+
+	t.Run("delete heals an orphan snapshot marking", func(t *testing.T) {
+		src := seedDreamBlock(t, pool, "resolve-del-orphan-src", "private")
+		tgt := seedDreamBlock(t, pool, "resolve-del-orphan-tgt", "private")
+		other := seedDreamBlock(t, pool, "resolve-del-orphan-other", "private")
+		seedDreamLink(t, pool, src, tgt, "supersedes", "private")
+		// Marking points at a block with NO supersedes link into the target
+		// (the live orphan shape migration 154 repairs): once the deleted
+		// link was the last one, the target returns to knowledge.
+		if _, err := pool.Exec(ctx,
+			`UPDATE context_blocks SET lifecycle_state = 'snapshot', superseded_by = $1::uuid WHERE id = $2::uuid`,
+			other, tgt); err != nil {
+			t.Fatalf("mark snapshot: %v", err)
+		}
+
+		res, err := store.DreamLinkResolve(ctx, pool, src, tgt, "supersedes", "delete", "", writeScopes)
+		if err != nil {
+			t.Fatalf("delete: %v", err)
+		}
+		if res == nil || !res.SupersedesReverted {
+			t.Fatalf("delete result = %+v, want supersedes_reverted=true (no superseder left)", res)
+		}
+		var lifecycle string
+		var supersededBy *string
+		if err := pool.QueryRow(ctx,
+			`SELECT lifecycle_state, superseded_by::text FROM context_blocks WHERE id = $1::uuid`, tgt,
+		).Scan(&lifecycle, &supersededBy); err != nil {
+			t.Fatalf("read target: %v", err)
+		}
+		if lifecycle != "knowledge" || supersededBy != nil {
+			t.Errorf("target after delete: lifecycle=%q superseded_by=%v, want knowledge/nil", lifecycle, supersededBy)
 		}
 	})
 

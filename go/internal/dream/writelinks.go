@@ -11,6 +11,7 @@ import (
 
 	"github.com/GottZ/ctx/internal/blocktype"
 	"github.com/GottZ/ctx/internal/pgxdb"
+	"github.com/GottZ/ctx/internal/store"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -73,7 +74,7 @@ func deleteStaleLinks(ctx context.Context, tx pgx.Tx, sourceID string, keptTarge
 // are not in keptTargets and returns the targets of the deleted supersedes
 // links (pinned links survive the sweep, see deleteStaleLinks). The caller
 // reconciles those targets together with the rest of the transaction's
-// supersedes targets (reconcileSupersedesTargets) — not here, one by one, so
+// supersedes targets (store.ReconcileSupersedesTargets) — not here, one by one, so
 // the target locks are taken once, in id order, at the end of the transaction.
 //
 // Welle 46 Convention-Switch (2026-05-22): under the English convention
@@ -132,7 +133,7 @@ var errUnregisteredSourceType = errors.New("dream: source type not registered")
 // once at the END of the transaction over every target whose supersedes state
 // the batch may have changed — written supersedes links, links re-classified
 // away from supersedes, and deleted stale supersedes links — locked in id
-// order (reconcileSupersedesTargets). Nothing in the per-link loop locks a
+// order (store.ReconcileSupersedesTargets). Nothing in the per-link loop locks a
 // target row beyond the foreign-key FOR KEY SHARE of the INSERT.
 //
 // Cyclomatic complexity vs lint cap: the V5/V6/V8/V9/V10 structural checks
@@ -321,7 +322,8 @@ func WriteLinks(ctx context.Context, pool interface {
 			supersedesTargets = append(supersedesTargets, staleTargets...)
 		}
 
-		return reconcileSupersedesTargets(ctx, tx, supersedesTargets, sourceID)
+		_, err := store.ReconcileSupersedesTargets(ctx, tx, supersedesTargets, sourceID)
+		return err
 	})
 	if errors.Is(err, errUnregisteredSourceType) {
 		return 0, nil

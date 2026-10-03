@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/GottZ/ctx/internal/llm"
+	"github.com/GottZ/ctx/internal/store"
 )
 
 // ChatJSONFunc is the test-only signature alias for the package-level chatJSON
@@ -36,5 +37,6 @@ func ReplaceStaleLinksForTest(ctx context.Context, tx pgx.Tx, sourceID string, k
 	if err != nil {
 		return err
 	}
-	return reconcileSupersedesTargets(ctx, tx, targets, sourceID)
+	_, err = store.ReconcileSupersedesTargets(ctx, tx, targets, sourceID)
+	return err
 }
