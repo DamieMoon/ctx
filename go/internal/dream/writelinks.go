@@ -70,29 +70,30 @@ func deleteStaleLinks(ctx context.Context, tx pgx.Tx, sourceID string, keptTarge
 }
 
 // replaceStaleLinks deletes unpinned context_dream_links for sourceID that
-// are not in keptTargets and reconciles ApplySupersedes-side-effects for any
-// deleted supersedes-links (pinned links survive the sweep, see
-// deleteStaleLinks).
+// are not in keptTargets and returns the targets of the deleted supersedes
+// links (pinned links survive the sweep, see deleteStaleLinks). The caller
+// reconciles those targets together with the rest of the transaction's
+// supersedes targets (reconcileSupersedesTargets) — not here, one by one, so
+// the target locks are taken once, in id order, at the end of the transaction.
 //
 // Welle 46 Convention-Switch (2026-05-22): under the English convention
 // "A supersedes B" → A=source=newer, B=target=outdated. ApplySupersedes
 // therefore marks the TARGET as snapshot with superseded_by=source. The
-// revert here mirrors that: the deleted target's snapshot status (set when
-// the supersedes-link was first written) is undone when the link goes away.
-func replaceStaleLinks(ctx context.Context, tx pgx.Tx, sourceID string, keptTargets []string) error {
+// reconcile mirrors that: the deleted target's snapshot status (set when
+// the supersedes-link was first written) is undone when no valid superseder
+// remains.
+func replaceStaleLinks(ctx context.Context, tx pgx.Tx, sourceID string, keptTargets []string) ([]string, error) {
 	deleted, err := deleteStaleLinks(ctx, tx, sourceID, keptTargets)
 	if err != nil {
-		return fmt.Errorf("dream: delete stale links: %w", err)
+		return nil, fmt.Errorf("dream: delete stale links: %w", err)
 	}
+	var supersedesTargets []string
 	for _, d := range deleted {
-		if d.Relationship != "supersedes" {
-			continue
-		}
-		if err := reconcileSupersedesState(ctx, tx, d.TargetID); err != nil {
-			return fmt.Errorf("dream: reconcile stale supersedes target: %w", err)
+		if d.Relationship == "supersedes" {
+			supersedesTargets = append(supersedesTargets, d.TargetID)
 		}
 	}
-	return nil
+	return supersedesTargets, nil
 }
 
 // errUnregisteredSourceType leaves the link transaction WITHOUT committing
@@ -126,6 +127,13 @@ var errUnregisteredSourceType = errors.New("dream: source type not registered")
 // 0-written cycles do NOT trigger replace — that path is reserved for
 // transient LLM failures (Pessimist M1: stochastic empty responses must
 // not be destructive).
+//
+// The supersedes side-effect (snapshot marking, restore, pointer moves) runs
+// once at the END of the transaction over every target whose supersedes state
+// the batch may have changed — written supersedes links, links re-classified
+// away from supersedes, and deleted stale supersedes links — locked in id
+// order (reconcileSupersedesTargets). Nothing in the per-link loop locks a
+// target row beyond the foreign-key FOR KEY SHARE of the INSERT.
 //
 // Cyclomatic complexity vs lint cap: the V5/V6/V8/V9/V10 structural checks
 // plus the T8 type-policy gates (target-linkable, link-class) form a linear
@@ -185,6 +193,7 @@ func WriteLinks(ctx context.Context, pool interface {
 		}
 
 		keptTargets := make([]string, 0, len(links))
+		var supersedesTargets []string
 		for _, link := range links {
 			// Fetch target block scope + archived status + metadata for structural checks.
 			// updated_at is no longer consulted (Welle 46: supersedes/causal use
@@ -289,32 +298,15 @@ func WriteLinks(ctx context.Context, pool interface {
 			written++
 			keptTargets = append(keptTargets, link.TargetID)
 
-			// ApplySupersedes: mark target block as snapshot — source supersedes target.
-			// Welle 46 Convention-Switch (2026-05-22): "A supersedes B" → A=source=newer
-			// authoritative, B=target=outdated. The TARGET is the block to retire as
-			// snapshot, with superseded_by pointing to the source (the replacement).
-			// Only apply at high confidence to prevent false-positive snapshot marking.
-			if link.Relationship == "supersedes" && weightedConfidence >= supersedesSnapshotConfidence {
-				_, err = tx.Exec(ctx,
-					`UPDATE context_blocks SET lifecycle_state = 'snapshot', superseded_by = $1::uuid
-					WHERE id = $2::uuid AND lifecycle_state != 'snapshot'`,
-					sourceID, link.TargetID,
-				)
-				if err != nil {
-					slog.Warn("dream: apply supersedes failed", "source", sourceID, "target", link.TargetID, "error", err)
-					break
-				}
-				slog.Info("dream: marked target block as snapshot",
-					"target_block_id", link.TargetID,
-					"superseded_by_source", sourceID,
-				)
-			}
-			needsSupersedesReconcile := link.Relationship == "supersedes" ||
-				(previousRelationship != nil && *previousRelationship == "supersedes")
-			if needsSupersedesReconcile {
-				if err := reconcileSupersedesState(ctx, tx, link.TargetID); err != nil {
-					return err
-				}
+			// ApplySupersedes: "A supersedes B" (Welle 46 Convention-Switch,
+			// 2026-05-22) → A=source=newer authoritative, B=target=outdated: the
+			// TARGET is retired as snapshot with superseded_by pointing to the
+			// source, at high weighted confidence only. A pair re-classified
+			// away from supersedes must have that side-effect reconciled too.
+			// Both are deferred to the end of the transaction (see above).
+			if link.Relationship == "supersedes" ||
+				(previousRelationship != nil && *previousRelationship == "supersedes") {
+				supersedesTargets = append(supersedesTargets, link.TargetID)
 			}
 		}
 
@@ -322,12 +314,14 @@ func WriteLinks(ctx context.Context, pool interface {
 		// 0-written cycles preserve old links (LLM stochastic empty/all-filtered must
 		// not be destructive — see Pessimist M1).
 		if written > 0 {
-			if err := replaceStaleLinks(ctx, tx, sourceID, keptTargets); err != nil {
+			staleTargets, err := replaceStaleLinks(ctx, tx, sourceID, keptTargets)
+			if err != nil {
 				return err
 			}
+			supersedesTargets = append(supersedesTargets, staleTargets...)
 		}
 
-		return nil
+		return reconcileSupersedesTargets(ctx, tx, supersedesTargets, sourceID)
 	})
 	if errors.Is(err, errUnregisteredSourceType) {
 		return 0, nil

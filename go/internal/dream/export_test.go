@@ -29,7 +29,12 @@ func SetChatJSONForTest(fn ChatJSONFunc) ChatJSONFunc {
 // ReplaceStaleLinksForTest exposes the unexported replace sweep so the
 // pinned-survival integration test (M119 curation wave) can drive the REAL
 // production DELETE + supersedes-revert path inside its own transaction —
-// not a re-typed copy of the SQL.
+// not a re-typed copy of the SQL. The revert is the end-of-transaction
+// reconcile over the deleted supersedes targets, exactly as WriteLinks runs it.
 func ReplaceStaleLinksForTest(ctx context.Context, tx pgx.Tx, sourceID string, keptTargets []string) error {
-	return replaceStaleLinks(ctx, tx, sourceID, keptTargets)
+	targets, err := replaceStaleLinks(ctx, tx, sourceID, keptTargets)
+	if err != nil {
+		return err
+	}
+	return reconcileSupersedesTargets(ctx, tx, targets, sourceID)
 }

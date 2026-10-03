@@ -1275,12 +1275,10 @@ func CleanupDanglingLinks(ctx context.Context, pool *pgxpool.Pool) (int, error) 
 			return fmt.Errorf("dream: cleanup dangling links: %w", err)
 		}
 		rows.Close()
-		for _, targetID := range supersedesTargets {
-			if err := reconcileSupersedesState(ctx, tx, targetID); err != nil {
-				return err
-			}
-		}
-		return nil
+		// One ordered lock pass over the deleted supersedes targets — the
+		// same discipline as WriteLinks, so a cleanup cannot deadlock with a
+		// concurrent dream batch (reconcileSupersedesTargets).
+		return reconcileSupersedesTargets(ctx, tx, supersedesTargets, "")
 	})
 	if err != nil {
 		return 0, err

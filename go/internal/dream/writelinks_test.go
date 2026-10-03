@@ -328,6 +328,11 @@ func TestWriteLinks_SupersedesRevert_WritesKnowledge_NotNull(t *testing.T) {
 	mock.ExpectQuery(`DELETE FROM context_dream_links`).
 		WithArgs(anyArgs(2)...).
 		WillReturnRows(staleRows)
+	// End-of-transaction reconcile: one ordered lock pass over the targets
+	// (FOR NO KEY UPDATE), then the per-target state read.
+	mock.ExpectQuery(`(?s)SELECT id::text\s+FROM context_blocks\s+WHERE id = ANY\(\$1::uuid\[\]\)\s+ORDER BY id\s+FOR NO KEY UPDATE`).
+		WithArgs([]string{otherID}).
+		WillReturnRows(mock.NewRows([]string{"id"}).AddRow(otherID))
 	mock.ExpectQuery(`SELECT lifecycle_state, superseded_by::text, is_archived, scope`).
 		WithArgs(otherID).
 		WillReturnRows(mock.NewRows([]string{"lifecycle_state", "superseded_by", "is_archived", "scope"}).
