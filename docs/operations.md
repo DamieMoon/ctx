@@ -692,6 +692,25 @@ There is nowhere to restore such a value to — the settings API answers 404 on 
 
 **Rolling over this upgrade.** The row deletes emit the usual `ctx_settings_write` events, so an old binary still serving alongside reloads its settings and loses these overrides. For the new binary that changes nothing — no code reads the three keys any more. For an old one it does: an instance still distilling from a foreign state file falls back to whatever its environment or its own defaults supply for these three keys, which on an installation that configured them through the API alone is an empty path and therefore no file at all. Take the old container down first anyway, for the reasons the [Migration 133](#migration-133-the-backend-tuple-rows-are-deleted--and-the-upgrade-hop-that-has-to-come-first) section gives.
 
+### Migration 154: snapshot markings without a superseder are repaired once
+
+A dream `supersedes` link "A supersedes B" retires its target B as `lifecycle_state='snapshot'` with `superseded_by=A`. Older binaries reverted that only when the dream replace sweep physically deleted the link, and only while the pointer still named the deleted source — a pair re-classified to topical/recurrent, a superseder that was archived and swept, or a second superseder taking over never reached the target. Such a block stays a snapshot with nothing superseding it: excluded from dream linking and from the guard, and replaced in query results by a block that no longer claims to supersede it. Since the supersedes reconcile (`store.ReconcileSupersedesTargets`) runs on every dream batch, dangling-link sweep and `dream-link-resolve`, new orphans no longer arise; the ones already on disk are only healed when something touches them again. Migration 154 applies the same rules once to every non-archived snapshot with a pointer:
+
+- **move** — the pointer's source no longer supersedes the block (no `supersedes` link, source archived, or source in another scope), another source does: `superseded_by` moves to the first of those with weighted confidence ≥ 0.7, else to the first remaining one; the block stays a snapshot.
+- **restore** — no superseder at all: `lifecycle_state` → `knowledge`, `superseded_by` → `NULL`. As at runtime, the state the block had before it became a snapshot (`canonical`, `synthesis`) is not recorded anywhere and does not come back.
+
+It creates no snapshot (a knowledge block with a valid superseder is marked by the runtime on its next touch), leaves archived blocks alone and does not bump `updated_at`.
+
+**What it tells you.** When it changes something, two boot-log lines (`docker compose logs ctx`) give the restored and moved counts and the recovery query. On a database without such rows it says nothing. A second application changes nothing.
+
+**Recovering a pointer.** Every touched row carries the previous pointer in its metadata:
+
+```bash
+docker exec n8n-db-1 psql -U "$CONTEXT_DB_USER" -d "$CONTEXT_DB" -c \
+  "SELECT id, lifecycle_state, metadata->'supersedes_repair' FROM context_blocks
+    WHERE metadata ? 'supersedes_repair';"
+```
+
 ### `graph_overview.csr_loader`: the rebuild's input substrate
 
 `CTX_GRAPH_OVERVIEW_CSR_LOADER` (default `false`, hot) switches how the rebuild gets its graph into memory. It changes no result — the partition, the modularity and the intra-cluster degrees are byte-identical either way, and that identity is a gate, not a hope.
