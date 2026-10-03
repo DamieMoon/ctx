@@ -79,10 +79,17 @@ func axisLinksDecide() axisDef {
 // Hard-Cap). Sekundär: link_score_argmax (Roh-Argmax ohne Gate, die
 // Bench-Sicht des Vorabreports), link_score_no_tie (dieselbe Abbildung mit
 // abgeschalteter Tie-Regel — der Vorher-Wert für dream.decide_tie_odds),
-// mean_mass, mean P(link) und fallback_rate (Slots ohne lesbare Entscheidung).
+// link_precision/link_recall (+ _no_tie) auf Paar-Ebene, mean_mass, mean
+// P(link) und fallback_rate (Slots ohne lesbare Entscheidung).
+//
+// Warum Precision eigens: link_score nimmt je Fall den besten Treffer und
+// bestraft überzählige Links neben einem Gold-Link nicht — gegen eine Regel,
+// die genau solche Links streicht, ist er strukturell blind (2026-10-04:
+// 0,6316 mit und ohne Tie-Regel, Precision 0,632 → 0,696).
 func scoreLinksDecide(runs []caseRun) (AxisResult, []CaseScore) {
 	labels := dream.BenchDecideLinkLabels()
 	var scores, argmaxScores, noTieScores, masses, plinks []float64
+	var tieHits, noTieHits linkHits
 	parsed, slots, fallbacks := 0, 0, 0
 	confusion := map[string]map[string]int{}
 	bump := func(gold, pred string) {
@@ -139,9 +146,12 @@ func scoreLinksDecide(runs []caseRun) (AxisResult, []CaseScore) {
 		parsed++
 		cs.Parsed = true
 		links := dream.BenchDecideLinks(source, candidates, decisions, dream.DecideTieOddsDefault)
+		noTie := dream.BenchDecideLinks(source, candidates, decisions, 0)
 		cs.Score = scoreLinksCase(gold, links, bump)
 		scores = append(scores, cs.Score)
-		noTieScores = append(noTieScores, scoreLinksCase(gold, dream.BenchDecideLinks(source, candidates, decisions, 0), noBump))
+		noTieScores = append(noTieScores, scoreLinksCase(gold, noTie, noBump))
+		tieHits.add(gold, links)
+		noTieHits.add(gold, noTie)
 		argmaxScores = append(argmaxScores, scoreLinksCase(gold, rawLinks, noBump))
 		perCase = append(perCase, cs)
 	}
@@ -151,11 +161,15 @@ func scoreLinksDecide(runs []caseRun) (AxisResult, []CaseScore) {
 		PrimaryMetric: "link_score",
 		PrimaryScore:  meanOrZero(scores),
 		Secondary: map[string]float64{
-			"link_score_argmax": meanOrZero(argmaxScores),
-			"link_score_no_tie": meanOrZero(noTieScores),
-			"mean_mass":         meanOrZero(masses),
-			"mean_p_link":       meanOrZero(plinks),
-			"fallback_rate":     ratioOrZero(fallbacks, slots),
+			"link_score_argmax":     meanOrZero(argmaxScores),
+			"link_score_no_tie":     meanOrZero(noTieScores),
+			"link_precision":        tieHits.precision(),
+			"link_precision_no_tie": noTieHits.precision(),
+			"link_recall":           tieHits.recall(),
+			"link_recall_no_tie":    noTieHits.recall(),
+			"mean_mass":             meanOrZero(masses),
+			"mean_p_link":           meanOrZero(plinks),
+			"fallback_rate":         ratioOrZero(fallbacks, slots),
 		},
 		Confusion: confusion,
 	}, perCase
@@ -244,3 +258,25 @@ func scoreRecurrenceDecide(runs []caseRun) (AxisResult, []CaseScore) {
 		Confusion: confusion,
 	}, perCase
 }
+
+// linkHits zählt geschriebene Links gegen das Gold auf Paar-Ebene: ein Link
+// ist ein Treffer, wenn sein Ziel ein Gold-Link des Falls ist (Typ egal —
+// die Typ-Treue misst link_score).
+type linkHits struct{ written, hits, gold int }
+
+func (h *linkHits) add(gold linksGold, links []dream.Link) {
+	want := make(map[string]bool, len(gold.Links))
+	for _, g := range gold.Links {
+		want[g.TargetID] = true
+	}
+	h.gold += len(want)
+	h.written += len(links)
+	for _, l := range links {
+		if want[l.TargetID] {
+			h.hits++
+		}
+	}
+}
+
+func (h linkHits) precision() float64 { return ratioOrZero(h.hits, h.written) }
+func (h linkHits) recall() float64    { return ratioOrZero(h.hits, h.gold) }
