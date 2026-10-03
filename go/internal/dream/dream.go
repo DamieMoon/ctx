@@ -440,16 +440,9 @@ func RunDreamCycle(ctx context.Context, pool *pgxpool.Pool, r *Router, opts llm.
 		return 0, err
 	}
 
-	// Step 5: Write links.
-	written, err := WriteLinks(ctx, pool, typeSet, block.ID, block.Scope, block.QualityScore, links)
-	if err != nil {
-		slog.Warn("dream: write links failed", "block_id", block.ID, "error", err)
-	}
-
-	// Step 5b (Welle 38b, v5): detect recurrent pairs via temporal+title overlap and confirm
-	// per-pair via LLM. Runs AFTER main eval so 'recurrent' overwrites a 'topical' that
-	// EvaluateRelationships may have written for the same pair — recurrent is the more
-	// specific classification. Non-fatal on error: dream cycle continues.
+	// Step 5 (Welle 38b, v5): detect recurrent pairs via temporal+title overlap and confirm
+	// per-pair via LLM. Non-fatal on error: the eval links are written alone and the
+	// dream cycle continues.
 	//
 	// Recurrence exception (MW19, design/02 §4.6 dream-recurrence row —
 	// deliberate Tag-1 decision, not a gap): a preempted pair call inside
@@ -462,16 +455,29 @@ func RunDreamCycle(ctx context.Context, pool *pgxpool.Pool, r *Router, opts llm.
 	recurrentLinks, recErr := DetectRecurrence(ctx, pool, r, opts, *block)
 	if recErr != nil {
 		slog.Warn("dream: recurrence detection failed (non-fatal)", "block_id", block.ID, "error", recErr)
+	} else {
+		// Recurrent links go AFTER the eval links: WriteLinks upserts in slice
+		// order within its one transaction, so 'recurrent' overwrites a
+		// 'topical' that EvaluateRelationships produced for the same pair —
+		// recurrent is the more specific classification.
+		links = append(links, recurrentLinks...)
+	}
+
+	// Step 5b: write eval AND recurrent links in ONE WriteLinks call. One call
+	// is load-bearing, not cosmetic: WriteLinks replaces per CALL — once it
+	// writes anything it deletes every unpinned link of the source whose
+	// target is not in that call's batch (replaceStaleLinks, which also
+	// reverts the snapshot of a deleted supersedes target). A second call for
+	// the recurrent links therefore swept away all eval links this very cycle
+	// had just written (live: 394 of 399 sources with a recurrent link had no
+	// other outgoing link). DetectRecurrence reads no context_dream_links, so
+	// detecting before the write costs the detection nothing.
+	written, err := WriteLinks(ctx, pool, typeSet, block.ID, block.Scope, block.QualityScore, links)
+	if err != nil {
+		slog.Warn("dream: write links failed", "block_id", block.ID, "error", err)
 	} else if len(recurrentLinks) > 0 {
-		rWritten, rwErr := WriteLinks(ctx, pool, typeSet, block.ID, block.Scope, block.QualityScore, recurrentLinks)
-		if rwErr != nil {
-			slog.Warn("dream: recurrent write failed (non-fatal)", "block_id", block.ID, "error", rwErr)
-		} else {
-			slog.Info("dream: recurrent links written",
-				"block_id", block.ID, "candidates", len(recurrentLinks), "written", rWritten)
-			written += rWritten
-			links = append(links, recurrentLinks...)
-		}
+		slog.Info("dream: recurrent links written",
+			"block_id", block.ID, "candidates", len(recurrentLinks), "written_total", written)
 	}
 
 	// Step 6: Update quality scores for source and linked blocks.
