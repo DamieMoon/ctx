@@ -122,8 +122,14 @@ func TestPendingWriteEviction(t *testing.T) {
 		if _, err := pool.Exec(ctx, `ANALYZE context_pending_writes`); err != nil {
 			t.Fatalf("analyze: %v", err)
 		}
+		// EXPLAIN ANALYZE, not plain EXPLAIN: since TimescaleDB 2.30.2 the
+		// hypertable plans as Custom Scan (DeferredChunkAppend), which picks
+		// the chunks — and with them the chunk index scans — at run time, so a
+		// plain EXPLAIN no longer prints the index the query actually uses.
+		// The executed plan does (_hyper_N_M_chunk_idx_pending_open), on the
+		// old and the new image alike. Read-only SELECT, safe to execute.
 		rows, err := pool.Query(ctx, `
-			EXPLAIN
+			EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF, SUMMARY OFF)
 			SELECT id FROM context_pending_writes
 			 WHERE api_key_id = $1 AND payload_hash = $2
 			   AND consumed_at IS NULL
