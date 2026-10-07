@@ -362,3 +362,63 @@ func TestDecideEval_TieDistance_WritesAnchorAndNearTies(t *testing.T) {
 		t.Fatalf("want anchor %s + near-tie %s, got %+v", uuidC, uuidD, links)
 	}
 }
+
+func TestEnforceCausalDirection(t *testing.T) {
+	src := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	older := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	newer := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	cands := []BlockInfo{
+		{ID: "ok", CreatedAt: newer, UpdatedAt: newer},    // source predates target: causal stays
+		{ID: "inv", CreatedAt: older, UpdatedAt: older},   // source newer: downgrade
+		{ID: "gap", CreatedAt: older, UpdatedAt: newer},   // CreatedAt wins over UpdatedAt: downgrade
+		{ID: "fallback", UpdatedAt: older},                // no CreatedAt: UpdatedAt approximation
+		{ID: "topic", CreatedAt: older, UpdatedAt: older}, // non-causal untouched
+	}
+	in := []Link{
+		{TargetID: "ok", Relationship: "causal"},
+		{TargetID: "inv", Relationship: "causal"},
+		{TargetID: "gap", Relationship: "causal"},
+		{TargetID: "fallback", Relationship: "causal"},
+		{TargetID: "topic", Relationship: "factual"},
+		{TargetID: "unknown", Relationship: "causal"}, // not a candidate: left for filterValidCandidates
+	}
+	out, n := enforceCausalDirection(in, src, cands)
+	want := []string{"causal", "topical", "topical", "topical", "factual", "causal"}
+	for i, l := range out {
+		if l.Relationship != want[i] {
+			t.Errorf("%s: relationship %q, want %q", l.TargetID, l.Relationship, want[i])
+		}
+	}
+	if n != 3 {
+		t.Fatalf("downgraded = %d, want 3", n)
+	}
+}
+
+func TestDecideEval_WrongDirectionCausalAnchor_KeepsItsTies(t *testing.T) {
+	// The anchor (P(link) 0.99) is causal but the source does NOT predate the
+	// candidate, so acceptCausal in WriteLinks would reject it at write time.
+	// Before the fix it reached WriteLinks as causal, anchored the tie
+	// distance on the way and was then dropped — the block could end with no
+	// eval link at all. Now it is downgraded to topical before the tie
+	// distance, and its near-tie (0.985: odds ratio 1.51 < φ) survives too.
+	decideSeam(t,
+		decideResp(map[string]float64{"B": 0.99, "E": 0.01}),
+		decideResp(map[string]float64{"D": 0.985, "E": 0.015}),
+	)
+	r := decideRouter(DecideModeAll)
+	r.DecideTieOdds = DecideTieOddsDefault
+	src := srcBlock(uuidA)
+	src.CreatedAt = time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC) // newer than both candidates
+	links, err := EvaluateRelationships(context.Background(), nil, r, DreamOptions(),
+		src, []BlockInfo{candBlock(uuidB), candBlock(uuidC)})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got := map[string]string{}
+	for _, l := range links {
+		got[l.TargetID] = l.Relationship
+	}
+	if got[uuidB] != "topical" || got[uuidC] != "topical" || len(links) != 2 {
+		t.Fatalf("want wrong-direction causal anchor downgraded to topical plus its tie, got %+v", links)
+	}
+}

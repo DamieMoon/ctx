@@ -318,6 +318,51 @@ func enforceSupersedesDirection(links []Link, sourceCreated time.Time, candidate
 	return out, downgraded
 }
 
+// enforceCausalDirection is the decide-mode twin of enforceSupersedesDirection
+// for V9: a causal link whose source does not predate its target is
+// downgraded to topical instead of being left for WriteLinks to drop.
+//
+// Why before the tie distance and not only at write time: applyTieDistance
+// anchors on the most confident link of the block. A causal anchor that
+// acceptCausal rejects later has by then dropped every other link as "not a
+// tie" — live 2026-10-04..07, 59 of 899 evaluations (6.6 %) had such an anchor
+// and 40 wrote no eval link at all, which books the block inert. 254 of 645
+// gated causal decisions pointed the wrong way (39 %). The downgrade keeps the
+// edge the model saw and discards only the directional claim, exactly as for
+// supersedes.
+//
+// Candidate CreatedAt is used when set (evaluateRelationshipsDecide loads it
+// exactly), else UpdatedAt as the conservative approximation the supersedes
+// twin uses; acceptCausal in WriteLinks stays the authoritative gate.
+func enforceCausalDirection(links []Link, sourceCreated time.Time, candidates []BlockInfo) ([]Link, int) {
+	if len(links) == 0 {
+		return links, 0
+	}
+	candCreated := make(map[string]time.Time, len(candidates))
+	for _, c := range candidates {
+		ts := c.CreatedAt
+		if ts.IsZero() {
+			ts = c.UpdatedAt
+		}
+		candCreated[c.ID] = ts
+	}
+	downgraded := 0
+	for i, l := range links {
+		if l.Relationship != "causal" {
+			continue
+		}
+		tgtTS, ok := candCreated[l.TargetID]
+		if !ok {
+			continue // not a candidate — filterValidCandidates drops it
+		}
+		if ok, _ := acceptCausal(sourceCreated, tgtTS); !ok {
+			links[i].Relationship = "topical"
+			downgraded++
+		}
+	}
+	return links, downgraded
+}
+
 // V9 check: causal requires source predates target by created_at.
 // Pre-Reset-Audit 2026-04-20: LLM invents wrong-direction causal links
 // (28% causal-reciprocity in Graph-Topology). Live post-V9: 0% reciprocity,

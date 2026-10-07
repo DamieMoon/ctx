@@ -281,7 +281,47 @@ func evaluateRelationshipsDecide(ctx context.Context, pool *pgxpool.Pool, r *Rou
 			links = append(links, link)
 		}
 	}
+	loadCandidateCreatedAt(ctx, pool, candidates)
 	return finishDecideLinks(source, candidates, links, r.DecideTieOdds), nil
+}
+
+// loadCandidateCreatedAt fills candidates[].CreatedAt, which the candidate
+// search does not carry (rrf.SearchResult has UpdatedAt only), so the causal
+// direction check before the tie distance uses the same created_at that
+// acceptCausal in WriteLinks gates on — the UpdatedAt approximation missed 12
+// of 254 wrong-direction causal decisions live. Best-effort: on a nil pool or
+// a query error the candidates keep a zero CreatedAt and the check falls back
+// to UpdatedAt; WriteLinks stays the authoritative gate either way.
+func loadCandidateCreatedAt(ctx context.Context, pool *pgxpool.Pool, candidates []BlockInfo) {
+	if pool == nil || len(candidates) == 0 {
+		return
+	}
+	ids := make([]string, len(candidates))
+	for i, c := range candidates {
+		ids[i] = c.ID
+	}
+	rows, err := pool.Query(ctx,
+		`SELECT id::text, created_at FROM context_blocks WHERE id = ANY($1::uuid[])`, ids)
+	if err != nil {
+		slog.Warn("dream: candidate created_at lookup failed — causal direction falls back to updated_at", "error", err)
+		return
+	}
+	defer rows.Close()
+	created := make(map[string]time.Time, len(candidates))
+	for rows.Next() {
+		var id string
+		var ts time.Time
+		if err := rows.Scan(&id, &ts); err != nil {
+			slog.Warn("dream: candidate created_at scan failed", "error", err)
+			return
+		}
+		created[id] = ts
+	}
+	for i := range candidates {
+		if ts, ok := created[candidates[i].ID]; ok {
+			candidates[i].CreatedAt = ts
+		}
+	}
 }
 
 // decideOnePair is ONE decide wire call with its own llmlog row.
@@ -348,6 +388,10 @@ func decideOnePair(ctx context.Context, pool *pgxpool.Pool, r *Router, source, c
 // structured log line instead (one per block with at least one decided link)
 // — grep "dream: decide links finished" for the gate effects.
 //
+// Direction constraints (supersedes AND causal, both as downgrades to
+// topical) run BEFORE the tie distance: an anchor that a write-time direction
+// gate would reject must not decide which other links count as ties.
+//
 // tieOdds is config dream.decide_tie_odds: after the gate, only the anchor
 // and its near-ties survive (applyTieDistance); links_untied counts the rest.
 // The hard cap stays behind it as the resource bound.
@@ -358,6 +402,7 @@ func finishDecideLinks(source BlockInfo, candidates []BlockInfo, links []Link, t
 	}
 	decided := len(links)
 	links, downgraded := enforceSupersedesDirection(links, source.CreatedAt, candidates)
+	links, causalDowngraded := enforceCausalDirection(links, source.CreatedAt, candidates)
 	valid := filterValidCandidates(links, candidateIDs)
 	tied, untiedN := applyTieDistance(valid, tieOdds)
 	capped, cappedN := applyHardCap(tied, MaxLinksPerCycle)
@@ -365,6 +410,7 @@ func finishDecideLinks(source BlockInfo, candidates []BlockInfo, links []Link, t
 		slog.Info("dream: decide links finished",
 			"block_id", source.ID, "candidates", len(candidates), "decided", decided,
 			"supersedes_direction_downgraded", downgraded,
+			"causal_direction_downgraded", causalDowngraded,
 			"links_dropped_invalid", decided-len(valid), "links_untied", untiedN,
 			"links_capped", cappedN, "written", len(capped))
 	}
