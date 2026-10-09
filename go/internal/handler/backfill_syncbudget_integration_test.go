@@ -1,6 +1,6 @@
 //go:build integration
 
-// Rot-Gate for issue damienmoon/ctx#1: the query-path pre-search backfill
+// Rot-Gate for the tracking issue, force-push.me/damienmoon/ctx/issues/1: the query-path pre-search backfill
 // (backfillPending) had a COUNT cap (embed_backfill.sync_cap) but no TIME
 // budget. One block whose embed could not finish inside the caller's
 // deadline consumed the entire deadline (live: a ~10k-token block against a

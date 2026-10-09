@@ -1714,7 +1714,7 @@ func (h *QueryHandler) backfillPending(ctx context.Context, floor config.ScopeFl
 	count := 0
 	syncCap := cfg.EmbedBackfill.SyncCap
 	// Time budget next to the count cap (embed_backfill.sync_budget, issue
-	// damienmoon/ctx#1): SyncCap bounds how MANY blocks a request embeds
+	// force-push.me/damienmoon/ctx/issues/1): SyncCap bounds how MANY blocks a request embeds
 	// inline, this bounds how LONG. One block that cannot embed inside the
 	// caller's deadline used to consume the whole deadline — the question's
 	// own embed was then never admitted and the query answered 500. Every

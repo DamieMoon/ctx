@@ -1,6 +1,6 @@
 //go:build integration
 
-// Rot-Gate for issue damienmoon/ctx#1, scheduler half: the embed-backfill
+// Rot-Gate for the tracking issue, force-push.me/damienmoon/ctx/issues/1, scheduler half: the embed-backfill
 // arm (backfillOneEmbedding) was called ONLY at the top of runDreamLoop, so
 // with dream.enabled=false — the registry default — no goroutine ever
 // embedded a pending block in the background. Live: a block stayed pending
