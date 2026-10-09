@@ -1596,7 +1596,7 @@ type EmbedBackfillConfig struct {
 	// whole pre-search loop of one request runs inside this wall-clock
 	// budget, and each block's embed call runs under what is left of it.
 	// SyncCap alone could not stop one slow block from eating the caller's
-	// entire deadline (issue damienmoon/ctx#1: a ~10k-token block against a
+	// entire deadline (the tracking issue, force-push.me/damienmoon/ctx/issues/1: a ~10k-token block against a
 	// CPU embed backend at ~23 tok/s needs ~7 min, the CLI client's deadline
 	// is 120 s — the question's own embed was never admitted and the query
 	// answered 500 instead of degrading). A block that overruns the budget
@@ -1610,7 +1610,7 @@ type EmbedBackfillConfig struct {
 	// this key the only background backfill was the call at the top of the
 	// dream loop, so with dream.enabled=false (the default) NOTHING embedded
 	// pending blocks in the background and Pfad A was the only path (issue
-	// damienmoon/ctx#1). The arm runs regardless of Dream; a successful
+	// force-push.me/damienmoon/ctx/issues/1). The arm runs regardless of Dream; a successful
 	// pick loops at once, an empty pick waits this long. 0 = arm off
 	// (polled every 15 s for a hot re-enable, contract.recheck_interval
 	// convention).

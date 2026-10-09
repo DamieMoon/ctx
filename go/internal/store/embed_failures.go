@@ -47,7 +47,7 @@ const (
 	// EmbedFailureCallerTimeout marks a block whose embed did not fit the
 	// query path's sync budget (embed_backfill.sync_budget) or died with
 	// the request context — the backend is not known to be down, it was
-	// slow relative to THIS caller's deadline (issue damienmoon/ctx#1: a
+	// slow relative to THIS caller's deadline (the tracking issue, force-push.me/damienmoon/ctx/issues/1: a
 	// 10k-token block on a CPU backend). The memo therefore says nothing
 	// about the backend and must not park the block on the wire curve: the
 	// query path (EmbedFailureQueryPathExcludedPredicate) never picks a

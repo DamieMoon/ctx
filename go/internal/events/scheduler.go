@@ -782,7 +782,7 @@ func (s *Scheduler) Run(ctx context.Context) {
 	embedMigrateTicker := time.NewTicker(embedMigrateInterval)
 	defer embedMigrateTicker.Stop()
 
-	// The dedicated embed-backfill arm (issue damienmoon/ctx#1): pending
+	// The dedicated embed-backfill arm (tracking issue: force-push.me/damienmoon/ctx/issues/1): pending
 	// embeddings used to be backfilled only at the top of the dream loop, so
 	// with dream.enabled=false (the default) or Dream switched off at runtime
 	// nothing embedded them in the background. The arm runs regardless of
@@ -2057,7 +2057,7 @@ func (t *txTail) done() {
 const backfillArmPoll = 15 * time.Second
 
 // runEmbedBackfillLoop is the dedicated background arm for pending
-// embeddings (issue damienmoon/ctx#1). It is the same work as the call at the
+// embeddings (tracking issue: force-push.me/damienmoon/ctx/issues/1). It is the same work as the call at the
 // top of runDreamLoop — backfillOneEmbedding under the iterated tenant's
 // snapshot and router — on its own cadence: a successful pick loops at once,
 // an empty pick waits embed_backfill.interval, an error waits 10 s. Under
