@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -411,5 +412,224 @@ func TestAnthropicMessagesEdgeCases(t *testing.T) {
 	}
 	if blocks, _ := msgs[0].Content.([]any); len(blocks) != 3 {
 		t.Errorf("folded user turn = %v, want three text blocks", msgs[0].Content)
+	}
+}
+
+// --- review follow-ups (adversarial pass, 2026-10-11) ---.
+
+// TestAnthropicStreamMessageDeltaUsageKeepsCacheCounters: a message_delta
+// that repeats input_tokens but omits the cache fields (older servers,
+// proxies) must not zero the counters message_start reported.
+func TestAnthropicStreamMessageDeltaUsageKeepsCacheCounters(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("data: {\"type\":\"message_start\",\"message\":{\"id\":\"m\",\"usage\":{\"input_tokens\":10,\"cache_read_input_tokens\":400,\"cache_creation_input_tokens\":50}}}\n\n" +
+			"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"input_tokens\":12,\"output_tokens\":4}}\n\n" +
+			"data: {\"type\":\"message_stop\"}\n\n"))
+	}))
+	defer srv.Close()
+	res, err := ChatStreamBackend(context.Background(), anthropicStreamBackend(srv.URL), "m",
+		[]ChatMsg{{Role: "user", Content: "hi"}}, nil, Options{NumPredict: 8}, 5*time.Second, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.CacheReadTokens != 400 || res.CacheCreationTokens != 50 || res.PromptTokens != 12+400+50 || res.CompletionTokens != 4 {
+		t.Errorf("usage = prompt %d cache %d/%d out %d, want 462 / 400/50 / 4", res.PromptTokens, res.CacheReadTokens, res.CacheCreationTokens, res.CompletionTokens)
+	}
+}
+
+// TestAnthropicStreamNamelessToolUseDropped: a tool_use block start without
+// a name (proxy artefact) yields no call and no event; its input deltas
+// fall on no pending call.
+func TestAnthropicStreamNamelessToolUseDropped(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("data: {\"type\":\"message_start\",\"message\":{\"id\":\"m\",\"usage\":{\"input_tokens\":1}}}\n\n" +
+			"data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"\",\"name\":\"\",\"input\":{}}}\n\n" +
+			"data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{}\"}}\n\n" +
+			"data: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_ok\",\"name\":\"get_time\",\"input\":{}}}\n\n" +
+			"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":2}}\n\n" +
+			"data: {\"type\":\"message_stop\"}\n\n"))
+	}))
+	defer srv.Close()
+	var events []StreamEvent
+	res, err := ChatStreamBackend(context.Background(), anthropicStreamBackend(srv.URL), "m",
+		[]ChatMsg{{Role: "user", Content: "hi"}}, nil, Options{NumPredict: 8}, 5*time.Second, collectEvents(&events))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.ToolCalls) != 1 || res.ToolCalls[0].ID != "toolu_ok" {
+		t.Errorf("tool calls = %+v, want only the named one", res.ToolCalls)
+	}
+	names := 0
+	for _, ev := range events {
+		if ev.ToolCallName != "" {
+			names++
+		}
+	}
+	if names != 1 {
+		t.Errorf("tool name events = %d, want 1", names)
+	}
+}
+
+// TestAnthropicMessagesRepairsEmptyToolIDs: a history served earlier by an
+// openai-wire row (llama.cpp streams calls without ids) replays with
+// synthetic, matching ids instead of a 400 on tool_use.id.
+func TestAnthropicMessagesRepairsEmptyToolIDs(t *testing.T) {
+	_, msgs := anthropicMessages([]ChatMsg{
+		{Role: "user", Content: "q"},
+		{Role: "assistant", ToolCalls: []ToolCall{
+			{Function: ToolCallFunction{Name: "a", Arguments: json.RawMessage(`{}`)}},
+			{ID: "real", Function: ToolCallFunction{Name: "b", Arguments: json.RawMessage(`{}`)}},
+			{Function: ToolCallFunction{Name: "c", Arguments: json.RawMessage(`{}`)}},
+		}},
+		{Role: "tool", Content: "ra"},
+		{Role: "tool", Content: "rb", ToolCallID: "real"},
+		{Role: "tool", Content: "rc"},
+	})
+	raw, _ := json.Marshal(msgs)
+	s := string(raw)
+	for _, want := range []string{
+		`"type":"tool_use","id":"ctxcall_1","name":"a"`, `"type":"tool_use","id":"real","name":"b"`, `"type":"tool_use","id":"ctxcall_2","name":"c"`,
+		`"tool_use_id":"ctxcall_1","content":"ra"`, `"tool_use_id":"real","content":"rb"`, `"tool_use_id":"ctxcall_2","content":"rc"`,
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("messages lack %s:\n%s", want, s)
+		}
+	}
+	if strings.Contains(s, `"id":""`) || strings.Contains(s, `"tool_use_id":""`) {
+		t.Errorf("an empty id reached the wire:\n%s", s)
+	}
+}
+
+// TestAnthropicStreamThinkingBlocksReplayFirst: the fixture's thinking block
+// (empty text, signature — the default display) is re-assembled into
+// StreamResult.ProviderBlocks and placed FIRST in the replayed assistant
+// turn, ahead of text and tool_use — the API's ordering rule for the final
+// assistant turn of a tool loop on the Claude 5 models.
+func TestAnthropicStreamThinkingBlocksReplayFirst(t *testing.T) {
+	srv := serveFixture(t, "anthropic_tool_use.sse")
+	defer srv.Close()
+	res, err := ChatStreamBackend(context.Background(), anthropicStreamBackend(srv.URL), "m",
+		[]ChatMsg{{Role: "user", Content: "weather?"}}, nil, Options{NumPredict: 64}, 5*time.Second, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.ProviderBlocks) != 1 {
+		t.Fatalf("ProviderBlocks = %d, want the one thinking block", len(res.ProviderBlocks))
+	}
+	if got := string(res.ProviderBlocks[0]); got != `{"type":"thinking","thinking":"","signature":"sigABC"}` {
+		t.Errorf("thinking block = %s", got)
+	}
+	if res.Content != "Let me check." || len(res.ToolCalls) != 2 {
+		t.Errorf("content/calls disturbed: %q / %d", res.Content, len(res.ToolCalls))
+	}
+
+	_, msgs := anthropicMessages([]ChatMsg{
+		{Role: "user", Content: "weather?"},
+		{Role: "assistant", Content: res.Content, ToolCalls: res.ToolCalls, ProviderBlocks: res.ProviderBlocks},
+		{Role: "tool", Content: "21C", ToolCallID: "toolu_01weather"},
+		{Role: "tool", Content: "12:00", ToolCallID: "toolu_02time"},
+	})
+	blocks, _ := msgs[1].Content.([]any)
+	if len(blocks) != 4 {
+		t.Fatalf("assistant turn = %d blocks, want thinking + text + 2 tool_use", len(blocks))
+	}
+	first, _ := json.Marshal(blocks[0])
+	if !strings.HasPrefix(string(first), `{"type":"thinking"`) {
+		t.Errorf("first block = %s, want the thinking block", first)
+	}
+
+	// The openai wire never sees the field.
+	raw, _ := json.Marshal(ChatMsg{Role: "assistant", Content: "x", ProviderBlocks: res.ProviderBlocks})
+	if strings.Contains(string(raw), "thinking") {
+		t.Errorf("ProviderBlocks leaked into the OpenAI message object: %s", raw)
+	}
+}
+
+// TestAnthropicStreamRedactedThinkingCarried: a redacted_thinking block
+// arrives complete on its start frame and is replayed as-is.
+func TestAnthropicStreamRedactedThinkingCarried(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("data: {\"type\":\"message_start\",\"message\":{\"id\":\"m\",\"usage\":{\"input_tokens\":1}}}\n\n" +
+			"data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"redacted_thinking\",\"data\":\"EmwKAhgB\"}}\n\n" +
+			"data: {\"type\":\"content_block_stop\",\"index\":0}\n\n" +
+			"data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"text_delta\",\"text\":\"ok\"}}\n\n" +
+			"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1}}\n\n" +
+			"data: {\"type\":\"message_stop\"}\n\n"))
+	}))
+	defer srv.Close()
+	res, err := ChatStreamBackend(context.Background(), anthropicStreamBackend(srv.URL), "m",
+		[]ChatMsg{{Role: "user", Content: "hi"}}, nil, Options{NumPredict: 8}, 5*time.Second, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.ProviderBlocks) != 1 || string(res.ProviderBlocks[0]) != `{"type":"redacted_thinking","data":"EmwKAhgB"}` {
+		t.Errorf("ProviderBlocks = %v", res.ProviderBlocks)
+	}
+}
+
+// TestAnthropicMessagesRepairsOrphanToolUse: a tool_use the history never
+// answered (interrupted turn) gets a synthetic is_error tool_result before
+// the next user text, and at the end of the history — otherwise every later
+// turn of the session would 400 on this wire.
+func TestAnthropicMessagesRepairsOrphanToolUse(t *testing.T) {
+	_, msgs := anthropicMessages([]ChatMsg{
+		{Role: "user", Content: "q1"},
+		{Role: "assistant", ToolCalls: []ToolCall{
+			{ID: "A", Function: ToolCallFunction{Name: "a", Arguments: json.RawMessage(`{}`)}},
+			{ID: "B", Function: ToolCallFunction{Name: "b", Arguments: json.RawMessage(`{}`)}},
+		}},
+		{Role: "tool", Content: "ra", ToolCallID: "A"},
+		{Role: "user", Content: "q2"},
+		{Role: "assistant", ToolCalls: []ToolCall{{ID: "C", Function: ToolCallFunction{Name: "c", Arguments: json.RawMessage(`{}`)}}}},
+	})
+	if len(msgs) != 5 {
+		t.Fatalf("turns = %d, want user / assistant / user[ra, B-orphan, q2] / assistant / user[C-orphan]", len(msgs))
+	}
+	raw, _ := json.Marshal(msgs[2].Content)
+	s := string(raw)
+	if !strings.Contains(s, `"tool_use_id":"A","content":"ra"`) ||
+		!strings.Contains(s, `"tool_use_id":"B","content":"`+orphanToolResult+`","is_error":true`) ||
+		!strings.HasSuffix(s, `{"type":"text","text":"q2"}]`) {
+		t.Errorf("third turn = %s", s)
+	}
+	last, _ := json.Marshal(msgs[4].Content)
+	if msgs[4].Role != "user" || !strings.Contains(string(last), `"tool_use_id":"C"`) || !strings.Contains(string(last), `"is_error":true`) {
+		t.Errorf("trailing orphan not repaired: %s %s", msgs[4].Role, last)
+	}
+	// An answered call gets no synthetic result.
+	if strings.Count(s, `"tool_use_id":"A"`) != 1 {
+		t.Errorf("answered call duplicated: %s", s)
+	}
+}
+
+// TestAnthropicStreamTopLevelCacheControl: the multi-turn stream path asks
+// for the automatic breakpoint on the conversation tail.
+func TestAnthropicStreamTopLevelCacheControl(t *testing.T) {
+	srv, body, _ := captureRequestBody(t, "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n\ndata: {\"type\":\"message_stop\"}\n\n")
+	defer srv.Close()
+	if _, err := ChatStreamBackend(context.Background(), anthropicStreamBackend(srv.URL), "m",
+		[]ChatMsg{{Role: "user", Content: "hi"}}, nil, Options{NumPredict: 8}, 5*time.Second, nil); err != nil {
+		t.Fatal(err)
+	}
+	var req map[string]any
+	_ = json.Unmarshal(*body, &req)
+	if cc, _ := req["cache_control"].(map[string]any); cc["type"] != "ephemeral" {
+		t.Errorf("top-level cache_control = %v, want {type: ephemeral}", req["cache_control"])
+	}
+}
+
+// TestStreamErrorClassifiesLikeItsStatus: the anthropic error types inside an
+// HTTP-200 stream map onto the classes the equivalent status codes get.
+func TestStreamErrorClassifiesLikeItsStatus(t *testing.T) {
+	cases := map[string]backends.ErrClass{
+		"overloaded_error": backends.ClassGateway, "rate_limit_error": backends.ClassRateLimit,
+		"authentication_error": backends.ClassAuth, "invalid_request_error": backends.ClassBadRequest,
+		"api_error": backends.ClassServerFault, "502": backends.ClassServerFault, "": backends.ClassServerFault,
+	}
+	for code, want := range cases {
+		err := fmt.Errorf("wrapped: %w", &StreamError{Code: code, Message: "m"})
+		if got := backends.Classify(err, backends.ProviderGeneric); got != want {
+			t.Errorf("Classify(StreamError %q) = %v, want %v", code, got, want)
+		}
 	}
 }

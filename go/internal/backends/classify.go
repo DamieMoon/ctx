@@ -100,6 +100,12 @@ func (c ErrClass) Cooldown(retryAfter time.Duration) time.Duration {
 // Classify maps one attempt error onto the failover catalog. providerClass
 // refines provider-specific permanent failures (OpenRouter "no providers").
 // Context errors must be checked FIRST: a canceled parent wraps everything.
+// providerErrorTyper is implemented by llm.StreamError: the provider's error
+// type of an error event delivered inside an HTTP-200 stream.
+type providerErrorTyper interface {
+	ProviderErrorType() string
+}
+
 func Classify(err error, providerClass string) ErrClass {
 	if err == nil {
 		return ClassOK
@@ -133,6 +139,30 @@ func Classify(err error, providerClass string) ErrClass {
 				return ClassGateway // unknown 5xx: infrastructure said no
 			}
 			return ClassBadRequest // unknown 4xx: request-specific, no cooldown
+		}
+	}
+	// A mid-stream error event (HTTP 200, error object inside the SSE
+	// stream) carries the provider's error TYPE instead of a status code.
+	// The anthropic wire names the same types its HTTP errors do, so they map
+	// onto the classes the equivalent status would get — otherwise a 529
+	// overloaded_error would fail over as HTTP but stop the chain as an
+	// event. Unknown types (OpenRouter's numeric codes) fall through to the
+	// stop-the-chain default below.
+	var pe providerErrorTyper
+	if errors.As(err, &pe) {
+		switch pe.ProviderErrorType() {
+		case "overloaded_error":
+			return ClassGateway
+		case "api_error":
+			return ClassServerFault
+		case "rate_limit_error":
+			return ClassRateLimit
+		case "billing_error":
+			return ClassBilling
+		case "authentication_error", "permission_error":
+			return ClassAuth
+		case "invalid_request_error", "not_found_error", "request_too_large":
+			return ClassBadRequest
 		}
 	}
 	if httpx.IsBackendUnavailable(err) {

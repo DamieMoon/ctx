@@ -231,7 +231,10 @@ func (e *Engine) RunTurn(ctx context.Context, ar *auth.AuthResult, sess *store.C
 		}); perr != nil {
 			return fmt.Errorf("chat: persist assistant tool_calls: %w", perr)
 		}
-		msgs = append(msgs, llm.ChatMsg{Role: "assistant", Content: res.Content, ToolCalls: res.ToolCalls})
+		// ProviderBlocks ride along in memory for the next iteration of THIS
+		// turn (the anthropic wire needs its thinking block back ahead of the
+		// tool_use it introduced); they are not persisted.
+		msgs = append(msgs, llm.ChatMsg{Role: "assistant", Content: res.Content, ToolCalls: res.ToolCalls, ProviderBlocks: res.ProviderBlocks})
 
 		for _, call := range res.ToolCalls {
 			if serr := sink.Event("tool_call", map[string]any{
