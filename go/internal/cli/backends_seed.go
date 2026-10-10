@@ -281,8 +281,22 @@ func seedRowFor(in seedBackend, defaultName string, roles []string, label string
 	}
 	switch backends.Protocol(protocol) {
 	case backends.ProtocolOllama, backends.ProtocolOpenAI:
+	case backends.ProtocolAnthropic:
+		// The Messages API is chat-only (no embeddings endpoint), keyed, and
+		// has no window discovery — the server's validation says the same
+		// (422), but a seed is the first contact of a fresh install and
+		// should fail on the spec, before any secret is sealed.
+		if label == "embed" {
+			return seedRow{}, fmt.Errorf("%s: protocol anthropic serves no embeddings — give the embed leg an ollama or openai backend", label)
+		}
+		if in.APIKey == "" && in.APIKeyRef == "" {
+			return seedRow{}, fmt.Errorf("%s: protocol anthropic requires api_key or api_key_ref", label)
+		}
+		if in.NumCtx <= 0 {
+			return seedRow{}, fmt.Errorf("%s: protocol anthropic requires num_ctx (the model's context window, e.g. 100000) — there is no window discovery on this wire", label)
+		}
 	default:
-		return seedRow{}, fmt.Errorf("%s: protocol %q is not one of ollama, openai", label, protocol)
+		return seedRow{}, fmt.Errorf("%s: protocol %q is not one of ollama, openai, anthropic", label, protocol)
 	}
 	trust := strings.TrimSpace(in.Trust)
 	if trust == "" {

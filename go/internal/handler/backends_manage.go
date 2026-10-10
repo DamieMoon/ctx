@@ -799,10 +799,17 @@ func dataCollectionEscapeOn(b *backends.Backend) bool {
 
 func probeBackendURL(ctx context.Context, b *backends.Backend, checks map[string]string) bool {
 	url := b.Host
-	switch b.ProviderClass {
-	case backends.ProviderLlamaCpp:
+	anthropic := b.Protocol == backends.ProtocolAnthropic
+	switch {
+	case anthropic:
+		// The Messages API root answers nothing useful; /v1/models is the
+		// cheapest keyed GET (same root convention: base_url + "/v1/...").
+		// A bad key is a 401 here, which the generic branch below reports as
+		// checks.auth — the chat probe then never runs a priced call.
+		url += "/v1/models"
+	case b.ProviderClass == backends.ProviderLlamaCpp:
 		url += "/health"
-	case backends.ProviderOpenRouter:
+	case b.ProviderClass == backends.ProviderOpenRouter:
 		// /v1/key matches the chat path convention (base_url is the API root
 		// without the version segment, b.Host+"/v1/...").
 		url += "/v1/key"
@@ -814,7 +821,13 @@ func probeBackendURL(ctx context.Context, b *backends.Backend, checks map[string
 		checks["base_url"] = "error: invalid URL"
 		return false
 	}
-	if b.APIKey != "" {
+	switch {
+	case anthropic:
+		httpReq.Header.Set("anthropic-version", "2023-06-01")
+		if b.APIKey != "" {
+			httpReq.Header.Set("x-api-key", b.APIKey)
+		}
+	case b.APIKey != "":
 		httpReq.Header.Set("Authorization", "Bearer "+b.APIKey)
 	}
 	resp, err := http.DefaultClient.Do(httpReq) //nolint:gosec // G704: admin-gated runtime data; reaching arbitrary URLs is this action's function

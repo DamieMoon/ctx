@@ -733,3 +733,56 @@ func containsHelper(s, substr string) bool {
 	}
 	return false
 }
+
+// TestInitBackendsStepAnthropicAsksEmbedLegSeparately: choosing the anthropic
+// wire turns the single-host wizard into a two-host one — the Messages API
+// serves no embeddings — and collects the window and the key the chat leg
+// needs without the "does the host need a key?" detour (it always does).
+func TestInitBackendsStepAnthropicAsksEmbedLegSeparately(t *testing.T) {
+	m := newInitMock(t, serverAdmin, nil)
+	ask, secretCalls := scriptedAsk([]string{
+		"https://api.anthropic.com", "anthropic", "claude-opus-5-5", "qwen3-embedding",
+		"",                 // context window → default 100000
+		"http://gpu:11434", // embedding host
+		"",                 // embedding protocol → ollama default
+	}, "sk-ant-live")
+
+	var ok bool
+	out := captureStdout(t, func() { ok = runBackendsStep(m.client(), ask) })
+	if !ok {
+		t.Fatalf("anthropic seed must succeed; output:\n%s", out)
+	}
+	if *secretCalls != 1 {
+		t.Errorf("the key prompt must run exactly once (%d calls)", *secretCalls)
+	}
+	if strings.Contains(out, "sk-ant-live") {
+		t.Error("the key was echoed")
+	}
+	byName := map[string]map[string]any{}
+	for _, c := range m.creates {
+		name, _ := c["name"].(string)
+		byName[name] = c
+	}
+	chat, embed := byName[seedChatName], byName[seedEmbedName]
+	if chat == nil || embed == nil {
+		t.Fatalf("wizard did not create both rows: %v", m.creates)
+	}
+	if chat["protocol"] != "anthropic" || chat["base_url"] != "https://api.anthropic.com" {
+		t.Errorf("chat row = %v", chat)
+	}
+	if n, _ := chat["num_ctx"].(float64); int(n) != 100000 {
+		// The mock round-trips the payload through JSON, hence float64.
+		if n2, ok := chat["num_ctx"].(int); !ok || n2 != 100000 {
+			t.Errorf("chat num_ctx = %v, want the 100000 default", chat["num_ctx"])
+		}
+	}
+	if chat["api_key_ref"] != seedChatName+"-key" {
+		t.Errorf("chat api_key_ref = %v", chat["api_key_ref"])
+	}
+	if embed["protocol"] != "ollama" || embed["base_url"] != "http://gpu:11434" {
+		t.Errorf("embed row = %v, want the separately asked ollama host", embed)
+	}
+	if _, has := embed["api_key_ref"]; has {
+		t.Errorf("the Anthropic key must not be attached to the embed row: %v", embed)
+	}
+}

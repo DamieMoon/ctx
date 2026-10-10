@@ -146,6 +146,9 @@ func TestSeedRowsRejectBadSpecs(t *testing.T) {
 		{"chat host missing", seedSpec{Chat: seedBackend{Model: "m"}, Embed: ok}, "chat: host is required"},
 		{"embed model missing", seedSpec{Chat: ok, Embed: seedBackend{Host: "http://x"}}, "embed: model is required"},
 		{"bad protocol", seedSpec{Chat: seedBackend{Host: "http://x", Model: "m", Protocol: "grpc"}, Embed: ok}, "protocol"},
+		{"anthropic on embed", seedSpec{Chat: ok, Embed: seedBackend{Host: "https://api.anthropic.com", Model: "m", Protocol: "anthropic", APIKey: "k", NumCtx: 1}}, "no embeddings"},
+		{"anthropic keyless", seedSpec{Chat: seedBackend{Host: "https://api.anthropic.com", Model: "m", Protocol: "anthropic", NumCtx: 100000}, Embed: ok}, "api_key"},
+		{"anthropic no num_ctx", seedSpec{Chat: seedBackend{Host: "https://api.anthropic.com", Model: "m", Protocol: "anthropic", APIKey: "k"}, Embed: ok}, "num_ctx"},
 		{"bad trust", seedSpec{Chat: seedBackend{Host: "http://x", Model: "m", Trust: "sort-of"}, Embed: ok}, "trust"},
 		{"key and ref", seedSpec{Chat: seedBackend{Host: "http://x", Model: "m", APIKey: "a", APIKeyRef: "b"}, Embed: ok}, "mutually exclusive"},
 		{"negative num_ctx", seedSpec{Chat: seedBackend{Host: "http://x", Model: "m", NumCtx: -1}, Embed: ok}, "num_ctx"},
@@ -333,3 +336,23 @@ func TestSeedRowLeadRoleIsTheLegsReason(t *testing.T) {
 type errorString string
 
 func (e errorString) Error() string { return string(e) }
+
+// TestSeedRowsAnthropicChatLeg: the anthropic protocol seeds a keyed,
+// windowed chat row next to a local embed row — the mixed-protocol pair a
+// hosted-Claude install needs (the Messages API serves no embeddings).
+func TestSeedRowsAnthropicChatLeg(t *testing.T) {
+	rows := mustRows(t, seedSpec{
+		Chat:  seedBackend{Host: "https://api.anthropic.com", Protocol: "anthropic", Model: "claude-opus-5-5", APIKey: "sk-ant", NumCtx: 100000},
+		Embed: seedBackend{Host: "http://gpu:11434", Model: "qwen3-embed"},
+	})
+	chat := rows[seedChatName]
+	if chat.payload["protocol"] != "anthropic" || chat.payload["num_ctx"] != 100000 {
+		t.Errorf("chat payload = %v, want protocol anthropic with num_ctx 100000", chat.payload)
+	}
+	if chat.payload["api_key_ref"] != seedChatName+"-key" || chat.secretValue != "sk-ant" {
+		t.Errorf("chat key must seal into %s-key: payload=%v secret=%q", seedChatName, chat.payload, chat.secretValue)
+	}
+	if rows[seedEmbedName].payload["protocol"] != "ollama" {
+		t.Errorf("embed payload = %v, want the ollama default", rows[seedEmbedName].payload)
+	}
+}
