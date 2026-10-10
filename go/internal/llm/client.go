@@ -1,7 +1,9 @@
 // Package llm provides an HTTP client for LLM inference.
-// Supports two wire protocols via the "protocol" parameter:
+// Supports three wire protocols via the backend's Protocol field:
 //   - "ollama": Ollama-native /api/chat (supports think, num_ctx)
 //   - "openai": OpenAI-compatible /v1/chat/completions (works with any provider)
+//   - "anthropic": native Anthropic Messages API /v1/messages (anthropic.go:
+//     cached system prompt, output_config.effort, no sampling parameters)
 package llm
 
 import (
@@ -104,13 +106,21 @@ type Options struct {
 // provider actually said. length is the output-cap signal the dream pipeline
 // reads to tell a truncated answer from a malformed one.
 type ChatResponse struct {
-	Message           Message
-	EvalCount         int
-	PromptTokens      int
-	FinishReason      string
-	CostUSD           *float64
-	ServedModel       string
-	ProviderRequestID string
+	Message      Message
+	EvalCount    int
+	PromptTokens int
+	// CacheReadTokens / CacheCreationTokens are the prompt-cache counters of
+	// the anthropic wire (usage.cache_read_input_tokens /
+	// cache_creation_input_tokens). They are ALREADY INCLUDED in
+	// PromptTokens — that field is the total prompt on every wire — and
+	// travel separately only so llmlog can record the cache hit rate
+	// (ApplyProviderTelemetry → metadata). Zero on every other wire.
+	CacheReadTokens     int
+	CacheCreationTokens int
+	FinishReason        string
+	CostUSD             *float64
+	ServedModel         string
+	ProviderRequestID   string
 	// TopLogprobs are the provider's top-N alternatives for the FIRST
 	// generated token (token text + natural-log probability), present only
 	// when the request asked for them (Options.TopLogprobs > 0) AND the
@@ -241,10 +251,14 @@ func ChatJSON(ctx context.Context, b backends.Backend, systemPrompt, userPrompt 
 // ExtraBody are wire-relevant (OpenRouter forced zdr/deny, per-backend
 // attribution headers), so the loose-parameter form would silently drop them.
 func chatWithFormat(ctx context.Context, b backends.Backend, systemPrompt, userPrompt string, opts Options, format string, timeout time.Duration) (*ChatResponse, error) {
-	if b.Protocol == backends.ProtocolOpenAI {
+	switch b.Protocol {
+	case backends.ProtocolOpenAI:
 		return chatOpenAI(ctx, b, systemPrompt, userPrompt, opts, format, timeout)
+	case backends.ProtocolAnthropic:
+		return chatAnthropic(ctx, b, systemPrompt, userPrompt, opts, format, timeout)
+	default:
+		return chatOllama(ctx, b, systemPrompt, userPrompt, opts, format, timeout)
 	}
-	return chatOllama(ctx, b, systemPrompt, userPrompt, opts, format, timeout)
 }
 
 func chatOllama(ctx context.Context, b backends.Backend, systemPrompt, userPrompt string, opts Options, format string, timeout time.Duration) (*ChatResponse, error) {

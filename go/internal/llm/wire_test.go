@@ -42,6 +42,10 @@ func newWireRecorder(t *testing.T, content string) *wireRecorder {
 			fmt.Fprintf(w, `{"choices":[{"message":{"role":"assistant","content":%q}}],"usage":{"completion_tokens":1,"prompt_tokens":1}}`, content)
 			return
 		}
+		if r.URL.Path == "/v1/messages" {
+			fmt.Fprintf(w, `{"id":"msg_1","content":[{"type":"text","text":%q}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`, content)
+			return
+		}
 		fmt.Fprintf(w, `{"message":{"role":"assistant","content":%q},"eval_count":1,"prompt_eval_count":1}`, content)
 	}))
 	t.Cleanup(rec.srv.Close)
@@ -70,6 +74,8 @@ var wireCases = []struct {
 }{
 	{"ollama", backends.ProtocolOllama, "/api/chat", `"options"`},
 	{"openai", backends.ProtocolOpenAI, "/v1/chat/completions", `"max_tokens"`},
+	// anthropic: output_config is a Messages-API-only field.
+	{"anthropic", backends.ProtocolAnthropic, "/v1/messages", `"output_config"`},
 }
 
 func assertWire(t *testing.T, rec *wireRecorder, wantPath, bodyMark string) {
@@ -167,6 +173,9 @@ func TestChatJSONWirePath(t *testing.T) {
 	jsonMarks := map[backends.Protocol]string{
 		backends.ProtocolOllama: `"format":"json"`,
 		backends.ProtocolOpenAI: `"response_format"`,
+		// No JSON-mode marker on the anthropic wire (documented no-op —
+		// output_config.format needs a schema); the path is the assertion.
+		backends.ProtocolAnthropic: `"max_tokens"`,
 	}
 	for _, tc := range wireCases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -40,6 +40,12 @@ func TestChatDecodesFinishReason(t *testing.T) {
 			"usage":{"completion_tokens":600,"prompt_tokens":120}}`
 		openAINoReason = `{"choices":[{"message":{"role":"assistant","content":"hi"}}],
 			"usage":{"completion_tokens":600,"prompt_tokens":120}}`
+		// The anthropic wire MAPS its vocabulary (max_tokens → length) so the
+		// cap consumers see it; absence still decodes to "" (anthropic.go).
+		anthropicWithReason = `{"id":"msg_1","content":[{"type":"text","text":"hi"}],
+			"stop_reason":"max_tokens","usage":{"input_tokens":120,"output_tokens":600}}`
+		anthropicNoReason = `{"id":"msg_1","content":[{"type":"text","text":"hi"}],
+			"usage":{"input_tokens":120,"output_tokens":600}}`
 	)
 
 	tests := []struct {
@@ -52,6 +58,8 @@ func TestChatDecodesFinishReason(t *testing.T) {
 		{"ollama-absent", backends.ProtocolOllama, ollamaNoReason, ""},
 		{"openai-length", backends.ProtocolOpenAI, openAIWithReason, "length"},
 		{"openai-absent", backends.ProtocolOpenAI, openAINoReason, ""},
+		{"anthropic-max_tokens", backends.ProtocolAnthropic, anthropicWithReason, "length"},
+		{"anthropic-absent", backends.ProtocolAnthropic, anthropicNoReason, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
