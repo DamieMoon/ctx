@@ -712,4 +712,33 @@ func ApplyProviderTelemetry(entry *llmlog.Entry, resp *ChatResponse) {
 		}
 		entry.Metadata["provider_request_id"] = resp.ProviderRequestID
 	}
+	// Prompt-cache counters (anthropic wire): recorded only when non-zero so
+	// the other wires' rows stay byte-identical. prompt_tokens already holds
+	// the total; these make the hit rate readable per row.
+	applyCacheTelemetry(entry, resp.CacheReadTokens, resp.CacheCreationTokens)
+}
+
+// applyCacheTelemetry writes the prompt-cache counters into the llmlog
+// metadata. Shared by the non-streaming funnel (ApplyProviderTelemetry) and
+// the web-chat stream row (chat/engine.go recordLLM).
+func applyCacheTelemetry(entry *llmlog.Entry, cacheRead, cacheCreate int) {
+	if cacheRead == 0 && cacheCreate == 0 {
+		return
+	}
+	if entry.Metadata == nil {
+		entry.Metadata = map[string]any{}
+	}
+	if cacheRead > 0 {
+		entry.Metadata["cache_read_input_tokens"] = cacheRead
+	}
+	if cacheCreate > 0 {
+		entry.Metadata["cache_creation_input_tokens"] = cacheCreate
+	}
+}
+
+// ApplyCacheTelemetry is the exported form for the stream path (chat/engine),
+// which assembles its llmlog row from a StreamResult rather than a
+// ChatResponse.
+func ApplyCacheTelemetry(entry *llmlog.Entry, cacheRead, cacheCreate int) {
+	applyCacheTelemetry(entry, cacheRead, cacheCreate)
 }
