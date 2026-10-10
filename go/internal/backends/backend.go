@@ -79,10 +79,34 @@ type Protocol string
 
 // Supported wire protocols. Empty is only valid where a field documents
 // inheritance (dream-embed); config validation V4 rejects everything else.
+//
+// ProtocolAnthropic is the native Anthropic Messages API (POST /v1/messages,
+// x-api-key + anthropic-version headers). It is a chat-only wire: the
+// Messages API serves no embeddings and no rerank, so validation keeps the
+// embed/dream-embed/rerank roles off such a row. Unlike the openai wire it
+// carries NO sampling parameters (the Claude 5 models answer 400 to
+// temperature/top_p/top_k), caches the system prompt (cache_control
+// ephemeral) and takes an effort level (output_config.effort) instead of a
+// think toggle — see llm/anthropic.go.
 const (
-	ProtocolOllama Protocol = "ollama"
-	ProtocolOpenAI Protocol = "openai"
+	ProtocolOllama    Protocol = "ollama"
+	ProtocolOpenAI    Protocol = "openai"
+	ProtocolAnthropic Protocol = "anthropic"
 )
+
+// AnthropicEfforts are the accepted output_config.effort values of the
+// anthropic wire (claude-api reference, 2026-10). Validation rejects any
+// other extra_body.effort / model_map params.effort at write time so a typo
+// never reaches the provider as a 400 on every call.
+var AnthropicEfforts = map[string]bool{
+	"low": true, "medium": true, "high": true, "xhigh": true, "max": true,
+}
+
+// AnthropicDefaultEffort is sent when neither the role's model_map params nor
+// the row's extra_body name an effort. It matches the model-side default of
+// Claude Opus 5.5 (medium) and is sent EXPLICITLY so the effective level is
+// visible in every request body rather than implied by the model.
+const AnthropicDefaultEffort = "medium"
 
 // ThinkMode is the reasoning toggle as configured: "true" | "false" | ""
 // (= omit from the request).
