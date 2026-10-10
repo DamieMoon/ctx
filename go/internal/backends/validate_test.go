@@ -434,3 +434,83 @@ func TestScoreDomainResolution(t *testing.T) {
 		t.Errorf("invalid value: ScoreDomain() = %q, want auto fallback", got)
 	}
 }
+
+// anthropicBackend is the minimal row the native Messages API wire accepts:
+// keyed, external, generic, with a declared window and a chat-class role.
+func anthropicBackend() Backend {
+	b := validBackend()
+	b.Protocol = ProtocolAnthropic
+	b.Host = "https://api.anthropic.com"
+	b.APIKeyRef = "anthropic-chat"
+	b.NumCtx = 100000
+	b.Roles = []string{RoleSynthesis, RoleTranslate, RoleDream, RoleDigest, RoleChat}
+	return b
+}
+
+// TestValidateAnthropicHappyPath pins that the documented minimal row passes
+// — every rule test below mutates exactly one field away from it, so a
+// regression in the fixture itself would turn all of them green for the
+// wrong reason.
+func TestValidateAnthropicHappyPath(t *testing.T) {
+	b := anthropicBackend()
+	if _, errs := ValidateBackend(&b); len(errs) != 0 {
+		t.Fatalf("minimal anthropic row rejected: %v", errs)
+	}
+}
+
+// TestValidateAnthropicRules walks the runtime failures the protocol turns
+// into 422s: keyless (401 on first call), non-external locality (egress audit
+// hole), missing num_ctx (synthesis fails closed, no window discovery),
+// non-generic class (ZDR force / llama.cpp probe against the wrong provider),
+// embed and rerank roles (no such endpoints — embed.go would silently take
+// the Ollama path), and a mistyped effort in either carrier.
+func TestValidateAnthropicRules(t *testing.T) {
+	cases := []struct {
+		name  string
+		mut   func(b *Backend)
+		field string
+	}{
+		{"keyless", func(b *Backend) { b.APIKeyRef = "" }, "api_key_ref"},
+		{"lan locality", func(b *Backend) { b.Host = "http://10.0.0.2:8080"; b.Locality = LocalityLAN }, "locality"},
+		{"no num_ctx", func(b *Backend) { b.NumCtx = 0 }, "num_ctx"},
+		{"openrouter class", func(b *Backend) { b.ProviderClass = ProviderOpenRouter }, "provider_class"},
+		{"llamacpp class", func(b *Backend) { b.ProviderClass = ProviderLlamaCpp }, "provider_class"},
+		{"embed role", func(b *Backend) { b.Roles = append(b.Roles, RoleEmbed) }, "roles"},
+		{"dream-embed role", func(b *Backend) { b.Roles = append(b.Roles, RoleDreamEmbed) }, "roles"},
+		{"rerank role", func(b *Backend) { b.Roles = append(b.Roles, RoleRerank) }, "roles"},
+		{"extra_body effort typo", func(b *Backend) { b.ExtraBody = map[string]any{"effort": "mediumm"} }, "extra_body"},
+		{"extra_body effort non-string", func(b *Backend) { b.ExtraBody = map[string]any{"effort": 2} }, "extra_body"},
+		{"model_map effort typo", func(b *Backend) {
+			b.ModelMap = map[string]ModelSpec{"default": {Model: "m", Params: map[string]any{"effort": "ultra"}}}
+		}, "model_map"},
+		{"versioned root", func(b *Backend) { b.Host = "https://api.anthropic.com/v1" }, "base_url"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			b := anthropicBackend()
+			tc.mut(&b)
+			if _, errs := ValidateBackend(&b); !fieldHit(errs, tc.field) {
+				t.Errorf("want a %q error, got %v", tc.field, errs)
+			}
+		})
+	}
+
+	// Valid efforts pass in both carriers.
+	for _, e := range []string{"low", "medium", "high", "xhigh", "max"} {
+		b := anthropicBackend()
+		b.ExtraBody = map[string]any{"effort": e}
+		b.ModelMap = map[string]ModelSpec{"default": {Model: "m", Params: map[string]any{"effort": e}}}
+		if _, errs := ValidateBackend(&b); len(errs) != 0 {
+			t.Errorf("effort %q rejected: %v", e, errs)
+		}
+	}
+
+	// The rules are protocol-bound: an openai row keeps its freedoms (keyless,
+	// no num_ctx, embed roles on a verified external backend are the existing
+	// contracts and must not regress).
+	b := validBackend()
+	b.NumCtx = 0
+	if _, errs := ValidateBackend(&b); fieldHit(errs, "num_ctx") || fieldHit(errs, "api_key_ref") {
+		t.Errorf("anthropic rules leaked onto an openai row: %v", errs)
+	}
+}

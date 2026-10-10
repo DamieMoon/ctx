@@ -118,6 +118,7 @@ func ValidateBackend(b *Backend) (warnings []string, errs []FieldError) {
 	warnings = append(warnings, w...)
 	errs = append(errs, e...)
 	errs = append(errs, validateCarriers(b)...)
+	errs = append(errs, validateAnthropic(b)...)
 	return warnings, errs
 }
 
@@ -148,9 +149,9 @@ func validateIdentity(b *Backend) (errs []FieldError) {
 	errs = append(errs, validateVersionedRoot(b)...)
 
 	switch b.Protocol {
-	case ProtocolOpenAI, ProtocolOllama, "rerank":
+	case ProtocolOpenAI, ProtocolOllama, ProtocolAnthropic, "rerank":
 	default:
-		errs = append(errs, FieldError{"protocol", "must be one of: openai, ollama, rerank"})
+		errs = append(errs, FieldError{"protocol", "must be one of: openai, ollama, anthropic, rerank"})
 	}
 
 	switch b.ProviderClass {
@@ -221,8 +222,61 @@ func validateVersionedRoot(b *Backend) []FieldError {
 	case b.Protocol == ProtocolOpenAI || b.Protocol == "rerank":
 		return []FieldError{{"base_url",
 			"base_url is the API root WITHOUT the version segment (the openai/rerank wire paths append /v1/... themselves) — a /v1 root doubles to /v1/v1/... and 404s chat, embeddings and rerank"}}
+	case b.Protocol == ProtocolAnthropic:
+		// Same doubling on the Messages API: the wire path is
+		// {base_url}/v1/messages, the probe {base_url}/v1/models.
+		return []FieldError{{"base_url",
+			"base_url is the API root WITHOUT the version segment (the anthropic wire appends /v1/messages itself) — use https://api.anthropic.com, not .../v1"}}
 	}
 	return nil
+}
+
+// validateAnthropic covers the row shape the native Messages API wire needs
+// (llm/anthropic.go). Every rule here is a runtime failure turned into a 422:
+// a keyless row 401s on the first call, a non-external locality would drop
+// api.anthropic.com from the egress audit, a missing num_ctx fails synthesis
+// closed (promptguard.ErrUndeclaredWindow — there is no window discovery for
+// this wire), a non-generic provider class would run the OpenRouter ZDR force
+// or the llama.cpp /health probe against a provider that has neither, and an
+// embed/rerank role would fall onto the Ollama /api/embed path (embed.go
+// dispatches "anything but openai" there) with a vector-space corruption
+// risk — the Messages API has no embeddings endpoint at all.
+func validateAnthropic(b *Backend) (errs []FieldError) {
+	if b.Protocol != ProtocolAnthropic {
+		return nil
+	}
+	if strings.TrimSpace(b.APIKeyRef) == "" {
+		errs = append(errs, FieldError{"api_key_ref", "anthropic protocol requires api_key_ref (create the secret first; the key travels as x-api-key)"})
+	}
+	if b.Locality != "" && b.Locality != LocalityExternal {
+		errs = append(errs, FieldError{"locality", "anthropic protocol requires locality 'external' (the Messages API is a hosted provider)"})
+	}
+	if b.NumCtx <= 0 {
+		errs = append(errs, FieldError{"num_ctx", "anthropic protocol requires num_ctx > 0 (no window discovery on this wire; synthesis fails closed without a declared window)"})
+	}
+	if b.ProviderClass != "" && b.ProviderClass != ProviderGeneric {
+		errs = append(errs, FieldError{"provider_class", "anthropic protocol requires provider_class 'generic'"})
+	}
+	for _, r := range b.Roles {
+		if embedRoles[r] || r == RoleRerank {
+			errs = append(errs, FieldError{"roles",
+				fmt.Sprintf("role %q is not served by the anthropic protocol (the Messages API has no embeddings or rerank endpoint)", r)})
+		}
+	}
+	if raw, ok := b.ExtraBody["effort"]; ok {
+		if v, isStr := raw.(string); !isStr || !AnthropicEfforts[v] {
+			errs = append(errs, FieldError{"extra_body", "effort must be one of: low, medium, high, xhigh, max"})
+		}
+	}
+	for role, spec := range b.ModelMap {
+		if raw, ok := spec.Params["effort"]; ok {
+			if v, isStr := raw.(string); !isStr || !AnthropicEfforts[v] {
+				errs = append(errs, FieldError{"model_map",
+					fmt.Sprintf("role %q: params.effort must be one of: low, medium, high, xhigh, max", role)})
+			}
+		}
+	}
+	return errs
 }
 
 // validateRoles covers role/model coverage, the embed+external hard block
