@@ -125,7 +125,15 @@ func newWireServer(t *testing.T, wireHits *int64) *httptest.Server {
 			fmt.Fprintf(w, `{"embeddings":[[%s]],"prompt_eval_count":7}`, vec)
 		case "/v1/embeddings": // embed.go:185 (openai)
 			fmt.Fprintf(w, `{"data":[{"embedding":[%s]}]}`, vec)
-		case "/v1/messages": // anthropic.go (native Messages API, non-stream)
+		case "/v1/messages": // anthropic.go (non-stream) OR anthropic_stream.go
+			if bytes.Contains(body, []byte(`"stream":true`)) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				fmt.Fprint(w, "data: {\"type\":\"message_start\",\"message\":{\"id\":\"m\",\"usage\":{\"input_tokens\":10}}}\n\n"+
+					"data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"ok\"}}\n\n"+
+					"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":5}}\n\n"+
+					"data: {\"type\":\"message_stop\"}\n\n")
+				return
+			}
 			fmt.Fprint(w, `{"id":"msg_1","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":5}}`)
 		case "/v1/rerank": // rerank.go:96
 			var req struct {
@@ -221,9 +229,17 @@ func TestDispatchAcquireEqualsWireAllSites(t *testing.T) {
 		t.Fatalf("anthropic non-stream: %v", err)
 	}
 
-	// Seven sites, each one physical wire contact under one lease.
-	if ca.count() != 7 || atomic.LoadInt64(&wireHits) != 7 {
-		t.Fatalf("after the seven sites: acquires=%d wire=%d, want 7/7", ca.count(), atomic.LoadInt64(&wireHits))
+	// --- Site 8: anthropic_stream.go — the ChatStreamBackend dispatch under
+	// the same stream lease as site 3. ---
+	so = e.runStream(ctx, []backends.Backend{invariantBackend(srv.URL, backends.ProtocolAnthropic)},
+		[]llm.ChatMsg{{Role: "user", Content: "hi"}}, false, 0, 1, "sess", "key", backends.SensPublic, llmAdm, noopSink{})
+	if !so.served || so.err != nil {
+		t.Fatalf("anthropic stream: served=%v err=%v", so.served, so.err)
+	}
+
+	// Eight sites, each one physical wire contact under one lease.
+	if ca.count() != 8 || atomic.LoadInt64(&wireHits) != 8 {
+		t.Fatalf("after the eight sites: acquires=%d wire=%d, want 8/8", ca.count(), atomic.LoadInt64(&wireHits))
 	}
 
 	// --- Failover walk (design W5: "inkl. Failover-Pfade"): a down primary
@@ -240,8 +256,8 @@ func TestDispatchAcquireEqualsWireAllSites(t *testing.T) {
 		"chat", "s", "u", llm.Options{}, "", time.Second, nil, llmAdm); err != nil || served == nil || len(attempts) != 2 {
 		t.Fatalf("failover walk: served=%v attempts=%d err=%v", served, len(attempts), err)
 	}
-	if ca.count() != 9 || atomic.LoadInt64(&wireHits) != 9 {
-		t.Fatalf("after failover: acquires=%d wire=%d, want 9/9", ca.count(), atomic.LoadInt64(&wireHits))
+	if ca.count() != 10 || atomic.LoadInt64(&wireHits) != 10 {
+		t.Fatalf("after failover: acquires=%d wire=%d, want 10/10", ca.count(), atomic.LoadInt64(&wireHits))
 	}
 
 	// --- Lease-free without wire contact (the cache-hit clause's structural
@@ -270,11 +286,12 @@ func TestDispatchAcquireEqualsWireAllSites(t *testing.T) {
 // deliberately added/removed AND its acquire coupling is proven in
 // TestDispatchAcquireEqualsWireAllSites.
 var wirePin = map[string]int{
-	"llm/client.go":    2, // /api/chat + /v1/chat/completions (non-stream)
-	"llm/stream.go":    1, // /v1/chat/completions (stream)
-	"llm/anthropic.go": 1, // /v1/messages (anthropic non-stream)
-	"embed/embed.go":   2, // /api/embed + /v1/embeddings
-	"rerank/rerank.go": 1, // /v1/rerank
+	"llm/client.go":           2, // /api/chat + /v1/chat/completions (non-stream)
+	"llm/stream.go":           1, // /v1/chat/completions (stream)
+	"llm/anthropic.go":        1, // /v1/messages (anthropic non-stream)
+	"llm/anthropic_stream.go": 1, // /v1/messages (anthropic stream)
+	"embed/embed.go":          2, // /api/embed + /v1/embeddings
+	"rerank/rerank.go":        1, // /v1/rerank
 }
 
 // TestWireSitePositiveListPinned pins the grep positive list: the ONLY
