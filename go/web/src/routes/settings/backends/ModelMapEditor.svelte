@@ -134,7 +134,7 @@
           {#if invalid[i]}
             invalid JSON — last valid state is kept
           {:else}
-            JSON object, sent verbatim as model_map params (empty = none). Unknown keys reach the wire on OpenAI-protocol backends.
+            JSON object, sent verbatim as model_map params (empty = none). Unknown keys reach the wire on OpenAI- and Anthropic-protocol backends (on Anthropic, <code>effort</code> becomes <code>output_config.effort</code>).
           {/if}
         </p>
       </div>

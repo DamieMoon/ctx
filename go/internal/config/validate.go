@@ -790,7 +790,7 @@ func validateIntSigns(c *Config) []Issue {
 //   - V4 (protocol typos: anything but ollama/openai fell silently onto the
 //     ollama wire path → 404 against llama.cpp) is enforced at the same
 //     boundary: validateIdentity rejects a row whose protocol is not one of
-//     openai, ollama, rerank.
+//     openai, ollama, anthropic, rerank.
 //   - V1 (dual-runner VRAM WARN, β6), V12 (dream-embed credential boundary,
 //     β5), V8 and V13 (rerank host reachability WARNs, β3) are NOT rebuildable
 //     here and are not rebuilt: each compared fields of two tuples, and which
