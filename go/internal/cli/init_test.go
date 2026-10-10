@@ -745,6 +745,7 @@ func TestInitBackendsStepAnthropicAsksEmbedLegSeparately(t *testing.T) {
 		"",                 // context window → default 100000
 		"http://gpu:11434", // embedding host
 		"",                 // embedding protocol → ollama default
+		"n",                // embedding host needs no key
 	}, "sk-ant-live")
 
 	var ok bool
@@ -784,5 +785,26 @@ func TestInitBackendsStepAnthropicAsksEmbedLegSeparately(t *testing.T) {
 	}
 	if _, has := embed["api_key_ref"]; has {
 		t.Errorf("the Anthropic key must not be attached to the embed row: %v", embed)
+	}
+}
+
+// TestInitBackendsStepAnthropicRejectsBadWindow: a non-numeric context
+// window aborts the step before anything is sealed or written — a silent
+// default would seed the wrong prompt budget.
+func TestInitBackendsStepAnthropicRejectsBadWindow(t *testing.T) {
+	m := newInitMock(t, serverAdmin, nil)
+	ask, secretCalls := scriptedAsk([]string{
+		"https://api.anthropic.com", "anthropic", "claude-opus-5-5", "qwen3-embedding", "100k",
+	}, "sk-ant-live")
+	var ok bool
+	out := captureStdout(t, func() { ok = runBackendsStep(m.client(), ask) })
+	if ok {
+		t.Fatalf("a bad window must fail the step; output:\n%s", out)
+	}
+	if !strings.Contains(out, "not a positive integer") {
+		t.Errorf("output lacks the reason:\n%s", out)
+	}
+	if *secretCalls != 0 || len(m.creates) != 0 {
+		t.Errorf("secret prompts %d, creates %d — want nothing asked or written", *secretCalls, len(m.creates))
 	}
 }

@@ -804,8 +804,9 @@ func probeBackendURL(ctx context.Context, b *backends.Backend, checks map[string
 	case anthropic:
 		// The Messages API root answers nothing useful; /v1/models is the
 		// cheapest keyed GET (same root convention: base_url + "/v1/...").
-		// A bad key is a 401 here, which the generic branch below reports as
-		// checks.auth — the chat probe then never runs a priced call.
+		// A bad key is a 401 here, reported as checks.auth below; the row
+		// still counts as reachable, so a probe:"chat" goes on to the
+		// 1-token chat, which 401s the same way — no tokens are billed.
 		url += "/v1/models"
 	case b.ProviderClass == backends.ProviderLlamaCpp:
 		url += "/health"

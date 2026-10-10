@@ -404,7 +404,11 @@ func askSeedSpec(ask backendsAsk, missing []string) (seedSpec, error) {
 	if backends.Protocol(protocol) == backends.ProtocolAnthropic {
 		// The Messages API is chat-only and keyed: the embed leg needs its
 		// own host and wire, the chat leg a declared window and the key.
-		chat.NumCtx = askNumCtx(ask, "  ? Context window of the chat model in tokens [100000]: ", 100000)
+		numCtx, err := askNumCtx(ask, "  ? Context window of the chat model in tokens [100000]: ", 100000)
+		if err != nil {
+			return seedSpec{}, err
+		}
+		chat.NumCtx = numCtx
 		embed.Host = ask.line("  ? Embedding host (e.g. http://localhost:11434): ")
 		if embed.Host == "" {
 			return seedSpec{}, errors.New("no embedding host given — the anthropic wire serves no embeddings, nothing was written")
@@ -412,6 +416,13 @@ func askSeedSpec(ask backendsAsk, missing []string) (seedSpec, error) {
 		embed.Protocol = ask.line("  ? Embedding protocol, ollama or openai [ollama]: ")
 		if embed.Protocol == "" {
 			embed.Protocol = string(backends.ProtocolOllama)
+		}
+		if answerIsYes(ask.line("  ? Does the embedding host need an API key? [y/N]: ")) {
+			v, err := ask.secret("  ? Embedding API key (not echoed): ")
+			if err != nil {
+				return seedSpec{}, err
+			}
+			embed.APIKey = v
 		}
 		v, err := ask.secret("  ? Anthropic API key (not echoed): ")
 		if err != nil {
@@ -430,18 +441,20 @@ func askSeedSpec(ask backendsAsk, missing []string) (seedSpec, error) {
 	return seedSpec{Chat: chat, Embed: embed}, nil
 }
 
-// askNumCtx reads an integer answer with a default for the empty line; a
-// non-numeric answer falls back to the default as well — the server's
-// validation is the gate, the wizard only collects.
-func askNumCtx(ask backendsAsk, question string, def int) int {
+// askNumCtx reads a positive integer answer, the default for the empty
+// line. Anything else is an error, not a silent fallback: a typo'd window
+// ("100k") would otherwise seed a 100000-token prompt budget on a model
+// whose window the operator meant to declare as ten times that.
+func askNumCtx(ask backendsAsk, question string, def int) (int, error) {
 	answer := strings.TrimSpace(ask.line(question))
 	if answer == "" {
-		return def
+		return def, nil
 	}
-	if n, err := strconv.Atoi(answer); err == nil && n > 0 {
-		return n
+	n, err := strconv.Atoi(answer)
+	if err != nil || n <= 0 {
+		return 0, fmt.Errorf("context window %q is not a positive integer (tokens, e.g. 100000) — nothing was written", answer)
 	}
-	return def
+	return n, nil
 }
 
 func answerIsYes(answer string) bool {
