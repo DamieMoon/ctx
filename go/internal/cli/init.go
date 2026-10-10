@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -392,24 +393,55 @@ func askSeedSpec(ask backendsAsk, missing []string) (seedSpec, error) {
 	if host == "" {
 		return seedSpec{}, errors.New("no host given — nothing was written")
 	}
-	protocol := ask.line("  ? Protocol, ollama or openai [ollama]: ")
+	protocol := ask.line("  ? Protocol, ollama, openai or anthropic [ollama]: ")
 	if protocol == "" {
 		protocol = string(backends.ProtocolOllama)
 	}
 	chatModel := ask.line("  ? Chat model: ")
 	embedModel := ask.line("  ? Embedding model: ")
-	key := ""
+	chat := seedBackend{Host: host, Protocol: protocol, Model: chatModel}
+	embed := seedBackend{Host: host, Protocol: protocol, Model: embedModel}
+	if backends.Protocol(protocol) == backends.ProtocolAnthropic {
+		// The Messages API is chat-only and keyed: the embed leg needs its
+		// own host and wire, the chat leg a declared window and the key.
+		chat.NumCtx = askNumCtx(ask, "  ? Context window of the chat model in tokens [100000]: ", 100000)
+		embed.Host = ask.line("  ? Embedding host (e.g. http://localhost:11434): ")
+		if embed.Host == "" {
+			return seedSpec{}, errors.New("no embedding host given — the anthropic wire serves no embeddings, nothing was written")
+		}
+		embed.Protocol = ask.line("  ? Embedding protocol, ollama or openai [ollama]: ")
+		if embed.Protocol == "" {
+			embed.Protocol = string(backends.ProtocolOllama)
+		}
+		v, err := ask.secret("  ? Anthropic API key (not echoed): ")
+		if err != nil {
+			return seedSpec{}, err
+		}
+		chat.APIKey = v
+		return seedSpec{Chat: chat, Embed: embed}, nil
+	}
 	if answerIsYes(ask.line("  ? Does the host need an API key? [y/N]: ")) {
 		v, err := ask.secret("  ? API key (not echoed): ")
 		if err != nil {
 			return seedSpec{}, err
 		}
-		key = v
+		chat.APIKey, embed.APIKey = v, v
 	}
-	return seedSpec{
-		Chat:  seedBackend{Host: host, Protocol: protocol, Model: chatModel, APIKey: key},
-		Embed: seedBackend{Host: host, Protocol: protocol, Model: embedModel, APIKey: key},
-	}, nil
+	return seedSpec{Chat: chat, Embed: embed}, nil
+}
+
+// askNumCtx reads an integer answer with a default for the empty line; a
+// non-numeric answer falls back to the default as well — the server's
+// validation is the gate, the wizard only collects.
+func askNumCtx(ask backendsAsk, question string, def int) int {
+	answer := strings.TrimSpace(ask.line(question))
+	if answer == "" {
+		return def
+	}
+	if n, err := strconv.Atoi(answer); err == nil && n > 0 {
+		return n
+	}
+	return def
 }
 
 func answerIsYes(answer string) bool {
