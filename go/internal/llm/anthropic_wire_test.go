@@ -20,6 +20,7 @@ import (
 	"github.com/GottZ/ctx/internal/backends"
 	"github.com/GottZ/ctx/internal/httpx"
 	"github.com/GottZ/ctx/internal/llmlog"
+	"github.com/GottZ/ctx/internal/promptguard"
 )
 
 // anthropicRecorder captures path, decoded body and headers of one
@@ -381,5 +382,52 @@ func TestAnthropicErrorClassification(t *testing.T) {
 				t.Errorf("Classify = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestAnthropicSystemSplitsPromptguardRule: the per-call nonce rule the
+// pipelines append to the system prompt goes into a second, unmarked block
+// so the stable prefix before it can actually hit the cache (one block
+// with the nonce inside would be written on every call and read never).
+func TestAnthropicSystemSplitsPromptguardRule(t *testing.T) {
+	rule := promptguard.Rule("0123456789abcdef")
+	blocks := anthropicSystem("You are ctx. Answer from the sources. " + rule)
+	if len(blocks) != 2 {
+		t.Fatalf("blocks = %d, want stable prefix + rule", len(blocks))
+	}
+	if blocks[0].Text != "You are ctx. Answer from the sources. " || blocks[0].CacheControl == nil {
+		t.Errorf("prefix block = %+v, want the text before the rule, cached", blocks[0])
+	}
+	if blocks[1].Text != rule || blocks[1].CacheControl != nil {
+		t.Errorf("rule block = %+v, want the rule, uncached", blocks[1])
+	}
+
+	// A second call with a fresh nonce keeps the cached block byte-identical.
+	again := anthropicSystem("You are ctx. Answer from the sources. " + promptguard.Rule("fedcba9876543210"))
+	if again[0].Text != blocks[0].Text {
+		t.Errorf("cached prefix differs between nonces: %q vs %q", again[0].Text, blocks[0].Text)
+	}
+
+	// Without a rule: one cached block, as before. A rule at position 0
+	// (nothing stable before it) stays one block too.
+	if one := anthropicSystem("plain"); len(one) != 1 || one[0].CacheControl == nil {
+		t.Errorf("plain prompt = %+v", one)
+	}
+	if only := anthropicSystem(rule); len(only) != 1 {
+		t.Errorf("rule-only prompt = %d blocks, want 1", len(only))
+	}
+}
+
+// TestAnthropicNonStreamHasNoTopLevelCacheControl: the automatic tail
+// breakpoint is a multi-turn (stream) affair; the single-turn pipelines
+// keep the explicit system breakpoint only.
+func TestAnthropicNonStreamHasNoTopLevelCacheControl(t *testing.T) {
+	rec := newAnthropicRecorder(t, 200, anthropicRespOK, nil)
+	if _, err := Chat(context.Background(), anthropicTestBackend(rec.srv.URL), "s", "u", Options{NumPredict: 5}, 5*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	_, body, _ := rec.recorded()
+	if _, has := body["cache_control"]; has {
+		t.Errorf("top-level cache_control on the non-stream path: %v", body["cache_control"])
 	}
 }

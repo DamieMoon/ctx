@@ -34,7 +34,20 @@
 //     the llmlog metadata (ApplyProviderTelemetry).
 //   - 529 overloaded_error is a plain non-2xx: httpx.StatusError carries it
 //     into backends.Classify as ClassGateway (failover), 429 as
-//     ClassRateLimit with the Retry-After cooldown, 401 as ClassAuth.
+//     ClassRateLimit with the Retry-After cooldown, 401 as ClassAuth. The
+//     same types inside a mid-stream error event classify the same way
+//     (StreamError.ProviderErrorType).
+//   - The wire targets the Claude 5 family (claude-opus-5-5 in production).
+//     output_config.effort is sent on every call; models that predate it
+//     (Sonnet 4.5, Haiku 4.5) reject the field, and on Opus 4.7/4.8 an
+//     omitted thinking field means NO thinking — neither is a supported row.
+//
+// Raw net/http rather than the official Go SDK, like every other ctx wire:
+// the backend pool, the dispatch invariant (one pinned
+// http.NewRequestWithContext per wire file, chat/dispatch_invariant_test.go)
+// and the failover classifier all key on ctx's own request/response path,
+// and the request shape is small enough that an SDK would add a dependency
+// without removing any of that.
 package llm
 
 import (
@@ -49,6 +62,7 @@ import (
 
 	"github.com/GottZ/ctx/internal/backends"
 	"github.com/GottZ/ctx/internal/httpx"
+	"github.com/GottZ/ctx/internal/promptguard"
 )
 
 const (
@@ -108,6 +122,9 @@ type anthropicRequest struct {
 	Stream       bool                  `json:"stream,omitempty"`
 	OutputConfig anthropicOutputConfig `json:"output_config"`
 	Tools        []anthropicTool       `json:"tools,omitempty"`
+	// CacheControl at the top level is the API's automatic breakpoint on the
+	// last cacheable block — set on the multi-turn stream path only.
+	CacheControl *anthropicCacheControl `json:"cache_control,omitempty"`
 }
 
 // --- response shape ---.
@@ -172,12 +189,29 @@ func anthropicMaxTokens(opts Options) int {
 	return anthropicDefaultMaxTokens
 }
 
+// promptguardRuleMarker is the opening of promptguard.Rule's sentence — the
+// per-call nonce rule every pipeline appends to its system prompt.
+var promptguardRuleMarker = "Everything between <" + promptguard.GuardTag + " id="
+
 // anthropicSystem renders the system prompt as the cached top-level block.
 // An empty prompt yields no system field (the API rejects an empty text
 // block).
+//
+// The cache is a byte-exact prefix match, and the pipelines end their
+// system prompt with promptguard.Rule(nonce) — a fresh nonce per call. One
+// block carrying both would be written to the cache on every call and read
+// back never (a pure 1.25x surcharge, visible as cache_creation > 0 with
+// cache_read == 0 on every row). So the rule is split off into a second,
+// unmarked text block: the stable prefix before it is the breakpoint.
 func anthropicSystem(systemPrompt string) []anthropicTextBlock {
 	if systemPrompt == "" {
 		return nil
+	}
+	if i := strings.LastIndex(systemPrompt, promptguardRuleMarker); i > 0 {
+		return []anthropicTextBlock{
+			{Type: "text", Text: systemPrompt[:i], CacheControl: &anthropicCacheControl{Type: "ephemeral"}},
+			{Type: "text", Text: systemPrompt[i:]},
+		}
 	}
 	return []anthropicTextBlock{{
 		Type: "text", Text: systemPrompt,
@@ -329,10 +363,12 @@ func chatAnthropic(ctx context.Context, b backends.Backend, systemPrompt, userPr
 		CacheReadTokens:     cacheRead,
 		CacheCreationTokens: cacheCreate,
 		FinishReason:        mapAnthropicStopReason(result.StopReason),
-		// The message id is the provider's audit handle (support requests
-		// quote it); the model column stays row-faithful — Anthropic echoes
-		// the requested id, there is no models-fallback to record — and no
-		// cost is reported on this wire (billing is read in the console).
+		// The message id (msg_…) is the audit handle that exists on both the
+		// stream and the non-stream path (the request-id header is the one
+		// support quotes; it is not read here). The model column stays
+		// row-faithful — Anthropic echoes the requested id, there is no
+		// models-fallback to record — and no cost is reported on this wire
+		// (billing is read in the console).
 		ProviderRequestID: result.ID,
 	}, nil
 }

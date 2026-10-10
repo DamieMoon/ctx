@@ -63,7 +63,32 @@ type anthropicToolResultBlock struct {
 	Type      string `json:"type"` // "tool_result"
 	ToolUseID string `json:"tool_use_id"`
 	Content   string `json:"content"`
+	IsError   bool   `json:"is_error,omitempty"`
 }
+
+// anthropicThinkingBlock / anthropicRedactedThinkingBlock are the reasoning
+// blocks the stream parser re-assembles so the harness can replay them
+// unchanged (the API requires the final assistant turn of a tool loop to
+// start with its thinking block; the text is empty under the default
+// display and the signature carries the reasoning).
+type anthropicThinkingBlock struct {
+	Type      string `json:"type"` // "thinking"
+	Thinking  string `json:"thinking"`
+	Signature string `json:"signature"`
+}
+
+type anthropicRedactedThinkingBlock struct {
+	Type string `json:"type"` // "redacted_thinking"
+	Data string `json:"data"`
+}
+
+// orphanToolResult is the synthetic answer for a tool_use the history never
+// answered (the turn was interrupted between the model's call and the
+// tool's result — client gone, context cancelled). The API rejects an
+// assistant tool_use that is not followed by its tool_result, and the
+// orphan sits in the persisted history for the rest of the session, so
+// without this repair every later turn of that session would 400.
+const orphanToolResult = "no result recorded: the turn was interrupted before this tool ran"
 
 // anthropicMessages converts the multi-turn history: the joined system text
 // and the alternating message list. Empty assistant turns without tool
@@ -71,6 +96,11 @@ type anthropicToolResultBlock struct {
 // that would end the list is kept — the harness never ends on one (it
 // appends tool results), and a trailing assistant turn is a prefill the
 // Claude 5 models reject with a clear 400 rather than something to mask.
+//
+// Every system row is lifted into the top-level system block — the harness
+// puts exactly one, first. A mid-history system row would be moved ahead of
+// the conversation (and invalidate the cached prefix); if the harness ever
+// injects such rows they belong in messages as role:system turns instead.
 func anthropicMessages(msgs []ChatMsg) (system string, out []anthropicMessage) {
 	var sys []string
 	appendBlocks := func(role string, blocks ...any) {
@@ -81,6 +111,24 @@ func anthropicMessages(msgs []ChatMsg) (system string, out []anthropicMessage) {
 		}
 		out = append(out, anthropicMessage{Role: role, Content: blocks})
 	}
+	// Tool-call ids are mandatory on this wire (tool_use.id and the
+	// matching tool_result.tool_use_id). A history served earlier by an
+	// openai-wire row can carry EMPTY ids — llama.cpp streams calls without
+	// one and the openai parser tolerates it — so empty ids are repaired
+	// here: each nameless call gets a synthetic id, and the tool rows that
+	// follow with an empty ToolCallID consume those ids in order (the
+	// harness appends one tool row per call, in call order). open holds the
+	// ids of the last assistant turn's calls that no tool row has answered
+	// yet; whatever is still open when the next turn starts (or the history
+	// ends) gets the synthetic error result.
+	var pendingIDs, open []string
+	synthetic := 0
+	flushOrphans := func() {
+		for _, id := range open {
+			appendBlocks("user", anthropicToolResultBlock{Type: "tool_result", ToolUseID: id, Content: orphanToolResult, IsError: true})
+		}
+		open = open[:0]
+	}
 	for _, m := range msgs {
 		switch m.Role {
 		case "system":
@@ -88,15 +136,30 @@ func anthropicMessages(msgs []ChatMsg) (system string, out []anthropicMessage) {
 				sys = append(sys, m.Content)
 			}
 		case "user":
+			flushOrphans()
 			appendBlocks("user", anthropicTextBlock{Type: "text", Text: m.Content})
 		case "assistant":
+			flushOrphans()
 			var blocks []any
+			// Reasoning blocks first, verbatim — the API's ordering rule for
+			// the final assistant turn of a tool loop.
+			for _, raw := range m.ProviderBlocks {
+				blocks = append(blocks, raw)
+			}
 			if m.Content != "" {
 				blocks = append(blocks, anthropicTextBlock{Type: "text", Text: m.Content})
 			}
+			pendingIDs = pendingIDs[:0]
 			for _, tc := range m.ToolCalls {
+				id := tc.ID
+				if id == "" {
+					synthetic++
+					id = fmt.Sprintf("ctxcall_%d", synthetic)
+					pendingIDs = append(pendingIDs, id)
+				}
+				open = append(open, id)
 				blocks = append(blocks, anthropicToolUseBlock{
-					Type: "tool_use", ID: tc.ID, Name: tc.Function.Name,
+					Type: "tool_use", ID: id, Name: tc.Function.Name,
 					Input: anthropicToolInput(tc.Function.Arguments),
 				})
 			}
@@ -105,9 +168,20 @@ func anthropicMessages(msgs []ChatMsg) (system string, out []anthropicMessage) {
 			}
 			appendBlocks("assistant", blocks...)
 		case "tool":
-			appendBlocks("user", anthropicToolResultBlock{Type: "tool_result", ToolUseID: m.ToolCallID, Content: m.Content})
+			id := m.ToolCallID
+			if id == "" && len(pendingIDs) > 0 {
+				id, pendingIDs = pendingIDs[0], pendingIDs[1:]
+			}
+			for i, o := range open {
+				if o == id {
+					open = append(open[:i], open[i+1:]...)
+					break
+				}
+			}
+			appendBlocks("user", anthropicToolResultBlock{Type: "tool_result", ToolUseID: id, Content: m.Content})
 		}
 	}
+	flushOrphans()
 	return strings.Join(sys, "\n\n"), out
 }
 
@@ -156,6 +230,12 @@ func chatStreamAnthropic(ctx context.Context, b backends.Backend, model string,
 		Stream:       true,
 		OutputConfig: anthropicOutputConfig{Effort: resolveAnthropicEffort(opts, &b)},
 		Tools:        anthropicTools(tools),
+		// Top-level automatic caching: the API places a breakpoint on the
+		// last cacheable block, so each iteration of the tool loop (and
+		// each turn of the session) reads the growing history from cache
+		// instead of paying full input price for it; the explicit system
+		// breakpoint stays the stable-prefix anchor.
+		CacheControl: &anthropicCacheControl{Type: "ephemeral"},
 	}
 	body, err := buildAnthropicBody(req, opts, &b)
 	if err != nil {
@@ -201,11 +281,14 @@ type anthropicStreamFrame struct {
 		Type string `json:"type"`
 		ID   string `json:"id"`
 		Name string `json:"name"`
+		Data string `json:"data"` // redacted_thinking payload
 	} `json:"content_block"`
 	Delta *struct {
 		Type        string `json:"type"`
 		Text        string `json:"text"`
 		PartialJSON string `json:"partial_json"`
+		Thinking    string `json:"thinking"`
+		Signature   string `json:"signature"`
 		StopReason  string `json:"stop_reason"`
 	} `json:"delta"`
 	Usage *anthropicUsage `json:"usage"`
@@ -215,18 +298,25 @@ type anthropicStreamFrame struct {
 	} `json:"error"`
 }
 
+// pendingThinking accumulates one thinking block across its deltas.
+type pendingThinking struct {
+	text      strings.Builder
+	signature string
+}
+
 // anthropicStreamState carries the assembly across frames.
 type anthropicStreamState struct {
-	onEvent    func(StreamEvent) error
-	content    strings.Builder
-	calls      []*pendingToolCall
-	byIndex    map[int]*pendingToolCall
-	finish     string
-	usage      anthropicUsage
-	stopSeen   bool
-	done       bool
-	messageID  string
-	outputSeen bool
+	onEvent   func(StreamEvent) error
+	content   strings.Builder
+	calls     []*pendingToolCall
+	byIndex   map[int]*pendingToolCall
+	thinking  map[int]*pendingThinking
+	blocks    []json.RawMessage // reasoning blocks, stream order, replayed verbatim
+	finish    string
+	usage     anthropicUsage
+	stopSeen  bool
+	done      bool
+	messageID string
 }
 
 func (st *anthropicStreamState) emit(ev StreamEvent) error {
@@ -244,7 +334,7 @@ func (st *anthropicStreamState) emit(ev StreamEvent) error {
 // complete turn; EOF before it is a hard error — a mid-stream connection
 // death must not look like a finished answer.
 func parseAnthropicSSE(r io.Reader, onEvent func(StreamEvent) error) (*StreamResult, error) {
-	st := &anthropicStreamState{onEvent: onEvent, byIndex: map[int]*pendingToolCall{}}
+	st := &anthropicStreamState{onEvent: onEvent, byIndex: map[int]*pendingToolCall{}, thinking: map[int]*pendingThinking{}}
 	br := bufio.NewReader(r)
 	var data []string
 	for {
@@ -315,50 +405,111 @@ func (st *anthropicStreamState) handleFrame(payload string) error {
 			st.usage = f.Message.Usage
 		}
 	case "content_block_start":
-		if f.ContentBlock != nil && f.ContentBlock.Type == "tool_use" {
-			pc := &pendingToolCall{index: f.Index, id: f.ContentBlock.ID, typ: "function", name: f.ContentBlock.Name}
-			st.byIndex[f.Index] = pc
-			st.calls = append(st.calls, pc)
-			if pc.name != "" {
-				pc.nameEmitted = true
-				return st.emit(StreamEvent{ToolCallName: pc.name})
-			}
-		}
+		return st.onBlockStart(&f)
 	case "content_block_delta":
-		if f.Delta == nil {
-			return nil
-		}
-		switch f.Delta.Type {
-		case "text_delta":
-			if f.Delta.Text != "" {
-				st.content.WriteString(f.Delta.Text)
-				return st.emit(StreamEvent{ContentDelta: f.Delta.Text})
-			}
-		case "input_json_delta":
-			if pc := st.byIndex[f.Index]; pc != nil {
-				pc.args.WriteString(f.Delta.PartialJSON)
-			}
-		}
-		// thinking_delta / signature_delta: never surfaced.
+		return st.onBlockDelta(&f)
+	case "content_block_stop":
+		st.onBlockStop(f.Index)
 	case "message_delta":
-		if f.Usage != nil {
-			st.outputSeen = true
-			st.usage.OutputTokens = f.Usage.OutputTokens
-			// Newer servers repeat the (cumulative) input counters here;
-			// take them when present so the total is the final one.
-			if f.Usage.InputTokens > 0 || f.Usage.CacheReadInputTokens > 0 || f.Usage.CacheCreationInputTokens > 0 {
-				st.usage.InputTokens = f.Usage.InputTokens
-				st.usage.CacheReadInputTokens = f.Usage.CacheReadInputTokens
-				st.usage.CacheCreationInputTokens = f.Usage.CacheCreationInputTokens
-			}
-		}
-		if f.Delta != nil && f.Delta.StopReason != "" && st.finish == "" {
-			st.stopSeen = true
-			st.finish = mapAnthropicStopReason(f.Delta.StopReason)
-			return st.emit(StreamEvent{FinishReason: st.finish})
-		}
+		return st.onMessageDelta(&f)
 	case "message_stop":
 		st.done = true
+	}
+	// ping and unknown frame types: ignored.
+	return nil
+}
+
+// onBlockStart opens a content block. The API puts a tool_use block's id
+// and name on the start frame (never on a later delta, unlike the OpenAI
+// index-keyed assembly). A nameless tool_use block — a proxy artefact, not
+// an API shape — is dropped rather than persisted as an empty call the
+// harness would dispatch and replay as tool_use{id:""} (a 400 on the next
+// turn); its input_json_delta frames then fall on no pending call.
+func (st *anthropicStreamState) onBlockStart(f *anthropicStreamFrame) error {
+	if f.ContentBlock == nil {
+		return nil
+	}
+	switch f.ContentBlock.Type {
+	case "tool_use":
+		if f.ContentBlock.Name == "" {
+			return nil
+		}
+		pc := &pendingToolCall{index: f.Index, id: f.ContentBlock.ID, typ: "function", name: f.ContentBlock.Name, nameEmitted: true}
+		st.byIndex[f.Index] = pc
+		st.calls = append(st.calls, pc)
+		return st.emit(StreamEvent{ToolCallName: pc.name})
+	case "thinking":
+		st.thinking[f.Index] = &pendingThinking{}
+	case "redacted_thinking":
+		// Arrives complete on the block start; replayed as-is.
+		raw, _ := json.Marshal(anthropicRedactedThinkingBlock{Type: "redacted_thinking", Data: f.ContentBlock.Data})
+		st.blocks = append(st.blocks, raw)
+	}
+	return nil
+}
+
+// onBlockDelta routes a delta by its own type: text to the sink, tool
+// input to the pending call, reasoning to the pending thinking block
+// (accumulated for the replay only — never surfaced; empty under the
+// default display anyway).
+func (st *anthropicStreamState) onBlockDelta(f *anthropicStreamFrame) error {
+	if f.Delta == nil {
+		return nil
+	}
+	switch f.Delta.Type {
+	case "text_delta":
+		if f.Delta.Text != "" {
+			st.content.WriteString(f.Delta.Text)
+			return st.emit(StreamEvent{ContentDelta: f.Delta.Text})
+		}
+	case "input_json_delta":
+		if pc := st.byIndex[f.Index]; pc != nil {
+			pc.args.WriteString(f.Delta.PartialJSON)
+		}
+	case "thinking_delta":
+		if pt := st.thinking[f.Index]; pt != nil {
+			pt.text.WriteString(f.Delta.Thinking)
+		}
+	case "signature_delta":
+		if pt := st.thinking[f.Index]; pt != nil {
+			pt.signature = f.Delta.Signature
+		}
+	}
+	return nil
+}
+
+// onBlockStop seals a thinking block into its replay form.
+func (st *anthropicStreamState) onBlockStop(index int) {
+	pt := st.thinking[index]
+	if pt == nil {
+		return
+	}
+	raw, _ := json.Marshal(anthropicThinkingBlock{Type: "thinking", Thinking: pt.text.String(), Signature: pt.signature})
+	st.blocks = append(st.blocks, raw)
+	delete(st.thinking, index)
+}
+
+// onMessageDelta takes the stop reason and the output count. Newer servers
+// repeat the (cumulative) input counters here; each one is taken only when
+// it is itself present (> 0), so a delta that carries input_tokens alone
+// cannot zero the cache counters message_start reported.
+func (st *anthropicStreamState) onMessageDelta(f *anthropicStreamFrame) error {
+	if f.Usage != nil {
+		st.usage.OutputTokens = f.Usage.OutputTokens
+		if f.Usage.InputTokens > 0 {
+			st.usage.InputTokens = f.Usage.InputTokens
+		}
+		if f.Usage.CacheReadInputTokens > 0 {
+			st.usage.CacheReadInputTokens = f.Usage.CacheReadInputTokens
+		}
+		if f.Usage.CacheCreationInputTokens > 0 {
+			st.usage.CacheCreationInputTokens = f.Usage.CacheCreationInputTokens
+		}
+	}
+	if f.Delta != nil && f.Delta.StopReason != "" && st.finish == "" {
+		st.stopSeen = true
+		st.finish = mapAnthropicStopReason(f.Delta.StopReason)
+		return st.emit(StreamEvent{FinishReason: st.finish})
 	}
 	return nil
 }
@@ -373,6 +524,7 @@ func (st *anthropicStreamState) result() *StreamResult {
 		CacheReadTokens:     cacheRead,
 		CacheCreationTokens: cacheCreate,
 		ProviderRequestID:   st.messageID,
+		ProviderBlocks:      st.blocks,
 	}
 	for _, pc := range st.calls {
 		args := bytes.TrimSpace(pc.args.Bytes())

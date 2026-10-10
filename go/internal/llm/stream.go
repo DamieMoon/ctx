@@ -164,6 +164,15 @@ type ChatMsg struct {
 	Content    string     `json:"content"`
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string     `json:"tool_call_id,omitempty"`
+	// ProviderBlocks are opaque content blocks the provider wants back
+	// unchanged ahead of the turn's text — the anthropic wire's thinking /
+	// redacted_thinking blocks, which the API requires on the final
+	// assistant turn of a tool loop. Carried IN MEMORY across the
+	// iterations of one turn only (the harness does not persist them; a
+	// later turn's history replays without them, which the API accepts for
+	// non-final assistant turns). json:"-": never a field of the OpenAI
+	// wire's message object.
+	ProviderBlocks []json.RawMessage `json:"-"`
 }
 
 // StreamEvent is handed to the ChatStream callback as the stream progresses.
@@ -193,6 +202,10 @@ type StreamResult struct {
 	CacheReadTokens     int
 	CacheCreationTokens int
 	ProviderRequestID   string
+	// ProviderBlocks are the reasoning blocks of the answer (anthropic wire),
+	// to be echoed back via ChatMsg.ProviderBlocks when the harness replays
+	// this assistant turn inside the same tool loop. nil on the openai wire.
+	ProviderBlocks []json.RawMessage
 }
 
 // StreamError is an error event delivered inside an HTTP-200 SSE stream.
@@ -203,6 +216,14 @@ type StreamError struct {
 	Code    string // provider code, number or string ("502", "server_error")
 	Message string
 }
+
+// ProviderErrorType exposes the provider's error type string to the failover
+// classifier (backends.Classify) without a backends→llm import: the
+// anthropic wire's mid-stream error event names the same types its HTTP
+// errors do (overloaded_error, rate_limit_error, …), and the classifier maps
+// them onto the classes the equivalent status codes get. OpenRouter's
+// numeric codes match nothing there and keep their stop-the-chain default.
+func (e *StreamError) ProviderErrorType() string { return e.Code }
 
 func (e *StreamError) Error() string {
 	if e.Code != "" {
