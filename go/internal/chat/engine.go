@@ -426,7 +426,7 @@ func (e *Engine) runStream(ctx context.Context, chain []backends.Backend, msgs [
 			// fires after ChatStream drained the stream, so the lease spans
 			// first byte to stream end.
 			defer lease.Release()
-			res, err := llm.ChatStream(runCtx, b.Host, b.APIKey, model, msgs, tools, opts, b.ExtraBody, e.cfg.LLMTimeout,
+			res, err := llm.ChatStreamBackend(runCtx, b, model, msgs, tools, opts, e.cfg.LLMTimeout,
 				func(ev llm.StreamEvent) error {
 					started = true
 					if ev.ContentDelta != "" {
@@ -584,6 +584,11 @@ func (e *Engine) recordLLM(sessID, apiKeyID string, required backends.Sensitivit
 		entry.PromptTokens = res.PromptTokens
 		entry.CompletionTokens = res.CompletionTokens
 		entry.Metadata["tool_calls"] = len(res.ToolCalls)
+		if res.ProviderRequestID != "" {
+			entry.Metadata["provider_request_id"] = res.ProviderRequestID
+		}
+		// anthropic wire: prompt-cache counters (no-op on the openai wire).
+		llm.ApplyCacheTelemetry(&entry, res.CacheReadTokens, res.CacheCreationTokens)
 	}
 	recordEntry(e.pool, entry)
 }

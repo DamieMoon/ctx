@@ -30,6 +30,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/GottZ/ctx/internal/backends"
 	"github.com/GottZ/ctx/internal/httpx"
 )
 
@@ -185,6 +186,13 @@ type StreamResult struct {
 	PromptTokens     int
 	CompletionTokens int
 	DraftAccept      float64 // timings.draft_n_accepted/draft_n, 0 when n/a
+	// CacheReadTokens / CacheCreationTokens / ProviderRequestID are filled by
+	// the anthropic wire only (ChatResponse's twins): the cache counters are
+	// already inside PromptTokens and travel for llmlog metadata, the
+	// message id for audit. Zero on the openai wire.
+	CacheReadTokens     int
+	CacheCreationTokens int
+	ProviderRequestID   string
 }
 
 // StreamError is an error event delivered inside an HTTP-200 SSE stream.
@@ -264,9 +272,24 @@ func buildStreamBody(model string, msgs []ChatMsg, tools []ToolDef, opts Options
 	return json.Marshal(m)
 }
 
+// ChatStreamBackend is the protocol dispatch of the streaming path: the
+// anthropic wire (anthropic_stream.go) for ProtocolAnthropic, ChatStream
+// (the OpenAI-compatible wire) for everything else — ollama rows included,
+// which serve /v1/chat/completions too and were always streamed that way.
+// The chat harness calls this; ChatStream stays exported as the openai
+// implementation its tests drive directly.
+func ChatStreamBackend(ctx context.Context, b backends.Backend, model string,
+	msgs []ChatMsg, tools []ToolDef, opts Options, timeout time.Duration,
+	onEvent func(StreamEvent) error) (*StreamResult, error) {
+	if b.Protocol == backends.ProtocolAnthropic {
+		return chatStreamAnthropic(ctx, b, model, msgs, tools, opts, timeout, onEvent)
+	}
+	return ChatStream(ctx, b.Host, b.APIKey, model, msgs, tools, opts, b.ExtraBody, timeout, onEvent)
+}
+
 // ChatStream sends a streaming chat request with optional tool definitions
-// over the OpenAI-compatible wire (the only streaming protocol in F6) and
-// assembles the response. onEvent is invoked for content fragments, tool
+// over the OpenAI-compatible wire (the streaming protocol of F6; the
+// anthropic wire joined via ChatStreamBackend) and assembles the response. onEvent is invoked for content fragments, tool
 // call starts and the finish reason; an error from onEvent aborts the
 // stream. Cancelling ctx aborts the in-flight generation (the HTTP request
 // to the backend is dropped, llama.cpp frees its slot).
