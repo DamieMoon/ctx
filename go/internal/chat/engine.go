@@ -607,6 +607,14 @@ func (e *Engine) tokenClamp(b backends.Backend, budgetLeft int) int {
 	return v
 }
 
+// chatOptions builds the stream call's Options from the chat role's
+// model_map params. Deliberately NOT applyModelParams: the harness owns
+// NumPredict (tokenClamp) and the think toggle (buildStreamBody's
+// reasoning-off doctrine), so only the keys the stream wires read are
+// honoured — temperature/top_p for the openai wire, effort for the anthropic
+// wire (resolveAnthropicEffort reads Options.Extra["effort"], the same slot
+// applyModelParams fills on the non-stream path, so a row's params.effort
+// means the same thing on both paths).
 func (e *Engine) chatOptions(b backends.Backend, numPredict int) llm.Options {
 	opts := llm.Options{Temperature: 0.7, NumPredict: numPredict}
 	if spec := b.ModelFor("chat"); spec.Params != nil {
@@ -615,6 +623,9 @@ func (e *Engine) chatOptions(b backends.Backend, numPredict int) llm.Options {
 		}
 		if tp, ok := spec.Params["top_p"].(float64); ok {
 			opts.TopP = tp
+		}
+		if eff, ok := spec.Params["effort"].(string); ok && eff != "" {
+			opts.Extra = map[string]any{"effort": eff}
 		}
 	}
 	return opts
