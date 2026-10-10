@@ -43,7 +43,7 @@ export function widgetFor(type: string): Widget {
 export function selectOptions(type: string): string[] {
   switch (type) {
     case 'protocol':
-      return ['ollama', 'openai']
+      return ['ollama', 'openai', 'anthropic']
     case 'think':
       return ['true', 'false']
     case 'sensitivity':

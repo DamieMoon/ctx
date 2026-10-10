@@ -41,7 +41,7 @@ describe('widgetFor', () => {
 
 describe('selectOptions', () => {
   it('mirrors the Go enums', () => {
-    expect(selectOptions('protocol')).toEqual(['ollama', 'openai'])
+    expect(selectOptions('protocol')).toEqual(['ollama', 'openai', 'anthropic'])
     expect(selectOptions('think')).toEqual(['true', 'false'])
     expect(selectOptions('string')).toEqual([])
   })
