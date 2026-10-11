@@ -7,10 +7,11 @@
 //	CTX_ANTHROPIC_SMOKE_KEY=sk-ant-… go test ./internal/llm/ -run Live -count=1 -v
 //
 // It proves what the fakes cannot: the request shape is accepted by the real
-// endpoint, the prompt cache hits on the second call, the thinking block is
-// replayed correctly through a tool round trip, effort is accepted, the
-// 1-token probe's behaviour, and the 401 classification. Each probe logs the
-// usage it saw. Cost: a few thousand tokens per run.
+// endpoint, the prompt cache hits on the second call, a tool round trip
+// completes (replaying the thinking block when the model emits one — it
+// logs when it did not), effort is accepted, the 1-token probe's behaviour,
+// and the 401 classification. Each probe logs the usage it saw. Cost: a few
+// thousand tokens per run.
 package llm
 
 import (
@@ -162,7 +163,9 @@ func TestAnthropicLiveStreamToolRoundTrip(t *testing.T) {
 		ChatMsg{Role: "tool", Content: `{"temperature_c": 21, "sky": "clear"}`, ToolCallID: call.ID},
 	)
 	events = events[:0]
-	final, err := ChatStreamBackend(ctx, b, b.Model, msgs, []ToolDef{tool}, Options{NumPredict: 1024}, 90*time.Second, collectEvents(&events))
+	// Same effort as the first iteration: a changed effort invalidates the
+	// prompt cache by itself and would mask the prefix question below.
+	final, err := ChatStreamBackend(ctx, b, b.Model, msgs, []ToolDef{tool}, Options{NumPredict: 2048, Extra: map[string]any{"effort": "high"}}, 90*time.Second, collectEvents(&events))
 	if err != nil {
 		t.Fatalf("second stream (thinking replay): %v", err)
 	}
@@ -187,10 +190,10 @@ func TestAnthropicLiveStreamToolRoundTrip(t *testing.T) {
 		ChatMsg{Role: "assistant", Content: res.Content, ToolCalls: res.ToolCalls},
 		ChatMsg{Role: "tool", Content: `{"temperature_c": 21, "sky": "clear"}`, ToolCallID: call.ID},
 	)
-	if _, err := ChatStreamBackend(ctx, b, b.Model, noThinking, []ToolDef{tool}, Options{NumPredict: 256}, 90*time.Second, nil); err != nil {
-		t.Logf("round trip without the thinking block: %v (expected on the Claude 5 models — this is why ProviderBlocks exist)", err)
+	if _, err := ChatStreamBackend(ctx, b, b.Model, noThinking, []ToolDef{tool}, Options{NumPredict: 256, Extra: map[string]any{"effort": "high"}}, 90*time.Second, nil); err != nil {
+		t.Logf("round trip with the produced thinking block STRIPPED: rejected — %v (the reference only asks to keep it; this records what the API does)", err)
 	} else {
-		t.Logf("round trip without the thinking block: accepted by the API today")
+		t.Logf("round trip with the produced thinking block STRIPPED: accepted by the API today")
 	}
 }
 

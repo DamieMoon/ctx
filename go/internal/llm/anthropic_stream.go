@@ -12,8 +12,8 @@
 //     text/thinking: nothing
 //   - content_block_delta→ text_delta: ContentDelta; input_json_delta:
 //     arguments fragment; thinking_delta /
-//     signature_delta: ignored (empty under the
-//     default display anyway)
+//     signature_delta: accumulated into the replay
+//     block, never surfaced to the sink
 //   - message_delta      → stop_reason (mapped, FinishReason event) and
 //     usage.output_tokens
 //   - message_stop       → done
@@ -73,9 +73,9 @@ type anthropicToolResultBlock struct {
 // preserved-thinking check rejects a block that was ALTERED; the text is
 // empty under the default display and the signature carries the
 // reasoning. Live (claude-opus-5-5, 2026-10-11) a short tool-call turn
-// came back with no thinking block at all, and the round trip was
-// accepted either way — so this is the reference's rule honoured, not a
-// 400 observed.
+// came back with no thinking block at all and the block-less round trip
+// was accepted — so this is the reference's rule honoured, not a 400
+// observed (what the API does with a STRIPPED block was not exercised).
 type anthropicThinkingBlock struct {
 	Type      string `json:"type"` // "thinking"
 	Thinking  string `json:"thinking"`
