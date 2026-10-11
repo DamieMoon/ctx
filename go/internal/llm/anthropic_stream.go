@@ -68,9 +68,14 @@ type anthropicToolResultBlock struct {
 
 // anthropicThinkingBlock / anthropicRedactedThinkingBlock are the reasoning
 // blocks the stream parser re-assembles so the harness can replay them
-// unchanged (the API requires the final assistant turn of a tool loop to
-// start with its thinking block; the text is empty under the default
-// display and the signature carries the reasoning).
+// unchanged. The claude-api reference asks that an assistant turn whose
+// tool_use still awaits its tool_result keep its thinking block, and the
+// preserved-thinking check rejects a block that was ALTERED; the text is
+// empty under the default display and the signature carries the
+// reasoning. Live (claude-opus-5-5, 2026-10-11) a short tool-call turn
+// came back with no thinking block at all, and the round trip was
+// accepted either way — so this is the reference's rule honoured, not a
+// 400 observed.
 type anthropicThinkingBlock struct {
 	Type      string `json:"type"` // "thinking"
 	Thinking  string `json:"thinking"`
@@ -141,8 +146,8 @@ func anthropicMessages(msgs []ChatMsg) (system string, out []anthropicMessage) {
 		case "assistant":
 			flushOrphans()
 			var blocks []any
-			// Reasoning blocks first, verbatim — the API's ordering rule for
-			// the final assistant turn of a tool loop.
+			// Reasoning blocks first, verbatim — the order the API produced
+			// them in (thinking precedes the tool_use it introduced).
 			for _, raw := range m.ProviderBlocks {
 				blocks = append(blocks, raw)
 			}
