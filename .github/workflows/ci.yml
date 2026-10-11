@@ -75,7 +75,16 @@ jobs:
           # der es selbst gebaut wurde, und v2.11.4 bricht gegen ein Modul mit
           # `go 1.27.0` mit "the Go language version used to build
           # golangci-lint is lower than the targeted Go version" ab.
-          version: v2.13.2
+          #
+          # Bump auf v2.14.0 (2026-10-11, PR #47): der Runner löst GO_VERSION
+          # "1.27" seit dem 10.10. auf go1.27.2 auf, und v2.13.2 (gebaut mit
+          # einem älteren 1.27) kann dessen Export-Daten nicht lesen —
+          # "export data version 5 is greater than maximum supported version
+          # 4", typecheck-Fehler auf dem ersten `import "fmt"`, Nightly auf
+          # root rot seit 38019738113 (10.10.) bei sonst grünen Jobs. v2.14.0
+          # (24.09.) liest sie; lokal gegen go1.27.2 mit demselben
+          # .golangci.yml: 0 issues.
+          version: v2.14.0
           working-directory: go
           args: --timeout=5m
           # Kein Analyse-Cache (2026-08-26): der Cache-Key der Action trägt das
