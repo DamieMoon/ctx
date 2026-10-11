@@ -46,6 +46,14 @@ func TestMigration155ProtocolCheckAdmitsAnthropic(t *testing.T) {
 		t.Errorf("CHECKs mentioning protocol = %d (err %v), want exactly 1", n, err)
 	}
 
+	// The DROP/ADD of the constraint leaves the column's DEFAULT alone.
+	var def2 string
+	if err := pool.QueryRow(ctx,
+		`SELECT column_default FROM information_schema.columns
+		  WHERE table_name = 'context_backends' AND column_name = 'protocol'`).Scan(&def2); err != nil || !strings.Contains(def2, "'openai'") {
+		t.Errorf("protocol column default = %q (err %v), want 'openai'", def2, err)
+	}
+
 	if _, err := pool.Exec(ctx,
 		`INSERT INTO context_backends (name, base_url, protocol, api_key_ref, locality, num_ctx)
 		 VALUES ('anthropic-it', 'https://api.anthropic.com', 'anthropic', 'anthropic-chat', 'external', 100000)`); err != nil {

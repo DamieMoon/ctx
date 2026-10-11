@@ -1,6 +1,8 @@
 // Live smoke of the anthropic wire against api.anthropic.com. Skipped under
-// -short and without CTX_ANTHROPIC_SMOKE_KEY, so CI never spends tokens; run
-// it by hand from a shell that holds the key:
+// -short and without CTX_ANTHROPIC_SMOKE_KEY, so CI never spends tokens —
+// note the integration job runs WITHOUT -short, so there the gate is the
+// absent variable alone (nothing in this file does work before the skip).
+// Run it by hand from a shell that holds the key:
 //
 //	CTX_ANTHROPIC_SMOKE_KEY=sk-ant-… go test ./internal/llm/ -run Live -count=1 -v
 //
@@ -128,12 +130,17 @@ func TestAnthropicLiveStreamToolRoundTrip(t *testing.T) {
 		Name: "get_weather", Description: "Current weather for a city",
 		Parameters: json.RawMessage(`{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}`),
 	}}
+	// A short tool turn may come back without any thinking block (adaptive
+	// thinking skips trivial turns — observed live 2026-10-11), which would
+	// leave the replay path unexercised. Ask for visible reasoning and a
+	// question that needs a step of deliberation before the call.
+	b.ExtraBody = map[string]any{"thinking": map[string]any{"type": "adaptive", "display": "summarized"}}
 	msgs := []ChatMsg{
-		{Role: "system", Content: "You are a weather assistant. Use the get_weather tool to answer weather questions; never guess."},
-		{Role: "user", Content: "What is the weather in Berlin right now? Use the tool."},
+		{Role: "system", Content: "You are a weather assistant. Use the get_weather tool to answer weather questions; never guess. Think about which city the user means before calling the tool."},
+		{Role: "user", Content: "I am in the capital of Germany. Is it warm enough for a t-shirt outside right now? Use the tool."},
 	}
 	var events []StreamEvent
-	res, err := ChatStreamBackend(ctx, b, b.Model, msgs, []ToolDef{tool}, Options{NumPredict: 1024}, 90*time.Second, collectEvents(&events))
+	res, err := ChatStreamBackend(ctx, b, b.Model, msgs, []ToolDef{tool}, Options{NumPredict: 2048, Extra: map[string]any{"effort": "high"}}, 90*time.Second, collectEvents(&events))
 	if err != nil {
 		t.Fatalf("first stream: %v", err)
 	}
@@ -167,9 +174,14 @@ func TestAnthropicLiveStreamToolRoundTrip(t *testing.T) {
 	if final.CacheReadTokens == 0 {
 		t.Logf("note: no cache read on the second iteration (prefix below the 512-token minimum is expected for this tiny prompt)")
 	}
+	if len(res.ProviderBlocks) == 0 {
+		t.Logf("REPLAY PATH NOT EXERCISED: the first turn carried no thinking block, so the round trip above and the one below are identical requests")
+		return
+	}
 
 	// The same round trip WITHOUT the thinking block is what the wire did
-	// before the review fix — record what the API says about it today.
+	// before the review fix — record what the API says about a STRIPPED
+	// block today (only meaningful when one was produced, see above).
 	noThinking := append([]ChatMsg{}, msgs[:2]...)
 	noThinking = append(noThinking,
 		ChatMsg{Role: "assistant", Content: res.Content, ToolCalls: res.ToolCalls},

@@ -503,8 +503,8 @@ func TestAnthropicMessagesRepairsEmptyToolIDs(t *testing.T) {
 // TestAnthropicStreamThinkingBlocksReplayFirst: the fixture's thinking block
 // (empty text, signature — the default display) is re-assembled into
 // StreamResult.ProviderBlocks and placed FIRST in the replayed assistant
-// turn, ahead of text and tool_use — the API's ordering rule for the final
-// assistant turn of a tool loop on the Claude 5 models.
+// turn, ahead of text and tool_use — the order the API produced them in,
+// which the reference asks to be kept while a tool_use awaits its result.
 func TestAnthropicStreamThinkingBlocksReplayFirst(t *testing.T) {
 	srv := serveFixture(t, "anthropic_tool_use.sse")
 	defer srv.Close()
