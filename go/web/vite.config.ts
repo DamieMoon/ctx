@@ -25,15 +25,10 @@ function keepGitkeep(): PluginOption {
 }
 
 export default defineConfig({
-  resolve: {
-    alias: {
-      // RV1: @cosmos.gl/graph importiert `gl-bench` top-level (FPS-Monitor,
-      // nur bei showFPSMonitor aktiv). Rolldown löst auf die min-UMD ohne
-      // default-Export auf und bricht den Release-Build (MISSING_EXPORT) —
-      // das Paket bringt die saubere ESM-Variante selbst mit; hart darauf pinnen.
-      'gl-bench': 'gl-bench/dist/gl-bench.module.js',
-    },
-  },
+  // Kein gl-bench-Alias mehr: ab @cosmos.gl/graph 3.5 importiert das Paket
+  // `gl-bench/dist/gl-bench.module.js` selbst (RV1 musste das erzwingen, weil
+  // Rolldown sonst die min-UMD ohne default-Export zog). Der alte Präfix-Alias
+  // würde den vollen Pfad jetzt doppeln und den Build brechen.
   plugins: [
     svelte(),
     // Pre-compress at build time; the Go handler (go/web/web.go) negotiates

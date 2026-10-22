@@ -6,7 +6,7 @@
       "name": "ctx-web",
       "dependencies": {
         "@atlaskit/pragmatic-drag-and-drop": "3.1.0",
-        "@cosmos.gl/graph": "3.4.1",
+        "@cosmos.gl/graph": "3.5.1",
         "@deck.gl/core": "9.3.11",
         "@deck.gl/layers": "9.3.11",
         "@sigma/edge-curve": "3.1.0",
@@ -69,7 +69,7 @@
 
     "@cacheable/utils": ["@cacheable/utils@2.5.0", "", { "dependencies": { "hashery": "^1.5.1", "keyv": "^5.6.0" } }, "sha512-buipgOVDkkPXNR5+xBpDw7Zk2n1EvU7qBJCNUcL7rhQ//kfpOXPAvQ511Os0vpLYJ1pZnvudNytkQt2hst3wqA=="],
 
-    "@cosmos.gl/graph": ["@cosmos.gl/graph@3.4.1", "", { "dependencies": { "@luma.gl/core": "~9.3.6", "@luma.gl/engine": "~9.3.6", "@luma.gl/shadertools": "~9.3.6", "@luma.gl/webgl": "~9.3.6", "d3-array": "^3.2.0", "d3-color": "^3.1.0", "d3-drag": "^3.0.0", "d3-ease": "^3.0.1", "d3-scale": "^4.0.2", "d3-selection": "^3.0.0", "d3-transition": "^3.0.1", "d3-zoom": "^3.0.0", "dompurify": "^3.4.13", "gl-bench": "^1.0.42", "gl-matrix": "^3.4.3", "random": "^4.1.0" } }, "sha512-dPbc2g+Hbu2djVjd7fkMqth8lvcjzFM1/byCbzF45kqkRAx7snMm0zifPR3xFL+THVHfy3x4Ep9uuQgPaxrQDg=="],
+    "@cosmos.gl/graph": ["@cosmos.gl/graph@3.5.1", "", { "dependencies": { "d3-array": "^3.2.0", "d3-color": "^3.1.0", "d3-drag": "^3.0.0", "d3-ease": "^3.0.1", "d3-scale": "^4.0.2", "d3-selection": "^3.0.0", "d3-transition": "^3.0.1", "d3-zoom": "^3.0.0", "dompurify": "^3.4.13", "gl-bench": "^1.0.42", "gl-matrix": "^3.4.3", "random": "^4.1.0" }, "peerDependencies": { "@luma.gl/core": "~9.3.0", "@luma.gl/engine": "~9.3.0", "@luma.gl/shadertools": "~9.3.0", "@luma.gl/webgl": "~9.3.0" } }, "sha512-PBXR+afmdVHExEtY7353pifxST2+Mm80V+MA4L/A5WQHpLKXlqyHtM+mdrNwBNzjl1HgwZuM4G3Yk7objREysw=="],
 
     "@csstools/color-helpers": ["@csstools/color-helpers@6.1.2", "", {}, "sha512-grhRy3OKmniaAEKXMjua5z/EODX0MSqBGjunw8+j/3HQjOnahs2AGhvEOIYVUWcU6ScApbhLhVrQTX8XqrMrow=="],
 

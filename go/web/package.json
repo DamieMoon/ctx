@@ -50,7 +50,7 @@
   },
   "dependencies": {
     "@atlaskit/pragmatic-drag-and-drop": "3.1.0",
-    "@cosmos.gl/graph": "3.4.1",
+    "@cosmos.gl/graph": "3.5.1",
     "@deck.gl/core": "9.3.11",
     "@deck.gl/layers": "9.3.11",
     "@sigma/edge-curve": "3.1.0",
