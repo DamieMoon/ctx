@@ -303,17 +303,18 @@ func chatStreamAnthropic(ctx context.Context, b backends.Backend, model string,
 	msgs []ChatMsg, tools []ToolDef, opts Options, timeout time.Duration,
 	onEvent func(StreamEvent) error) (*StreamResult, error) {
 	system, messages := anthropicMessages(msgs, len(tools) > 0)
+	effort := resolveAnthropicEffort(opts, &b)
 	var toolChoice *anthropicToolChoice
 	if opts.ToolChoiceNone && len(tools) > 0 {
 		toolChoice = &anthropicToolChoice{Type: "none"}
 	}
 	req := anthropicRequest{
 		Model:        model,
-		MaxTokens:    anthropicMaxTokens(opts),
+		MaxTokens:    anthropicMaxTokens(opts, effort),
 		System:       anthropicSystem(system),
 		Messages:     messages,
 		Stream:       true,
-		OutputConfig: anthropicOutputConfig{Effort: resolveAnthropicEffort(opts, &b)},
+		OutputConfig: anthropicOutputConfig{Effort: effort},
 		Tools:        anthropicTools(tools),
 		ToolChoice:   toolChoice,
 		// Top-level automatic caching: the API places a breakpoint on the
@@ -349,7 +350,11 @@ func chatStreamAnthropic(ctx context.Context, b backends.Backend, model string,
 		return nil, anthropicStatusError(resp)
 	}
 
-	return parseAnthropicSSE(resp.Body, onEvent)
+	res, err := parseAnthropicSSE(resp.Body, onEvent)
+	if err == nil && outputLimitWithoutText(opts, res.FinishReason, res.Content, len(res.ToolCalls)) {
+		return nil, errOutputLimitNoText(req.MaxTokens, effort, res.CompletionTokens)
+	}
+	return res, err
 }
 
 // --- SSE parsing ---.

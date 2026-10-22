@@ -89,6 +89,15 @@ type Options struct {
 	// — its closing call sends no tools array at all (E4). JSON-tagged off:
 	// never an Ollama option.
 	ToolChoiceNone bool `json:"-"`
+	// ExactMaxTokens: the anthropic wire sends NumPredict as max_tokens
+	// verbatim — no thinking reserve — and accepts an answer that stopped at
+	// max_tokens before any text. Set only by the calls whose answer is NOT
+	// read from the text: the backend-test connectivity probe (ProbeOptions,
+	// one token, a reachability check) and the decide primitive
+	// (DecideOptions, which reads logprobs — this wire returns none, so the
+	// call only has to be cheap). Every other wire ignores it. JSON-tagged
+	// off: never an Ollama option.
+	ExactMaxTokens bool `json:"-"`
 }
 
 // ChatResponse is the unified response from any provider.

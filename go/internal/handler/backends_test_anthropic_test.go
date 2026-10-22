@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -64,5 +66,35 @@ func TestBackendTestAnthropicProbe(t *testing.T) {
 	}
 	if hdr.Get("Authorization") != "" {
 		t.Errorf("probe sent a Bearer header on the anthropic wire: %q", hdr.Get("Authorization"))
+	}
+}
+
+// TestChatProbeAnthropicKeepsOneToken: the production chatProbe sends
+// max_tokens 1 on the anthropic wire — no thinking reserve — and reports the
+// empty max_tokens answer of a thinking model as reachable (it checks
+// connectivity, not an answer).
+func TestChatProbeAnthropicKeepsOneToken(t *testing.T) {
+	var mu sync.Mutex
+	var maxTokens any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		mu.Lock()
+		maxTokens = body["max_tokens"]
+		mu.Unlock()
+		_, _ = w.Write([]byte(`{"id":"m","content":[{"type":"thinking","thinking":"","signature":"s"}],"stop_reason":"max_tokens","usage":{"input_tokens":20,"output_tokens":1}}`))
+	}))
+	t.Cleanup(srv.Close)
+	_, err := chatProbe(context.Background(), backends.Backend{
+		Host: srv.URL, Protocol: backends.ProtocolAnthropic, ProviderClass: backends.ProviderGeneric,
+		Model: "claude-opus-5-5", APIKey: "sk-ant-test",
+	})
+	if err != nil {
+		t.Fatalf("chatProbe: %v, want the empty max_tokens answer accepted", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if maxTokens != float64(1) {
+		t.Errorf("max_tokens = %v, want 1 (the probe stays a one-token call)", maxTokens)
 	}
 }

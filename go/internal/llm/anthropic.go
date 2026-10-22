@@ -29,7 +29,10 @@
 //     dream stages answer with arrays, so ChatJSON is a documented no-op on
 //     this wire — the pipelines' local parsers stay the validator, exactly
 //     the CTX_DREAM_JSON_MODE=off contract (docs/operations.md).
-//   - max_tokens is REQUIRED and thinking tokens count against it.
+//   - max_tokens is REQUIRED and thinking tokens count against it: the
+//     wire sends NumPredict plus a per-effort thinking reserve
+//     (anthropicMaxTokens), and an answer that still ends at the limit
+//     without any text is ErrOutputLimitNoText, never an empty answer.
 //   - usage.input_tokens is the UNCACHED remainder; the total prompt is
 //     input + cache_read + cache_creation (anthropicUsageTotals), which is
 //     what PromptTokens reports so llmlog's prompt_tokens stays comparable
@@ -57,6 +60,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -78,10 +82,26 @@ const (
 	// the safety net for a bare Options{}, sized so a long answer is not
 	// cut mid-thought (claude-api reference default for non-streaming).
 	anthropicDefaultMaxTokens = 16000
+	// anthropicMaxOutputTokens is the output ceiling of the Claude 5 models
+	// this wire targets (Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 128K) — the cap
+	// on NumPredict + thinking reserve.
+	anthropicMaxOutputTokens = 128000
 	// anthropicEffortKey is the model_map params / extra_body key that is
 	// LIFTED into output_config.effort instead of being merged top-level.
 	anthropicEffortKey = "effort"
 )
+
+// ErrOutputLimitNoText: the answer stopped at max_tokens (or the context
+// window) before any text — on a thinking model the reasoning spent the
+// whole budget. Surfaced as an error so the pipeline does not take an empty
+// string for an answer.
+var ErrOutputLimitNoText = errors.New("llm: anthropic: output limit reached before any answer text")
+
+// ProbeOptions is the backend-test connectivity probe's request: one output
+// token, exact (no thinking reserve), success on an empty max_tokens answer.
+func ProbeOptions() Options {
+	return Options{Temperature: 0, NumPredict: 1, ExactMaxTokens: true}
+}
 
 // --- request shape ---.
 
@@ -193,11 +213,59 @@ func resolveAnthropicEffort(opts Options, b *backends.Backend) string {
 	return backends.AnthropicDefaultEffort
 }
 
-func anthropicMaxTokens(opts Options) int {
-	if opts.NumPredict > 0 {
-		return opts.NumPredict
+// anthropicThinkingReserve is added to the pipeline's visible-output budget
+// on this wire. Thinking tokens count against max_tokens and Claude Opus 5.5
+// cannot stop thinking, so a NumPredict sized for the ANSWER (translate 100,
+// topiclabel 128, temporal 300, synthesis 500) would let the reasoning spend
+// the whole budget and end the call at max_tokens with no text
+// (platform.claude.com/docs/en/build-with-claude/thinking-troubleshooting,
+// "The response stops with stop_reason max_tokens": "Raise max_tokens to
+// leave room for both thinking and text"). max_tokens is a ceiling, not a
+// charge — billing follows the tokens actually generated — so the reserve
+// is sized generously and doubles per effort step (thinking depth is what
+// effort steers). No figure for thinking length per effort level is
+// published; these are ceilings chosen to stay out of the way of a short
+// pipeline answer at every level, not measurements. An operator who sees
+// ErrOutputLimitNoText rows still raises the role's model_map
+// params.max_tokens (the visible budget) or lowers the effort.
+var anthropicThinkingReserve = map[string]int{
+	"low": 4096, "medium": 8192, "high": 16384, "xhigh": 32768, "max": 65536,
+}
+
+// anthropicMaxTokens is max_tokens for one call: the visible budget
+// (NumPredict, or the fallback for a bare Options{}) plus the thinking
+// reserve of the resolved effort, capped at the output ceiling.
+// ExactMaxTokens sends the visible budget verbatim (the 1-token probe,
+// decide).
+func anthropicMaxTokens(opts Options, effort string) int {
+	n := opts.NumPredict
+	if n <= 0 {
+		n = anthropicDefaultMaxTokens
 	}
-	return anthropicDefaultMaxTokens
+	if opts.ExactMaxTokens {
+		return n
+	}
+	reserve, ok := anthropicThinkingReserve[effort]
+	if !ok {
+		reserve = anthropicThinkingReserve[backends.AnthropicDefaultEffort]
+	}
+	return min(n+reserve, anthropicMaxOutputTokens)
+}
+
+// outputLimitWithoutText reports the thinking-ate-the-budget case: the
+// answer ended at the output limit (finish "length": max_tokens or the
+// context window) with no text and no tool call. ExactMaxTokens callers
+// expect exactly that (the 1-token probe) and are exempt.
+func outputLimitWithoutText(opts Options, finish, text string, toolCalls int) bool {
+	return !opts.ExactMaxTokens && finish == "length" && toolCalls == 0 && strings.TrimSpace(text) == ""
+}
+
+// errOutputLimitNoText wraps ErrOutputLimitNoText with what the operator
+// needs to size the budget: the max_tokens sent, the effort, the output
+// tokens the model reported.
+func errOutputLimitNoText(maxTokens int, effort string, outputTokens int) error {
+	return fmt.Errorf("%w (max_tokens=%d, effort=%s, output_tokens=%d; raise the role's model_map params.max_tokens or lower the effort)",
+		ErrOutputLimitNoText, maxTokens, effort, outputTokens)
 }
 
 // promptguardRuleMarker is the opening of promptguard.Rule's sentence — the
@@ -324,12 +392,13 @@ func anthropicStatusError(resp *http.Response) error {
 // accepted for signature parity and ignored (see the package comment on
 // structured outputs); think is ignored (thinking cannot be disabled).
 func chatAnthropic(ctx context.Context, b backends.Backend, systemPrompt, userPrompt string, opts Options, _ string, timeout time.Duration) (*ChatResponse, error) {
+	effort := resolveAnthropicEffort(opts, &b)
 	req := anthropicRequest{
 		Model:        b.Model,
-		MaxTokens:    anthropicMaxTokens(opts),
+		MaxTokens:    anthropicMaxTokens(opts, effort),
 		System:       anthropicSystem(systemPrompt),
 		Messages:     []anthropicMessage{{Role: "user", Content: userPrompt}},
-		OutputConfig: anthropicOutputConfig{Effort: resolveAnthropicEffort(opts, &b)},
+		OutputConfig: anthropicOutputConfig{Effort: effort},
 	}
 	body, err := buildAnthropicBody(req, opts, &b)
 	if err != nil {
@@ -366,6 +435,10 @@ func chatAnthropic(ctx context.Context, b backends.Backend, systemPrompt, userPr
 			text.WriteString(blk.Text)
 		}
 	}
+	finish := mapAnthropicStopReason(result.StopReason)
+	if outputLimitWithoutText(opts, finish, text.String(), 0) {
+		return nil, errOutputLimitNoText(req.MaxTokens, effort, result.Usage.OutputTokens)
+	}
 	prompt, output, cacheRead, cacheCreate := anthropicUsageTotals(result.Usage)
 	return &ChatResponse{
 		Message:             Message{Role: "assistant", Content: text.String()},
@@ -373,7 +446,7 @@ func chatAnthropic(ctx context.Context, b backends.Backend, systemPrompt, userPr
 		PromptTokens:        prompt,
 		CacheReadTokens:     cacheRead,
 		CacheCreationTokens: cacheCreate,
-		FinishReason:        mapAnthropicStopReason(result.StopReason),
+		FinishReason:        finish,
 		// The message id (msg_…) is the audit handle that exists on both the
 		// stream and the non-stream path (the request-id header is the one
 		// support quotes; it is not read here). The model column stays

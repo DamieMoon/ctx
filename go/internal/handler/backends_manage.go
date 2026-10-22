@@ -914,8 +914,10 @@ func trustRankRose(prev, next backends.Trust) bool {
 // doubles as the admission-anchored deadline hint of the probe's lease.
 const probeChatTimeout = 15 * time.Second
 
-// chatProbe is indirected for tests.
+// chatProbe is indirected for tests. llm.ProbeOptions keeps it a one-token
+// call on every wire — on the anthropic wire without the thinking reserve,
+// and with an empty max_tokens answer counted as reachable.
 var chatProbe = func(ctx context.Context, b backends.Backend) (any, error) {
 	return llm.Chat(ctx, b, "You are a connectivity probe.", "Reply with: ok",
-		llm.Options{Temperature: 0, NumPredict: 1}, probeChatTimeout)
+		llm.ProbeOptions(), probeChatTimeout)
 }

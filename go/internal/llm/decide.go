@@ -84,13 +84,17 @@ func FirstTokenLogprobs(sampled string, sampledLogprob *float64, alts []TokenLog
 // token, top-20 alternatives. NumPredict is CapLocked so a serving row's
 // generous num_predict for the role's other phases cannot inflate the one
 // token into a paragraph — the answer is read before decoding anyway, the
-// lock only protects the cost.
+// lock only protects the cost. ExactMaxTokens keeps it one token on the
+// anthropic wire too (no thinking reserve): that wire returns no logprobs, so
+// the call ends in ErrNoLogprobs and the decide-incapable memo whatever it
+// generates — it only has to stay cheap.
 func DecideOptions() Options {
 	return Options{
-		Temperature: 0,
-		NumPredict:  1,
-		CapLocked:   true,
-		TopLogprobs: 20,
+		Temperature:    0,
+		NumPredict:     1,
+		CapLocked:      true,
+		TopLogprobs:    20,
+		ExactMaxTokens: true,
 	}
 }
 

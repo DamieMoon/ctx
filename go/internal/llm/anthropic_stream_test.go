@@ -277,7 +277,7 @@ func TestAnthropicStreamRequestWire(t *testing.T) {
 	if err := json.Unmarshal(*body, &req); err != nil {
 		t.Fatalf("request body not JSON: %v\n%s", err, *body)
 	}
-	if req["stream"] != true || req["model"] != "claude-opus-5-5" || req["max_tokens"] != float64(256) {
+	if req["stream"] != true || req["model"] != "claude-opus-5-5" || req["max_tokens"] != float64(256+anthropicThinkingReserve["high"]) {
 		t.Errorf("stream/model/max_tokens = %v/%v/%v", req["stream"], req["model"], req["max_tokens"])
 	}
 	if oc, _ := req["output_config"].(map[string]any); oc["effort"] != "high" {
@@ -707,5 +707,25 @@ func TestAnthropicMessagesWithoutToolsRendersText(t *testing.T) {
 		if !strings.Contains(s, want) {
 			t.Errorf("rendered history lacks %s:\n%s", want, s)
 		}
+	}
+}
+
+// TestAnthropicStreamMaxTokensWithoutTextIsAnError: the stream twin — a
+// stream that ends at max_tokens with no text and no tool call is the
+// thinking-ate-the-budget case, an error rather than an empty chat answer.
+func TestAnthropicStreamMaxTokensWithoutTextIsAnError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("data: {\"type\":\"message_start\",\"message\":{\"id\":\"m\",\"usage\":{\"input_tokens\":3}}}\n\n" +
+			"data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\n" +
+			"data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"signature_delta\",\"signature\":\"sig\"}}\n\n" +
+			"data: {\"type\":\"content_block_stop\",\"index\":0}\n\n" +
+			"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"max_tokens\"},\"usage\":{\"output_tokens\":40}}\n\n" +
+			"data: {\"type\":\"message_stop\"}\n\n"))
+	}))
+	defer srv.Close()
+	_, err := ChatStreamBackend(context.Background(), anthropicStreamBackend(srv.URL), "m",
+		[]ChatMsg{{Role: "user", Content: "hi"}}, nil, Options{NumPredict: 8}, 5*time.Second, nil)
+	if !errors.Is(err, ErrOutputLimitNoText) {
+		t.Fatalf("err = %v, want ErrOutputLimitNoText", err)
 	}
 }

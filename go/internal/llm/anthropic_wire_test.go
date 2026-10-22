@@ -119,8 +119,8 @@ func TestAnthropicRequestWire(t *testing.T) {
 	if body["model"] != "claude-opus-5-5" {
 		t.Errorf("model = %v", body["model"])
 	}
-	if body["max_tokens"] != float64(5) {
-		t.Errorf("max_tokens = %v, want NumPredict 5", body["max_tokens"])
+	if body["max_tokens"] != float64(5+anthropicThinkingReserve[backends.AnthropicDefaultEffort]) {
+		t.Errorf("max_tokens = %v, want NumPredict 5 plus the medium thinking reserve", body["max_tokens"])
 	}
 	if _, has := body["stream"]; has {
 		t.Errorf("stream key present on the non-streaming path: %v", body["stream"])
@@ -211,7 +211,7 @@ func TestAnthropicExtraBodyMerge(t *testing.T) {
 	if ss, _ := body["stop_sequences"].([]any); len(ss) != 1 || ss[0] != "END" {
 		t.Errorf("model_map param stop_sequences did not reach the wire: %v", body["stop_sequences"])
 	}
-	if body["max_tokens"] != float64(5) {
+	if body["max_tokens"] != float64(5+anthropicThinkingReserve[backends.AnthropicDefaultEffort]) {
 		t.Errorf("max_tokens = %v, the merge must not disturb the modelled fields", body["max_tokens"])
 	}
 }
@@ -239,7 +239,8 @@ func TestAnthropicJSONModeIsNoOp(t *testing.T) {
 }
 
 // TestAnthropicMaxTokensRequired: max_tokens cannot be omitted on this wire,
-// so a bare Options{} gets the documented fallback instead of a 400.
+// so a bare Options{} gets the documented fallback (plus the thinking
+// reserve of the default effort) instead of a 400.
 func TestAnthropicMaxTokensRequired(t *testing.T) {
 	rec := newAnthropicRecorder(t, 200, anthropicRespOK, nil)
 	b := anthropicTestBackend(rec.srv.URL)
@@ -247,8 +248,8 @@ func TestAnthropicMaxTokensRequired(t *testing.T) {
 		t.Fatalf("Chat: %v", err)
 	}
 	_, body, _ := rec.recorded()
-	if body["max_tokens"] != float64(anthropicDefaultMaxTokens) {
-		t.Errorf("max_tokens = %v, want the fallback %d", body["max_tokens"], anthropicDefaultMaxTokens)
+	if want := anthropicDefaultMaxTokens + anthropicThinkingReserve[backends.AnthropicDefaultEffort]; body["max_tokens"] != float64(want) {
+		t.Errorf("max_tokens = %v, want the fallback plus reserve %d", body["max_tokens"], want)
 	}
 }
 
@@ -429,5 +430,81 @@ func TestAnthropicNonStreamHasNoTopLevelCacheControl(t *testing.T) {
 	_, body, _ := rec.recorded()
 	if _, has := body["cache_control"]; has {
 		t.Errorf("top-level cache_control on the non-stream path: %v", body["cache_control"])
+	}
+}
+
+// --- thinking reserve on max_tokens (review finding 2) ---.
+
+// anthropicRespThinkingOnly is what Claude Opus 5.5 answers when adaptive
+// thinking spent the whole max_tokens before the first text token.
+const anthropicRespThinkingOnly = `{"id":"msg_cap","type":"message","role":"assistant","model":"claude-opus-5-5",
+  "content":[{"type":"thinking","thinking":"","signature":"sig"}],
+  "stop_reason":"max_tokens","usage":{"input_tokens":10,"output_tokens":105}}`
+
+// TestAnthropicMaxTokensThinkingReserve: thinking tokens count against
+// max_tokens (platform.claude.com/docs/en/build-with-claude/thinking-troubleshooting),
+// so the wire sends the pipeline's visible budget PLUS a reserve that grows
+// with the effort level, capped at the 128K output ceiling. ExactMaxTokens
+// (the 1-token probe, decide) sends NumPredict verbatim.
+func TestAnthropicMaxTokensThinkingReserve(t *testing.T) {
+	cases := []struct {
+		name   string
+		effort string
+		opts   Options
+		want   int
+	}{
+		{"default effort medium", "", Options{NumPredict: 500}, 500 + 8192},
+		{"low", "low", Options{NumPredict: 100}, 100 + 4096},
+		{"high", "high", Options{NumPredict: 300}, 300 + 16384},
+		{"xhigh", "xhigh", Options{NumPredict: 128}, 128 + 32768},
+		{"max", "max", Options{NumPredict: 500}, 500 + 65536},
+		{"capped at the output ceiling", "max", Options{NumPredict: 100000}, 128000},
+		{"bare options keep the fallback plus reserve", "", Options{}, anthropicDefaultMaxTokens + 8192},
+		{"exact: probe", "high", Options{NumPredict: 1, ExactMaxTokens: true}, 1},
+	}
+	for _, tc := range cases {
+		rec := newAnthropicRecorder(t, 200, anthropicRespOK, nil)
+		b := anthropicTestBackend(rec.srv.URL)
+		if tc.effort != "" {
+			b.ExtraBody = map[string]any{"effort": tc.effort}
+		}
+		if _, err := Chat(context.Background(), b, "s", "u", tc.opts, 5*time.Second); err != nil {
+			t.Fatalf("%s: Chat: %v", tc.name, err)
+		}
+		_, body, _ := rec.recorded()
+		if body["max_tokens"] != float64(tc.want) {
+			t.Errorf("%s: max_tokens = %v, want %d", tc.name, body["max_tokens"], tc.want)
+		}
+	}
+	if !DecideOptions().ExactMaxTokens || !ProbeOptions().ExactMaxTokens || ProbeOptions().NumPredict != 1 {
+		t.Errorf("decide %+v / probe %+v must keep their one token exact", DecideOptions(), ProbeOptions())
+	}
+}
+
+// TestAnthropicMaxTokensWithoutTextIsAnError: an answer that stopped at
+// max_tokens before any text is the thinking-ate-the-budget case and must
+// surface as its own error, not as an empty answer the pipeline would take
+// for a result. A truncated answer WITH text stays a response (FinishReason
+// length — dream's cap-hit retry reads it), and the 1-token probe keeps its
+// empty max_tokens answer as success.
+func TestAnthropicMaxTokensWithoutTextIsAnError(t *testing.T) {
+	rec := newAnthropicRecorder(t, 200, anthropicRespThinkingOnly, nil)
+	b := anthropicTestBackend(rec.srv.URL)
+	resp, err := Chat(context.Background(), b, "s", "u", Options{NumPredict: 100}, 5*time.Second)
+	if !errors.Is(err, ErrOutputLimitNoText) {
+		t.Fatalf("err = %v (resp %+v), want ErrOutputLimitNoText", err, resp)
+	}
+	if got := backends.Classify(err, backends.ProviderGeneric); got != backends.ClassServerFault {
+		t.Errorf("Classify = %v, want the unclassified stop (server_fault): deterministic per prompt and budget", got)
+	}
+
+	if _, err := Chat(context.Background(), b, "s", "u", ProbeOptions(), 5*time.Second); err != nil {
+		t.Errorf("probe: %v, want the empty max_tokens answer accepted (connectivity only)", err)
+	}
+
+	truncated := newAnthropicRecorder(t, 200, `{"id":"m","content":[{"type":"text","text":"partial"}],"stop_reason":"max_tokens","usage":{"output_tokens":5}}`, nil)
+	r, err := Chat(context.Background(), anthropicTestBackend(truncated.srv.URL), "s", "u", Options{NumPredict: 5}, 5*time.Second)
+	if err != nil || r.Message.Content != "partial" || r.FinishReason != "length" {
+		t.Errorf("truncated answer with text = %+v / %v, want a length response", r, err)
 	}
 }

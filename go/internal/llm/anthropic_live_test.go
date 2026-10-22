@@ -110,8 +110,9 @@ func TestAnthropicLiveEffortAndProbe(t *testing.T) {
 		}
 		t.Logf("effort=%s finish=%q out=%d content=%q", eff, r.FinishReason, r.EvalCount, r.Message.Content)
 	}
-	// The backend-test chat probe shape: max_tokens 1 on a model that thinks.
-	p, err := Chat(ctx, b, "You are a connectivity probe.", "Reply with: ok", Options{Temperature: 0, NumPredict: 1}, 30*time.Second)
+	// The backend-test chat probe shape (handler chatProbe): max_tokens 1,
+	// exact, on a model that thinks.
+	p, err := Chat(ctx, b, "You are a connectivity probe.", "Reply with: ok", ProbeOptions(), 30*time.Second)
 	if err != nil {
 		var se *httpx.StatusError
 		if errors.As(err, &se) {
