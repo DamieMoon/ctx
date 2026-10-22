@@ -296,7 +296,7 @@ jobs:
 
       - name: Upload e2e report + diffs
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: web-e2e-report
           path: |
@@ -342,7 +342,7 @@ jobs:
       # job-local instance that just died — impact null (§3.6 invariant 3).
       - name: Upload live-tier report + traces
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: web-live-report
           path: go/web/e2e/live/.results/
@@ -380,7 +380,7 @@ jobs:
           fetch-depth: 0
 
       - name: Download mock-tier e2e report (from the `web` job)
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: web-e2e-report
           path: web-report
@@ -400,7 +400,7 @@ jobs:
 
       - name: Upload trend line
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: web-trend
           path: trend/
@@ -470,7 +470,7 @@ jobs:
 
       - name: Upload trend line (90d)
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: web-lhci-trend
           path: go/web/e2e/perf/.lhci/trend/
@@ -483,7 +483,7 @@ jobs:
       # broken measurement and must be visibly red, never silently green.
       - name: Upload lhr reports
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: web-lhci-reports
           path: go/web/e2e/perf/.lhci/
@@ -532,7 +532,7 @@ jobs:
 
       - name: Upload coverage
         if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-unit
           path: go/coverage.out
@@ -822,7 +822,7 @@ jobs:
 
       - name: Upload integration coverage
         if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-integration-${{ matrix.shard }}
           path: go/coverage-integration.out
