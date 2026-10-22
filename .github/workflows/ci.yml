@@ -75,7 +75,11 @@ jobs:
           # der es selbst gebaut wurde, und v2.11.4 bricht gegen ein Modul mit
           # `go 1.27.0` mit "the Go language version used to build
           # golangci-lint is lower than the targeted Go version" ab.
-          version: v2.13.2
+          #
+          # Bump auf v2.15.0 (2026-10-22, Dependency-Sweep): staticcheck 0.8.2,
+          # revive 1.17.1, errcheck 1.30.0 — lokal mit go1.27.3 gebaut 0 issues
+          # über den ganzen Baum, kein Fix nötig.
+          version: v2.15.0
           working-directory: go
           args: --timeout=5m
           # Kein Analyse-Cache (2026-08-26): der Cache-Key der Action trägt das
