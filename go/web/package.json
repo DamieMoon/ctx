@@ -21,9 +21,9 @@
     "e2e:live": "bash e2e/live/run-live.sh"
   },
   "devDependencies": {
-    "@axe-core/playwright": "4.13.0",
+    "@axe-core/playwright": "4.14.0",
     "@lhci/cli": "0.15.1",
-    "@playwright/test": "1.63.0",
+    "@playwright/test": "1.64.1",
     "@sveltejs/vite-plugin-svelte": "7.3.1",
     "@tsconfig/svelte": "5.0.8",
     "@types/node": "26.6.5",
@@ -57,7 +57,7 @@
     "three": "0.186.1"
   },
   "overrides": {
-    "playwright-core": "1.63.0",
+    "playwright-core": "1.64.1",
     "undici": "8.12.3",
     "uuid": "11.1.1",
     "tmp": "0.2.7"
