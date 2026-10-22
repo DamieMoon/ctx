@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -2051,6 +2052,63 @@ func (t *txTail) done() {
 	}
 }
 
+// backfillSensLevels lists the four sensitivity levels in ascending rank
+// (backends.Sensitivity.Rank: public 0 … credentials 3), the order the
+// trust head-of-line probe walks.
+var backfillSensLevels = [...]backends.Sensitivity{
+	backends.SensPublic, backends.SensInternal, backends.SensPersonal, backends.SensCredentials,
+}
+
+// embeddableConjunct narrows the backfill pick to the blocks the router's
+// embed chain can serve (review finding M2). failed is the floor-adjusted
+// sensitivity whose chain just came back empty. Chain eligibility is
+// downward-closed in rank — the only sensitivity-dependent gate in
+// Pool.Chain is Trust.Allows, a rank threshold — so failed and every
+// stricter level are out, and probing the weaker levels strictest-first
+// finds the ceiling: the first level that resolves, together with every
+// level below it. A block is servable iff max(sensitivity, floor(scope)) is
+// at most the ceiling, i.e. iff its own sensitivity is AND its scope's floor
+// is — two plain SQL conjuncts (the column's CHECK pins the four values):
+//
+//	AND sensitivity = ANY($n)   the levels up to the ceiling
+//	AND scope <> ALL($n+1)      scopes whose floor alone lifts above it
+//
+// The floors come from the same snapshot the router was built from
+// (newRouter: Floor = cfg.Pool.ScopeSensitivityFloor.Apply) and are read
+// through router.FloorSens. ok=false: not even public resolves — the embed
+// role is out for this tenant (eject profile, disabled rows), nothing to
+// narrow to. argBase is the number of positional args already bound.
+func embeddableConjunct(router *dream.Router, cfg *config.Config, failed backends.Sensitivity, argBase int) (string, []any, bool) {
+	ceiling := -1
+	for r := failed.Rank() - 1; r >= 0; r-- {
+		if _, _, err := router.EmbedChain(backfillSensLevels[r]); err == nil {
+			ceiling = r
+			break
+		}
+	}
+	if ceiling < 0 {
+		return "", nil, false
+	}
+	eligible := make([]string, 0, ceiling+1)
+	for r := 0; r <= ceiling; r++ {
+		eligible = append(eligible, string(backfillSensLevels[r]))
+	}
+	var lifted []string
+	for scope := range cfg.Pool.ScopeSensitivityFloor {
+		if router.FloorSens(backends.SensPublic, scope).Rank() > ceiling {
+			lifted = append(lifted, scope)
+		}
+	}
+	slices.Sort(lifted)
+	conj := fmt.Sprintf("\n\t\t  AND sensitivity = ANY($%d::text[])", argBase+1)
+	args := []any{eligible}
+	if len(lifted) > 0 {
+		conj += fmt.Sprintf("\n\t\t  AND scope <> ALL($%d::text[])", argBase+2)
+		args = append(args, lifted)
+	}
+	return conj, args, true
+}
+
 // backfillArmPoll is how often the dedicated embed-backfill arm re-reads its
 // config while embed_backfill.interval is 0 (arm off), so a hot re-enable
 // takes effect without a restart (contract.recheck_interval convention).
@@ -2165,22 +2223,38 @@ func (s *Scheduler) backfillArmOnce(ctx context.Context, cfg *config.Config, bt 
 // owned == nil is the legacy unbounded pass (default tenant before the
 // entitlement rows exist) and keeps the pre-MT pick byte-identical; at one
 // tenant owned = {private,shared,work} covers every live block.
+//
+// Trust head-of-line (review finding M2, PR #46): when the oldest pending
+// block has no embed chain (its floor-adjusted sensitivity is above every
+// backend this router may use), the pick is narrowed to the blocks the chain
+// CAN serve (embeddableConjunct) and peeks again in the same call. Before,
+// the call returned without a memo and the next one peeked the same block:
+// every younger block — including a caller_timeout block, which only the
+// background arm still takes — waited behind it for good. The skip stays
+// memo-free on purpose (store.EmbedFailureSensitivityIneligible: a pool
+// outage must not park blocks): eligibility is recomputed from the live
+// chain on every pick, so a trust change or a lowered sensitivity makes the
+// block embeddable on the next one. Shared by the dream loop and the
+// dedicated arm.
 func (s *Scheduler) backfillOneEmbedding(ctx context.Context, router *dream.Router, cfg *config.Config, owned []string) (bool, error) {
-	scopeConjunct := ""
-	var scopeArgs []any
+	pickConjunct := ""
+	var pickArgs []any
 	if len(owned) > 0 {
-		scopeConjunct = "\n\t\t  AND scope = ANY($1::text[])"
-		scopeArgs = []any{owned}
+		pickConjunct = "\n\t\t  AND scope = ANY($1::text[])"
+		pickArgs = []any{owned}
 	}
-	var peekID, peekSens, peekScope string
-	err := s.pool.QueryRow(ctx,
-		`SELECT id, sensitivity, scope FROM context_blocks
-		WHERE embedding IS NULL AND NOT is_archived`+
-			store.EmbedFailureExcludedPredicate+store.RetrievalExcludedTypePredicate+scopeConjunct+`
-		ORDER BY created_at ASC
-		LIMIT 1`,
-		scopeArgs...,
-	).Scan(&peekID, &peekSens, &peekScope)
+	peek := func() (id, sens, scope string, err error) {
+		err = s.pool.QueryRow(ctx,
+			`SELECT id, sensitivity, scope FROM context_blocks
+			WHERE embedding IS NULL AND NOT is_archived`+
+				store.EmbedFailureExcludedPredicate+store.RetrievalExcludedTypePredicate+pickConjunct+`
+			ORDER BY created_at ASC
+			LIMIT 1`,
+			pickArgs...,
+		).Scan(&id, &sens, &scope)
+		return id, sens, scope, err
+	}
+	peekID, peekSens, peekScope, err := peek()
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}
@@ -2188,11 +2262,35 @@ func (s *Scheduler) backfillOneEmbedding(ctx context.Context, router *dream.Rout
 		return false, fmt.Errorf("backfill: peek: %w", err)
 	}
 
-	peekChain, peekRole, err := router.EmbedChain(router.FloorSens(backends.Sensitivity(peekSens), peekScope))
+	peekRequired := router.FloorSens(backends.Sensitivity(peekSens), peekScope)
+	peekChain, peekRole, err := router.EmbedChain(peekRequired)
 	if err != nil {
-		slog.Warn("scheduler: backfill has no eligible embed backend — block stays unembedded",
-			"block_id", peekID, "error", err)
-		return false, nil
+		conj, args, ok := embeddableConjunct(router, cfg, peekRequired, len(pickArgs))
+		if !ok {
+			// Not even a weaker level resolves: the embed role is out for this
+			// tenant altogether (eject profile, disabled rows) — nothing to
+			// skip to, and nothing is memoized.
+			slog.Warn("scheduler: backfill has no eligible embed backend — block stays unembedded",
+				"block_id", peekID, "error", err)
+			return false, nil
+		}
+		slog.Debug("scheduler: backfill skips blocks no eligible embed backend can serve",
+			"block_id", peekID, "required", peekRequired)
+		pickConjunct += conj
+		pickArgs = append(pickArgs, args...)
+		peekID, peekSens, peekScope, err = peek()
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil // only unservable blocks are pending
+		}
+		if err != nil {
+			return false, fmt.Errorf("backfill: peek: %w", err)
+		}
+		peekChain, peekRole, err = router.EmbedChain(router.FloorSens(backends.Sensitivity(peekSens), peekScope))
+		if err != nil {
+			slog.Warn("scheduler: backfill has no eligible embed backend — block stays unembedded",
+				"block_id", peekID, "error", err)
+			return false, nil
+		}
 	}
 	guarded, releaseLease, err := acquireBackfillLease(ctx, router.EmbedAdmit(), peekChain, peekRole)
 	if err != nil {
@@ -2211,11 +2309,11 @@ func (s *Scheduler) backfillOneEmbedding(ctx context.Context, router *dream.Rout
 		err := tx.QueryRow(ctx,
 			`SELECT id, title, content, sensitivity, scope FROM context_blocks
 			WHERE embedding IS NULL AND NOT is_archived`+
-				store.EmbedFailureExcludedPredicate+store.RetrievalExcludedTypePredicate+scopeConjunct+`
+				store.EmbedFailureExcludedPredicate+store.RetrievalExcludedTypePredicate+pickConjunct+`
 			ORDER BY created_at ASC
 			LIMIT 1
 			FOR UPDATE SKIP LOCKED`,
-			scopeArgs...,
+			pickArgs...,
 		).Scan(&blockID, &title, &content, &sens, &scope)
 		if errors.Is(err, pgx.ErrNoRows) {
 			// Another worker took the peeked block during the admission wait.

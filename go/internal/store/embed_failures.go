@@ -42,7 +42,9 @@ const (
 	// trust-config change plus operator retry is the only way out, not a
 	// timer. Migration-scoped only in W04-4 (the regular backfill keeps its
 	// memo-free "stays unembedded, retried every cycle" semantics for this
-	// case — a pool outage there must not permanently park blocks).
+	// case — a pool outage there must not permanently park blocks; its pick
+	// skips such blocks per cycle instead of stalling on the oldest one,
+	// events.embeddableConjunct, PR #46 review finding M2).
 	EmbedFailureSensitivityIneligible EmbedFailureClass = "sensitivity_ineligible"
 	// EmbedFailureCallerTimeout marks a block whose embed did not fit the
 	// query path's sync budget (embed_backfill.sync_budget) or died with
