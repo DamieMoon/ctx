@@ -258,7 +258,7 @@
                 <button
                   type="button"
                   class="toggle-active"
-                  aria-label={`activation for ${k.label}`}
+                  aria-label={`${k.active ? 'deactivate' : 'activate'} ${k.label}`}
                   disabled={controlDisabled(k, ownerCount, isOwnKey(k.id), keys.busyId === k.id)}
                   onclick={() => void toggleActive(k)}
                 >

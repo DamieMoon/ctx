@@ -268,7 +268,7 @@
               class:on={p.active}
               disabled={busyKey === key}
               aria-pressed={p.active}
-              aria-label={`${profileLabel(p)} umschalten`}
+              aria-label={`${profileLabel(p)} umschalten: ${p.active ? 'ON' : 'OFF'}`}
               onclick={(e) => void toggleProfile(p, e.currentTarget)}
             >
               {p.active ? 'ON' : 'OFF'}

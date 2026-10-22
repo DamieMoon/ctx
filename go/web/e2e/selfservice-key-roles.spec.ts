@@ -136,15 +136,15 @@ test.describe('FE-TK7b: tenant role + activation controls', () => {
 
     // (a) self-row: role + active disabled (no self-elevation / self-lockout).
     await expect(page.getByLabel('role for smoke-key')).toBeDisabled()
-    await expect(page.getByLabel('activation for smoke-key')).toBeDisabled()
+    await expect(page.getByRole('button', { name: /^(de)?activate smoke-key$/ })).toBeDisabled()
 
     // (b) last active owner: role + active disabled (would orphan the tenant).
     await expect(page.getByLabel('role for sole-owner')).toBeDisabled()
-    await expect(page.getByLabel('activation for sole-owner')).toBeDisabled()
+    await expect(page.getByRole('button', { name: /^(de)?activate sole-owner$/ })).toBeDisabled()
 
     // a free member row stays fully editable.
     await expect(page.getByLabel('role for member-key')).toBeEnabled()
-    await expect(page.getByLabel('activation for member-key')).toBeEnabled()
+    await expect(page.getByRole('button', { name: /^(de)?activate member-key$/ })).toBeEnabled()
     expect(errors, errors.join('\n')).toEqual([])
   })
 
@@ -186,11 +186,11 @@ test.describe('FE-TK7b: tenant role + activation controls', () => {
     // Reveal revoked keys so the inactive row is in the list.
     await page.getByRole('checkbox', { name: /show revoked/i }).check()
 
-    const toggle = page.getByLabel('activation for ci-runner')
+    const toggle = page.getByRole('button', { name: /^(de)?activate ci-runner$/ })
     await expect(toggle).toHaveText('activate')
     await toggle.click()
     // api-key-update {active:true} → reload → row now active.
-    await expect(page.getByLabel('activation for ci-runner')).toHaveText('deactivate')
+    await expect(page.getByRole('button', { name: /^(de)?activate ci-runner$/ })).toHaveText('deactivate')
     expect(errors, errors.join('\n')).toEqual([])
   })
 })
