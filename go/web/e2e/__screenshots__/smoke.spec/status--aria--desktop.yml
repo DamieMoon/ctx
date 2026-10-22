@@ -54,7 +54,7 @@
       - text: 2 Backends ·
       - link "konfigurieren →":
         - /url: /settings/backends
-    - button "Eject-Modus umschalten": "OFF"
+    - 'button "Eject-Modus umschalten: OFF"': "OFF"
     - strong: activity
     - paragraph: host idle signal
     - text: no signal

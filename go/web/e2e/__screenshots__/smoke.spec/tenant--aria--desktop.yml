@@ -50,7 +50,7 @@
           - columnheader "created"
           - columnheader "revoke"
       - rowgroup:
-        - row /smoke-key this key owner home home shared active activation for smoke-key 6\/\d+\/\d+, \d+:\d+:\d+ AM \d+-\d+-\d+ revoke/:
+        - row /smoke-key this key owner home home shared active deactivate smoke-key 6\/\d+\/\d+, \d+:\d+:\d+ AM \d+-\d+-\d+ revoke/:
           - cell "smoke-key this key"
           - cell "owner":
             - combobox "role for smoke-key" [disabled]:
@@ -59,14 +59,14 @@
               - option "owner" [selected]
           - cell "home"
           - cell "home shared"
-          - cell "active activation for smoke-key":
+          - cell "active deactivate smoke-key":
             - text: ""
-            - button "activation for smoke-key" [disabled]: deactivate
+            - button "deactivate smoke-key" [disabled]
           - cell /6\/\d+\/\d+, \d+:\d+:\d+ AM/
           - cell /\d+-\d+-\d+/
           - cell "revoke":
             - button "revoke" [disabled]
-        - row /ci-runner member home home active activation for ci-runner — \d+-\d+-\d+ revoke/:
+        - row /ci-runner member home home active deactivate ci-runner — \d+-\d+-\d+ revoke/:
           - cell "ci-runner"
           - cell "member":
             - combobox "role for ci-runner":
@@ -75,9 +75,9 @@
               - option "owner"
           - cell "home"
           - cell "home"
-          - cell "active activation for ci-runner":
+          - cell "active deactivate ci-runner":
             - text: ""
-            - button "activation for ci-runner": deactivate
+            - button "deactivate ci-runner"
           - cell "—"
           - cell /\d+-\d+-\d+/
           - cell "revoke":
