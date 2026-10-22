@@ -14,7 +14,7 @@ RUN bun install --frozen-lockfile
 COPY web/ .
 RUN bun run check && bun run build
 
-FROM golang:1.27-alpine@sha256:4cb7ac979db5fcc41cae44b2227ba5ab8a51e8807f40d9ba4dee20a0ad960b5b AS build
+FROM golang:1.27-alpine@sha256:d530cf60723abf1ffae0cd16bb546b379ec0550d2f3815e5b16ed69dbc00fba4 AS build
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
@@ -24,7 +24,7 @@ COPY . .
 COPY --from=frontend /web/dist ./web/dist
 RUN CGO_ENABLED=0 go build -o /ctx ./cmd/ctxd
 
-FROM gcr.io/distroless/static-debian13:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3
+FROM gcr.io/distroless/static-debian13:nonroot@sha256:d62067879de890a1def9da0e7766b7d20810a5e5555cef8506b752437d7a3e88
 COPY --from=build /ctx /ctx
 ENV GOMEMLIMIT=200MiB
 ENV GOGC=100
