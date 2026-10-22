@@ -263,7 +263,7 @@ func TestAnthropicStreamRequestWire(t *testing.T) {
 	if got := hdr.Get("x-api-key"); got != "sk-ant-test" {
 		t.Errorf("x-api-key = %q", got)
 	}
-	if got := hdr.Get("anthropic-version"); got != anthropicVersion {
+	if got := hdr.Get("anthropic-version"); got != AnthropicVersion {
 		t.Errorf("anthropic-version = %q", got)
 	}
 	if got := hdr.Get("Accept"); got != "text/event-stream" {

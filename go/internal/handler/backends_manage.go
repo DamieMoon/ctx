@@ -824,10 +824,9 @@ func probeBackendURL(ctx context.Context, b *backends.Backend, checks map[string
 	}
 	switch {
 	case anthropic:
-		httpReq.Header.Set("anthropic-version", "2023-06-01")
-		if b.APIKey != "" {
-			httpReq.Header.Set("x-api-key", b.APIKey)
-		}
+		// The wire's own header set: the row's extra_headers, then the
+		// version pin and x-api-key on top (llm.SetAnthropicHeaders).
+		llm.SetAnthropicHeaders(httpReq, b)
 	case b.APIKey != "":
 		httpReq.Header.Set("Authorization", "Bearer "+b.APIKey)
 	}

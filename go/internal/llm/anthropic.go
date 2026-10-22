@@ -7,7 +7,7 @@
 // the Claude 5 models (400 "temperature is deprecated for this model" — and
 // chatOpenAI always sends temperature), drops response_format silently, has
 // no prompt caching and no effort control, and Anthropic documents it as a
-// comparison surface, not a production one. The ku-heimdall install ran a
+// comparison surface, not a production one. A production install ran a
 // stripping sidecar in front of it for exactly those reasons; this file is
 // what makes that sidecar unnecessary.
 //
@@ -74,9 +74,18 @@ import (
 )
 
 const (
-	// anthropicVersion is the Messages API version header. 2023-06-01 is the
-	// only GA value; features ship behind anthropic-beta, not new versions.
-	anthropicVersion = "2023-06-01"
+	// AnthropicVersion is the Messages API version header, shared by the
+	// wire and the backend-test probe (handler/backends_manage.go). It is not
+	// the only version: 2026-10-21 exists too
+	// (platform.claude.com/docs/en/api/versioning — a 400 for a document
+	// block in an assistant message, for citations in a user text block, and
+	// for temperature/top_p/top_k on every model). The wire stays on
+	// 2023-06-01 on purpose: it sends none of what 2026-10-21 removes, so the
+	// request shape is the same under both, and 2023-06-01 is the version the
+	// wire was verified against live (2026-10-11). Moving is a deliberate
+	// step along the migration guide (platform.claude.com/docs/en/api/migration-2026-10-21),
+	// with the live smoke re-run — not a constant to bump in passing.
+	AnthropicVersion = "2023-06-01"
 	// anthropicDefaultMaxTokens applies when the caller sets no NumPredict:
 	// the field is required on this wire, and every production Options
 	// preset sets one (synthesis 500, translate 100, probe 1), so this is
@@ -356,16 +365,17 @@ func buildAnthropicBody(req anthropicRequest, opts Options, b *backends.Backend)
 	return mergeJSONFields(body, extra)
 }
 
-// setAnthropicHeaders mirrors setChatHeaders' doctrine: ExtraHeaders first,
+// SetAnthropicHeaders mirrors setChatHeaders' doctrine: ExtraHeaders first,
 // the core headers LAST so a row edited past the credential-carrier
 // denylist can never override the key derived from api_key_ref or the
-// version pin.
-func setAnthropicHeaders(req *http.Request, b *backends.Backend) {
+// version pin. Exported for the backend-test probe, which must send the
+// same headers the wire does.
+func SetAnthropicHeaders(req *http.Request, b *backends.Backend) {
 	for k, v := range b.ExtraHeaders {
 		req.Header.Set(k, v)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("anthropic-version", anthropicVersion)
+	req.Header.Set("anthropic-version", AnthropicVersion)
 	if b.APIKey != "" {
 		req.Header.Set("x-api-key", b.APIKey)
 	}
@@ -443,7 +453,7 @@ func chatAnthropic(ctx context.Context, b backends.Backend, systemPrompt, userPr
 	if err != nil {
 		return nil, fmt.Errorf("llm: create request: %w", err)
 	}
-	setAnthropicHeaders(httpReq, &b)
+	SetAnthropicHeaders(httpReq, &b)
 
 	resp, err := httpx.DoRetryOnce(httpClient, httpReq, body)
 	if err != nil {

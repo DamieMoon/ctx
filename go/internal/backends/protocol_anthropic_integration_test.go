@@ -14,7 +14,9 @@ import (
 )
 
 // TestMigration155ProtocolCheckAdmitsAnthropic runs the real migration chain
-// on a prod-parity PostgreSQL and pins what Migration 155 changed: the
+// on the testdb PostgreSQL — timescale/timescaledb-ha:pg18 by default, the
+// production image only when CTX_TEST_PG_IMAGE points at it (e.g. the
+// locally built pgvector-timescaledb:pg18) — and pins what Migration 155 changed: the
 // (formerly unnamed) CHECK on context_backends.protocol now carries its
 // explicit name, admits 'anthropic' next to the three original wires, and
 // still rejects anything else with a check_violation (SQLSTATE 23514) — so a

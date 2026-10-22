@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/GottZ/ctx/internal/backends"
+	"github.com/GottZ/ctx/internal/llm"
 )
 
 // TestBackendTestAnthropicProbe: an anthropic-protocol backend-test probes
@@ -42,6 +43,10 @@ func TestBackendTestAnthropicProbe(t *testing.T) {
 		Roles: []string{backends.RoleSynthesis}, NumCtx: 100000,
 		ModelMap: map[string]backends.ModelSpec{"default": {Model: "claude-opus-5-5"}},
 		APIKey:   "sk-ant-test", APIKeyRef: "anthropic-chat", Enabled: true,
+		// The probe honours the row's extra_headers like the wire does —
+		// and, like the wire, never lets them override the version pin or
+		// the key.
+		ExtraHeaders: map[string]string{"X-Title": "ctx", "anthropic-version": "1999-01-01", "x-api-key": "spoofed"},
 	}})
 
 	rec := manageReqWithPool(t, adminAR(), bp, map[string]any{
@@ -61,8 +66,11 @@ func TestBackendTestAnthropicProbe(t *testing.T) {
 	if len(paths) != 1 || paths[0] != "/v1/models" {
 		t.Errorf("probe paths = %v, want exactly /v1/models", paths)
 	}
-	if hdr.Get("x-api-key") != "sk-ant-test" || hdr.Get("anthropic-version") == "" {
-		t.Errorf("probe headers = %v, want x-api-key + anthropic-version", hdr)
+	if hdr.Get("x-api-key") != "sk-ant-test" || hdr.Get("anthropic-version") != llm.AnthropicVersion {
+		t.Errorf("probe headers = %v, want the row's x-api-key + the wire's anthropic-version %s", hdr, llm.AnthropicVersion)
+	}
+	if hdr.Get("X-Title") != "ctx" {
+		t.Errorf("probe dropped the row's extra_headers: %v", hdr)
 	}
 	if hdr.Get("Authorization") != "" {
 		t.Errorf("probe sent a Bearer header on the anthropic wire: %q", hdr.Get("Authorization"))

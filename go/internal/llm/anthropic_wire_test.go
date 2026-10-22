@@ -103,8 +103,8 @@ func TestAnthropicRequestWire(t *testing.T) {
 	if got := hdr.Get("x-api-key"); got != "sk-ant-test" {
 		t.Errorf("x-api-key = %q, want the resolved api_key_ref", got)
 	}
-	if got := hdr.Get("anthropic-version"); got != anthropicVersion {
-		t.Errorf("anthropic-version = %q, want %q (core header must beat extra_headers)", got, anthropicVersion)
+	if got := hdr.Get("anthropic-version"); got != AnthropicVersion {
+		t.Errorf("anthropic-version = %q, want %q (core header must beat extra_headers)", got, AnthropicVersion)
 	}
 	if got := hdr.Get("Authorization"); got != "" {
 		t.Errorf("Authorization = %q, want none (the Messages API authenticates via x-api-key)", got)

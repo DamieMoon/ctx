@@ -356,7 +356,7 @@ func chatStreamAnthropic(ctx context.Context, b backends.Backend, model string,
 	if err != nil {
 		return nil, fmt.Errorf("llm: create request: %w", err)
 	}
-	setAnthropicHeaders(httpReq, &b)
+	SetAnthropicHeaders(httpReq, &b)
 	httpReq.Header.Set("Accept", "text/event-stream")
 
 	resp, err := httpx.DoRetryOnce(httpClient, httpReq, body)
