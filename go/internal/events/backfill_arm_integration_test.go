@@ -302,3 +302,58 @@ func TestEmbedBackfillArm_Pacing_Integration(t *testing.T) {
 		}
 	})
 }
+
+// TestEmbedBackfillArm_IntervalHotReload_Integration: embed_backfill.interval
+// is a hot key, but the arm's idle wait was one time.After(interval) taken
+// when the wait began — lowering an hour-long interval left the arm asleep
+// for the rest of that hour. Grün: the wait runs in slices of at most
+// backfillArmPoll and re-reads the key between slices.
+func TestEmbedBackfillArm_IntervalHotReload_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test")
+	}
+	pool := testdb.SetupTestDB(t)
+	ctx := context.Background()
+	d := dispatch.New(nil, dispatch.DefaultSettings())
+	t.Cleanup(d.Close)
+
+	oldPoll := backfillArmPoll
+	backfillArmPoll = 50 * time.Millisecond
+	t.Cleanup(func() { backfillArmPoll = oldPoll })
+
+	srv := headOfLineEmbedServer(t)
+	bpool := backends.NewPool(nil, nil)
+	bpool.SeedSnapshotForTest([]backends.Backend{embedPoolRow("embed-hot", srv.URL, 100)})
+
+	// Validate-clean generations (Replace runs Validate), differing only in
+	// the interval: one hour, then 100 ms.
+	cfgA := captureTestConfig(t, 12)
+	cfgA.EmbedBackfill.Interval = time.Hour
+	cfgA.EmbedBackfill.MaxTokens = 0
+	cfgB := *cfgA
+	cfgB.EmbedBackfill.Interval = 100 * time.Millisecond
+	st := config.NewStore(cfgA)
+	s := NewScheduler(pool, st, bpool, StartupConfig{DreamEnabled: false})
+	s.SetDispatcher(d)
+
+	armCtx, stop := context.WithCancel(ctx)
+	defer stop()
+	go s.runEmbedBackfillLoop(armCtx)
+
+	// Nothing pending: the first pick is empty and the arm enters its
+	// one-hour idle wait.
+	time.Sleep(300 * time.Millisecond)
+	if err := st.Replace(&cfgB); err != nil {
+		t.Fatalf("store.Replace(interval=100ms): %v", err)
+	}
+	seedPendingBlock(t, pool, "hot-interval-pending", time.Hour)
+	defer clearBlocks(t, pool)
+
+	deadline := time.Now().Add(3 * time.Second)
+	for pendingCount(t, pool) != 0 && time.Now().Before(deadline) {
+		time.Sleep(25 * time.Millisecond)
+	}
+	if got := pendingCount(t, pool); got != 0 {
+		t.Fatalf("pending = %d 3 s after lowering the interval from 1 h to 100 ms: the arm is still in the old wait", got)
+	}
+}

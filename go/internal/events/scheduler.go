@@ -2111,8 +2111,11 @@ func embeddableConjunct(router *dream.Router, cfg *config.Config, failed backend
 
 // backfillArmPoll is how often the dedicated embed-backfill arm re-reads its
 // config while embed_backfill.interval is 0 (arm off), so a hot re-enable
-// takes effect without a restart (contract.recheck_interval convention).
-const backfillArmPoll = 15 * time.Second
+// takes effect without a restart (contract.recheck_interval convention), and
+// the longest slice of its idle wait, so a hot change of the interval itself
+// takes effect within one slice. A var, not a const, for the dreamYieldWait
+// reason: the arm tests shorten it.
+var backfillArmPoll = 15 * time.Second
 
 // runEmbedBackfillLoop is the dedicated background arm for pending
 // embeddings (tracking issue: force-push.me/damienmoon/ctx/issues/1). It is the same work as the call at the
@@ -2123,7 +2126,9 @@ const backfillArmPoll = 15 * time.Second
 // !enforcing() it yields to interactive demand exactly like the dream loop
 // (P-Fallback); under Enforcing the wire call waits at its target in its
 // background lease. Interval <= 0 turns the arm off; it then polls the
-// config every backfillArmPoll so a hot enable needs no restart.
+// config every backfillArmPoll so a hot enable needs no restart, and the
+// idle wait itself re-reads the interval every backfillArmPoll, so a hot
+// change applies within one slice.
 func (s *Scheduler) runEmbedBackfillLoop(ctx context.Context) {
 	slog.Info("scheduler: embed backfill arm started", "poll", backfillArmPoll)
 	var tenantCursor uint64
@@ -2135,6 +2140,30 @@ func (s *Scheduler) runEmbedBackfillLoop(ctx context.Context) {
 			return true
 		}
 	}
+	// waitIdle waits out embed_backfill.interval from now in slices of at
+	// most backfillArmPoll and re-reads the key between slices, so a hot
+	// change takes effect within one slice instead of after the interval that
+	// was current when the wait began (an hour-long interval lowered to 15 s
+	// used to keep the arm asleep for the rest of the hour). Read through the
+	// iterated tenant's snapshot like the loop head; the key is global-only,
+	// so every tenant sees the same value. A switch to 0 (arm off) ends the
+	// wait; the loop head then takes over with its off-poll.
+	waitIdle := func(tenant string) bool {
+		start := time.Now()
+		for {
+			iv := s.cfg.SnapshotForTenant(ctx, tenant).EmbedBackfill.Interval
+			if iv <= 0 {
+				return true
+			}
+			left := time.Until(start.Add(iv))
+			if left <= 0 {
+				return true
+			}
+			if !wait(min(left, backfillArmPoll)) {
+				return false
+			}
+		}
+	}
 	for ctx.Err() == nil {
 		tenants := s.backgroundTenantsFn(ctx)
 		if len(tenants) == 0 {
@@ -2144,8 +2173,7 @@ func (s *Scheduler) runEmbedBackfillLoop(ctx context.Context) {
 		tenantCursor++
 		cfg := s.cfg.SnapshotForTenant(ctx, bt.scope)
 
-		interval := cfg.EmbedBackfill.Interval
-		if interval <= 0 {
+		if cfg.EmbedBackfill.Interval <= 0 {
 			if !wait(backfillArmPoll) {
 				return
 			}
@@ -2171,7 +2199,7 @@ func (s *Scheduler) runEmbedBackfillLoop(ctx context.Context) {
 			// memo cost 1000 such blocks ≈ 4 h at the 15 s default).
 			continue
 		default: // backfillIdle, backfillFailed
-			if !wait(interval) {
+			if !waitIdle(bt.scope) {
 				return
 			}
 		}
