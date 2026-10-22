@@ -109,7 +109,7 @@ jobs:
       # die Ausgabepfade ein cwd-Präfix und kein Allowlist-Schlüssel matcht.
       - name: deadcode allowlist gate
         run: |
-          go install golang.org/x/tools/cmd/deadcode@v0.50.0
+          go install golang.org/x/tools/cmd/deadcode@v0.52.0
           bash "$GITHUB_WORKSPACE/deadcode.sh"
 
       # T02-13: die zweite Ratsche. Derselbe Lauf OHNE `-test` beantwortet die

@@ -73,7 +73,7 @@ PKGS=(./cmd/... ./internal/... ./migrations/...)
 
 if ! command -v deadcode >/dev/null 2>&1; then
     echo "$LABEL: deadcode not found in PATH."
-    echo "  install: GOTOOLCHAIN=\$(go -C go env GOVERSION) go install golang.org/x/tools/cmd/deadcode@v0.50.0"
+    echo "  install: GOTOOLCHAIN=\$(go -C go env GOVERSION) go install golang.org/x/tools/cmd/deadcode@v0.52.0"
     echo "  (GOTOOLCHAIN: deadcode must be built with the toolchain of go/go.mod, else every package fails with 'requires newer Go version')"
     if [[ -n "${CI:-}" ]]; then
         # In CI a missing tool must not pass as a green gate — CI is the

@@ -195,7 +195,7 @@ if command -v deadcode >/dev/null 2>&1; then
     fi
 else
     echo "pre-push: deadcode not found, skipping both allowlist gates (CI enforces them)."
-    echo "  install: GOTOOLCHAIN=\$(go -C go env GOVERSION) go install golang.org/x/tools/cmd/deadcode@v0.50.0"
+    echo "  install: GOTOOLCHAIN=\$(go -C go env GOVERSION) go install golang.org/x/tools/cmd/deadcode@v0.52.0"
     echo "  (GOTOOLCHAIN: deadcode must be built with the toolchain of go/go.mod, else every package fails with 'requires newer Go version')"
 fi
 
