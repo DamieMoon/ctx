@@ -1843,7 +1843,7 @@ func (s *Scheduler) runDreamLoop(ctx context.Context) {
 		readWindow := intersectWindow(cfg.Scheduler.ReadScopes, bt.owned)
 
 		// Top priority: backfill blocks with missing embeddings.
-		if backfilled, err := s.backfillOneEmbedding(ctx, router, cfg); err != nil {
+		if backfilled, err := s.backfillOneEmbedding(ctx, router, cfg, bt.owned); err != nil {
 			slog.Error("scheduler: embed backfill error", "error", err)
 		} else if backfilled {
 			continue // Loop immediately to backfill more before dream runs.
@@ -2072,14 +2072,31 @@ func (t *txTail) done() {
 // failover links, or a pick that landed on a block whose chain starts
 // elsewhere — goes through non-blocking TryAcquire (mechanical rule); a busy
 // follow-up target DEFERS the block to a later cycle instead of waiting.
-func (s *Scheduler) backfillOneEmbedding(ctx context.Context, router *dream.Router, cfg *config.Config) (bool, error) {
+//
+// Tenant window (owned): the router resolves its chain with the ITERATED
+// tenant's backend visibility (newRouter(cfg, bt.scope) → Pool.Chain →
+// VisibleTo), so the pick must stay inside that tenant's owned scopes —
+// otherwise a block of tenant U is embedded on a tenant-private backend of
+// tenant T whenever T's turn comes up (cross-tenant egress, PR #46 review
+// 2026-10-22, reproduced by probe). Same conjunct as dream.PickBlock.
+// owned == nil is the legacy unbounded pass (default tenant before the
+// entitlement rows exist) and keeps the pre-MT pick byte-identical; at one
+// tenant owned = {private,shared,work} covers every live block.
+func (s *Scheduler) backfillOneEmbedding(ctx context.Context, router *dream.Router, cfg *config.Config, owned []string) (bool, error) {
+	scopeConjunct := ""
+	var scopeArgs []any
+	if len(owned) > 0 {
+		scopeConjunct = "\n\t\t  AND scope = ANY($1::text[])"
+		scopeArgs = []any{owned}
+	}
 	var peekID, peekSens, peekScope string
 	err := s.pool.QueryRow(ctx,
 		`SELECT id, sensitivity, scope FROM context_blocks
 		WHERE embedding IS NULL AND NOT is_archived`+
-			store.EmbedFailureExcludedPredicate+store.RetrievalExcludedTypePredicate+`
+			store.EmbedFailureExcludedPredicate+store.RetrievalExcludedTypePredicate+scopeConjunct+`
 		ORDER BY created_at ASC
 		LIMIT 1`,
+		scopeArgs...,
 	).Scan(&peekID, &peekSens, &peekScope)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
@@ -2111,10 +2128,11 @@ func (s *Scheduler) backfillOneEmbedding(ctx context.Context, router *dream.Rout
 		err := tx.QueryRow(ctx,
 			`SELECT id, title, content, sensitivity, scope FROM context_blocks
 			WHERE embedding IS NULL AND NOT is_archived`+
-				store.EmbedFailureExcludedPredicate+store.RetrievalExcludedTypePredicate+`
+				store.EmbedFailureExcludedPredicate+store.RetrievalExcludedTypePredicate+scopeConjunct+`
 			ORDER BY created_at ASC
 			LIMIT 1
 			FOR UPDATE SKIP LOCKED`,
+			scopeArgs...,
 		).Scan(&blockID, &title, &content, &sens, &scope)
 		if errors.Is(err, pgx.ErrNoRows) {
 			// Another worker took the peeked block during the admission wait.

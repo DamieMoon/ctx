@@ -94,7 +94,7 @@ func TestPickReleasedTranslatesToNoWork_Integration(t *testing.T) {
 		release := lockAllBlocks(t, pool)
 		defer release()
 
-		ok, err := s.backfillOneEmbedding(ctx, backfillRouter(bpool, d), qi3Cfg())
+		ok, err := s.backfillOneEmbedding(ctx, backfillRouter(bpool, d), qi3Cfg(), nil)
 		if err != nil {
 			t.Fatalf("backfillOneEmbedding = %v, want nil (der verlorene Pick ist kein Fehler — Übersetzung von errPickReleased fehlt?)", err)
 		}

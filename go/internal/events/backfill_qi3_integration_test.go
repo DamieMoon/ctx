@@ -292,7 +292,7 @@ func TestBackfillQI3_Integration(t *testing.T) {
 		}
 		done := make(chan result, 1)
 		go func() {
-			ok, err := s.backfillOneEmbedding(ctx, backfillRouter(bpool, rec), qi3Cfg())
+			ok, err := s.backfillOneEmbedding(ctx, backfillRouter(bpool, rec), qi3Cfg(), nil)
 			done <- result{ok, err}
 		}()
 
@@ -367,7 +367,7 @@ func TestBackfillQI3_Integration(t *testing.T) {
 		}
 
 		start := time.Now()
-		ok, err := s.backfillOneEmbedding(ctx, backfillRouter(bpool, rec), qi3Cfg())
+		ok, err := s.backfillOneEmbedding(ctx, backfillRouter(bpool, rec), qi3Cfg(), nil)
 		elapsed := time.Since(start)
 		if err != nil || ok {
 			t.Fatalf("deferred backfill = (%v, %v), want (false, nil) — Q-I3 defer, not an error loop", ok, err)
@@ -390,7 +390,7 @@ func TestBackfillQI3_Integration(t *testing.T) {
 
 		// Defer means LATER works: free the follow-up target, run again.
 		holder.Release()
-		ok, err = s.backfillOneEmbedding(ctx, backfillRouter(bpool, rec), qi3Cfg())
+		ok, err = s.backfillOneEmbedding(ctx, backfillRouter(bpool, rec), qi3Cfg(), nil)
 		if err != nil || !ok {
 			t.Fatalf("retry after defer = (%v, %v), want (true, nil)", ok, err)
 		}
@@ -438,7 +438,7 @@ func TestBackfillQI3_Integration(t *testing.T) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				ok, err := s.backfillOneEmbedding(ctx, backfillRouter(bpool, rec), qi3Cfg())
+				ok, err := s.backfillOneEmbedding(ctx, backfillRouter(bpool, rec), qi3Cfg(), nil)
 				if err == nil && !ok {
 					err = context.DeadlineExceeded // marker: nothing picked
 				}
@@ -475,7 +475,7 @@ func TestBackfillQI3_Integration(t *testing.T) {
 		t.Cleanup(d.Close)
 		rec := newQI3Admitter(t, d, pool)
 
-		ok, err := s.backfillOneEmbedding(ctx, backfillRouter(bpool, rec), qi3Cfg())
+		ok, err := s.backfillOneEmbedding(ctx, backfillRouter(bpool, rec), qi3Cfg(), nil)
 		if err != nil || !ok {
 			t.Fatalf("baseline backfill = (%v, %v), want (true, nil)", ok, err)
 		}
@@ -485,7 +485,7 @@ func TestBackfillQI3_Integration(t *testing.T) {
 		if got := pendingCount(t, pool); got != 0 {
 			t.Fatalf("pending after baseline = %d, want 0", got)
 		}
-		ok, err = s.backfillOneEmbedding(ctx, backfillRouter(bpool, rec), qi3Cfg())
+		ok, err = s.backfillOneEmbedding(ctx, backfillRouter(bpool, rec), qi3Cfg(), nil)
 		if err != nil || ok {
 			t.Fatalf("empty-table backfill = (%v, %v), want (false, nil)", ok, err)
 		}

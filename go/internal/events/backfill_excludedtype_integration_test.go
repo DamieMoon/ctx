@@ -95,7 +95,7 @@ func TestBackfillExcludedType_Integration(t *testing.T) {
 
 	// Zyklus 1: der älteste PICKBARE Block ist der knowledge-Block — die
 	// beiden älteren excluded-Typen dürfen den Arm nicht beschäftigen.
-	ok, err := s.backfillOneEmbedding(ctx, router, cfg)
+	ok, err := s.backfillOneEmbedding(ctx, router, cfg, nil)
 	if err != nil {
 		t.Fatalf("cycle 1: unexpected error %v", err)
 	}
@@ -108,7 +108,7 @@ func TestBackfillExcludedType_Integration(t *testing.T) {
 	}
 
 	// Zyklus 2: der Typ ohne Registry-Zeile bleibt embedbar (Fallback).
-	ok, err = s.backfillOneEmbedding(ctx, router, cfg)
+	ok, err = s.backfillOneEmbedding(ctx, router, cfg, nil)
 	if err != nil {
 		t.Fatalf("cycle 2: unexpected error %v", err)
 	}
@@ -121,7 +121,7 @@ func TestBackfillExcludedType_Integration(t *testing.T) {
 
 	// Zyklus 3: nichts mehr pickbar — die beiden excluded-Blöcke sind für
 	// den Arm unsichtbar, nicht bloß hinten angestellt.
-	ok, err = s.backfillOneEmbedding(ctx, router, cfg)
+	ok, err = s.backfillOneEmbedding(ctx, router, cfg, nil)
 	if err != nil {
 		t.Fatalf("cycle 3: unexpected error %v", err)
 	}

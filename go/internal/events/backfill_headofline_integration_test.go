@@ -178,7 +178,7 @@ func TestBackfillHeadOfLine_Integration(t *testing.T) {
 		// back off the wire, gets classified 'oversize', and the memo is
 		// written+committed (next_attempt_at='infinity'). No block is
 		// reported backfilled this cycle.
-		ok, err := s.backfillOneEmbedding(ctx, router, cfg)
+		ok, err := s.backfillOneEmbedding(ctx, router, cfg, nil)
 		if err != nil {
 			t.Fatalf("cycle 1: unexpected error %v", err)
 		}
@@ -209,7 +209,7 @@ func TestBackfillHeadOfLine_Integration(t *testing.T) {
 		// Cycle 2: the oversize block is now excluded by the memo — the
 		// peek reaches the YOUNGER block instead and embeds it. This is the
 		// structural fix: the next PEEK, not a Blind-Retry of the same row.
-		ok, err = s.backfillOneEmbedding(ctx, router, cfg)
+		ok, err = s.backfillOneEmbedding(ctx, router, cfg, nil)
 		if err != nil {
 			t.Fatalf("cycle 2: unexpected error %v", err)
 		}
