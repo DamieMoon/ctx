@@ -2,8 +2,10 @@ package backends
 
 import (
 	"fmt"
+	"maps"
 	"net"
 	"net/url"
+	"slices"
 	"strings"
 )
 
@@ -276,7 +278,99 @@ func validateAnthropic(b *Backend) (errs []FieldError) {
 			}
 		}
 	}
+	return append(errs, validateAnthropicCarrierKeys(b)...)
+}
+
+// anthropicSamplingKeys are rejected by the Claude 5 models with a 400 and
+// removed on every model by Messages API version 2026-10-21
+// (platform.claude.com/docs/en/api/versioning). The wire never marshals
+// Options' sampling fields; these entries close the extra_body hatch.
+var anthropicSamplingKeys = map[string]bool{"temperature": true, "top_p": true, "top_k": true}
+
+// anthropicForeignKeys are request fields of the OpenAI-compatible,
+// llama.cpp/vLLM, OpenRouter and Ollama dialects that the Messages API does
+// not define — merged top-level they are a 400 on every call. Not a closed
+// list of what the API rejects: the extra_body hatch stays open for Messages
+// API fields the wire does not model (thinking.display, stop_sequences,
+// metadata.user_id, …), so this names the keys a row migrated from an
+// openai/ollama row is likely to carry.
+var anthropicForeignKeys = map[string]bool{
+	"chat_template_kwargs": true, "response_format": true, "reasoning": true, "reasoning_effort": true,
+	"seed": true, "frequency_penalty": true, "presence_penalty": true, "logit_bias": true,
+	"logprobs": true, "top_logprobs": true, "n": true, "stop": true, "stream_options": true,
+	"parallel_tool_calls": true, "max_completion_tokens": true, "min_p": true, "repeat_penalty": true,
+	"user": true, "provider": true, "transforms": true, "models": true,
+	"format": true, "options": true, "keep_alive": true, "num_ctx": true,
+}
+
+// anthropicWireOwnedKeys are fields the anthropic wire builds itself; an
+// override from a carrier would replace the request it parses the answer of
+// (stream on the non-stream path, the cached system blocks, the closing
+// call's tool_choice none — and forced tool_choice is a 400 on Claude Opus
+// 5.5). max_tokens is deliberately NOT here: a numeric extra_body.max_tokens
+// is the documented per-row cap override on every wire.
+var anthropicWireOwnedKeys = map[string]bool{
+	"model": true, "messages": true, "system": true, "stream": true, "tools": true, "tool_choice": true,
+}
+
+// anthropicDedicatedParams are the model_map params applyModelParams routes
+// into dedicated Options fields; the anthropic wire marshals none of them
+// (sampling) or derives max_tokens / ignores think itself, so they never
+// reach the body and stay allowed in params.
+var anthropicDedicatedParams = map[string]bool{
+	"temperature": true, "top_p": true, "top_k": true, "min_p": true, "repeat_penalty": true,
+	"presence_penalty": true, "num_predict": true, "max_tokens": true, "think": true,
+}
+
+// anthropicOutputConfigKey is merged INTO the wire's output_config
+// (llm.buildAnthropicBody), so it must be an object and must not carry the
+// effort, which has its own key and precedence.
+const anthropicOutputConfigKey = "output_config"
+
+// validateAnthropicCarrierKeys rejects carrier keys the Messages API body
+// cannot take (review finding 3): extra_body merges top-level verbatim, and
+// model_map params reach the body through applyModelParams' default branch.
+func validateAnthropicCarrierKeys(b *Backend) (errs []FieldError) {
+	for _, k := range slices.Sorted(maps.Keys(b.ExtraBody)) {
+		if msg := anthropicKeyProblem(k, b.ExtraBody[k], false); msg != "" {
+			errs = append(errs, FieldError{"extra_body", msg})
+		}
+	}
+	for _, role := range slices.Sorted(maps.Keys(b.ModelMap)) {
+		params := b.ModelMap[role].Params
+		for _, k := range slices.Sorted(maps.Keys(params)) {
+			if msg := anthropicKeyProblem(k, params[k], true); msg != "" {
+				errs = append(errs, FieldError{"model_map", fmt.Sprintf("role %q: params.%s", role, msg)})
+			}
+		}
+	}
 	return errs
+}
+
+// anthropicKeyProblem names why one carrier key cannot reach the Messages
+// API body, "" when it can. inParams: the key comes from model_map params,
+// where the dedicated-field keys never reach the body.
+func anthropicKeyProblem(k string, v any, inParams bool) string {
+	if inParams && anthropicDedicatedParams[k] {
+		return ""
+	}
+	switch {
+	case anthropicSamplingKeys[k]:
+		return fmt.Sprintf("%s is a sampling parameter the Claude 5 models reject with a 400 (removed on every model by API version 2026-10-21) — steer with effort", k)
+	case anthropicForeignKeys[k]:
+		return fmt.Sprintf("%s is not a Messages API field (OpenAI-compatible/Ollama dialect) — the anthropic wire would send it top-level and get a 400 on every call", k)
+	case anthropicWireOwnedKeys[k]:
+		return fmt.Sprintf("%s is built by the anthropic wire itself — an override would replace the request it parses", k)
+	case k == anthropicOutputConfigKey:
+		m, ok := v.(map[string]any)
+		if !ok {
+			return "output_config must be an object (it is merged into the wire's output_config)"
+		}
+		if _, has := m["effort"]; has {
+			return "output_config.effort is not read — the effort comes from the effort key (model_map params.effort > extra_body.effort > medium)"
+		}
+	}
+	return ""
 }
 
 // validateRoles covers role/model coverage, the embed+external hard block

@@ -514,3 +514,81 @@ func TestValidateAnthropicRules(t *testing.T) {
 		t.Errorf("anthropic rules leaked onto an openai row: %v", errs)
 	}
 }
+
+// TestValidateAnthropicRejectsUnservedKeys (review finding 3): both carriers
+// merge verbatim into the Messages API body, so a key that body cannot take
+// is a 400 on every call — turned into a 422 at write time like the effort
+// typo above. extra_body: the sampling keys (400 on the Claude 5 models,
+// removed on every model by API version 2026-10-21), the OpenAI-compatible /
+// Ollama dialect fields, and the fields the wire builds itself. model_map
+// params: the same, except the keys applyModelParams routes into dedicated
+// Options fields this wire never marshals (temperature, top_p, top_k, min_p,
+// repeat_penalty, presence_penalty, num_predict, max_tokens, think).
+func TestValidateAnthropicRejectsUnservedKeys(t *testing.T) {
+	bodyRejected := []string{
+		"temperature", "top_p", "top_k", "min_p", "repeat_penalty", "presence_penalty",
+		"chat_template_kwargs", "response_format", "reasoning", "reasoning_effort", "seed",
+		"frequency_penalty", "logit_bias", "logprobs", "top_logprobs", "n", "stop",
+		"stream_options", "parallel_tool_calls", "max_completion_tokens", "user", "provider",
+		"format", "options", "keep_alive", "num_ctx",
+		"model", "messages", "system", "stream", "tools", "tool_choice",
+	}
+	for _, k := range bodyRejected {
+		b := anthropicBackend()
+		b.ExtraBody = map[string]any{k: true}
+		if _, errs := ValidateBackend(&b); !fieldHit(errs, "extra_body") {
+			t.Errorf("extra_body %q accepted: %v", k, errs)
+		}
+	}
+	paramsRejected := []string{
+		"chat_template_kwargs", "response_format", "reasoning", "seed", "frequency_penalty",
+		"logit_bias", "stop", "user", "format", "stream", "tools", "tool_choice", "messages",
+	}
+	for _, k := range paramsRejected {
+		b := anthropicBackend()
+		b.ModelMap = map[string]ModelSpec{"default": {Model: "m"}, "dream": {Model: "m", Params: map[string]any{k: true}}}
+		if _, errs := ValidateBackend(&b); !fieldHit(errs, "model_map") {
+			t.Errorf("model_map params %q accepted: %v", k, errs)
+		}
+	}
+	for name, oc := range map[string]any{
+		"output_config.effort (use effort)": map[string]any{"effort": "high"},
+		"output_config not an object":       "high",
+	} {
+		b := anthropicBackend()
+		b.ExtraBody = map[string]any{"output_config": oc}
+		if _, errs := ValidateBackend(&b); !fieldHit(errs, "extra_body") {
+			t.Errorf("extra_body %s accepted: %v", name, errs)
+		}
+		b = anthropicBackend()
+		b.ModelMap = map[string]ModelSpec{"default": {Model: "m", Params: map[string]any{"output_config": oc}}}
+		if _, errs := ValidateBackend(&b); !fieldHit(errs, "model_map") {
+			t.Errorf("model_map params %s accepted: %v", name, errs)
+		}
+	}
+
+	// What stays allowed: the dedicated-field params (never marshalled on
+	// this wire), and the extra_body hatch for fields the wire does not model.
+	b := anthropicBackend()
+	b.ModelMap = map[string]ModelSpec{"default": {Model: "m", Params: map[string]any{
+		"temperature": 0.2, "top_p": 0.9, "top_k": 40.0, "min_p": 0.05, "repeat_penalty": 1.1,
+		"presence_penalty": 0.1, "num_predict": 900.0, "max_tokens": 900.0, "think": false, "effort": "high",
+	}}}
+	b.ExtraBody = map[string]any{
+		"thinking":       map[string]any{"type": "adaptive", "display": "summarized"},
+		"metadata":       map[string]any{"user_id": "ctx"},
+		"stop_sequences": []any{"END"},
+		"max_tokens":     4096.0,
+		"output_config":  map[string]any{"task_budget": map[string]any{"type": "tokens", "total": 20000.0}},
+	}
+	if _, errs := ValidateBackend(&b); len(errs) != 0 {
+		t.Errorf("allowed keys rejected: %v", errs)
+	}
+
+	// Protocol-bound: an openai row keeps its dialect.
+	o := validBackend()
+	o.ExtraBody = map[string]any{"chat_template_kwargs": map[string]any{"enable_thinking": false}, "temperature": 0.1}
+	if _, errs := ValidateBackend(&o); fieldHit(errs, "extra_body") {
+		t.Errorf("anthropic key rules leaked onto an openai row: %v", errs)
+	}
+}

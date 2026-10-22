@@ -508,3 +508,32 @@ func TestAnthropicMaxTokensWithoutTextIsAnError(t *testing.T) {
 		t.Errorf("truncated answer with text = %+v / %v, want a length response", r, err)
 	}
 }
+
+// TestAnthropicOutputConfigDeepMerge: an output_config object in either
+// carrier merges INTO the wire's output_config instead of replacing it — the
+// resolved effort survives next to the operator's keys (a flat merge used to
+// drop effort), and the resolved effort keeps precedence over a stray
+// output_config.effort on a psql-edited row.
+func TestAnthropicOutputConfigDeepMerge(t *testing.T) {
+	rec := newAnthropicRecorder(t, 200, anthropicRespOK, nil)
+	b := anthropicTestBackend(rec.srv.URL)
+	b.ExtraBody = map[string]any{
+		"effort":        "high",
+		"output_config": map[string]any{"task_budget": map[string]any{"type": "tokens", "total": 20000}, "effort": "low"},
+	}
+	opts := Options{NumPredict: 5, Extra: map[string]any{"output_config": map[string]any{"x_params": true}}}
+	if _, err := Chat(context.Background(), b, "s", "u", opts, 5*time.Second); err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	_, body, _ := rec.recorded()
+	oc, _ := body["output_config"].(map[string]any)
+	if oc["effort"] != "high" {
+		t.Errorf("output_config.effort = %v, want the resolved effort high", oc["effort"])
+	}
+	if tb, _ := oc["task_budget"].(map[string]any); tb["total"] != float64(20000) {
+		t.Errorf("output_config.task_budget = %v, want the row's object merged in", oc["task_budget"])
+	}
+	if oc["x_params"] != true {
+		t.Errorf("output_config = %v, want the params' key merged in too", oc)
+	}
+}

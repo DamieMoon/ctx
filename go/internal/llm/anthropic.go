@@ -63,6 +63,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"strings"
 	"time"
@@ -89,6 +90,9 @@ const (
 	// anthropicEffortKey is the model_map params / extra_body key that is
 	// LIFTED into output_config.effort instead of being merged top-level.
 	anthropicEffortKey = "effort"
+	// anthropicOutputConfigKey is the one carrier key merged one level deep
+	// into the wire's own output_config (buildAnthropicBody).
+	anthropicOutputConfigKey = "output_config"
 )
 
 // ErrOutputLimitNoText: the answer stopped at max_tokens (or the context
@@ -305,22 +309,44 @@ func anthropicSystem(systemPrompt string) []anthropicTextBlock {
 // resolveAnthropicEffort and never merged top-level (it is not a Messages
 // API field). Everything else merges verbatim: that is the operator's
 // escape hatch for fields this wire does not model (thinking.display,
-// stop_sequences, metadata.user_id, …).
+// stop_sequences, metadata.user_id, …); the keys the Messages API cannot
+// take (sampling, OpenAI/Ollama dialect, wire-owned) are a 422 at write
+// time instead (backends.validateAnthropicCarrierKeys).
+//
+// output_config is the one key merged ONE LEVEL DEEP instead of replacing
+// the top-level field: the wire's own output_config carries the resolved
+// effort, and a flat merge of an operator's output_config (task_budget, …)
+// would silently drop it. Params' keys first, the row's last (same
+// last-word rule), the resolved effort over both — validation already
+// rejects a carrier's output_config.effort and a non-object output_config
+// (backends.validateAnthropicCarrierKeys); a non-object one on a psql-edited
+// row is dropped here rather than allowed to replace the effort.
 func buildAnthropicBody(req anthropicRequest, opts Options, b *backends.Backend) ([]byte, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, err
 	}
 	extra := make(map[string]any, len(opts.Extra)+len(b.ExtraBody))
-	for k, v := range opts.Extra {
-		if k != anthropicEffortKey {
-			extra[k] = v
+	var outputConfig map[string]any
+	for _, carrier := range []map[string]any{opts.Extra, b.ExtraBody} {
+		for k, v := range carrier {
+			switch k {
+			case anthropicEffortKey:
+			case anthropicOutputConfigKey:
+				if m, ok := v.(map[string]any); ok {
+					if outputConfig == nil {
+						outputConfig = make(map[string]any, len(m)+1)
+					}
+					maps.Copy(outputConfig, m)
+				}
+			default:
+				extra[k] = v
+			}
 		}
 	}
-	for k, v := range b.ExtraBody {
-		if k != anthropicEffortKey {
-			extra[k] = v
-		}
+	if outputConfig != nil {
+		outputConfig[anthropicEffortKey] = req.OutputConfig.Effort
+		extra[anthropicOutputConfigKey] = outputConfig
 	}
 	return mergeJSONFields(body, extra)
 }
