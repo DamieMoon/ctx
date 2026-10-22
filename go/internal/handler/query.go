@@ -1727,6 +1727,19 @@ func (h *QueryHandler) backfillPending(ctx context.Context, floor config.ScopeFl
 	if budget := cfg.EmbedBackfill.SyncBudget; budget > 0 {
 		budgetDeadline = time.Now().Add(budget)
 	}
+	// Pfad A's predicate: the shared backoff exclusion, PLUS every block
+	// already memoized caller_timeout (store.EmbedFailureQueryPath
+	// ExcludedPredicate) while the background arm runs — such a block is
+	// the arm's job. The hand-off only holds while there IS an arm: with
+	// embed_backfill.interval=0 (arm off) and Dream off nothing else would
+	// ever embed a caller_timeout block, so the query path keeps the plain
+	// predicate and picks it up again (its memo is due at once). Review
+	// finding M1; interval is global-only, so this per-request snapshot
+	// reads the value the arm runs on.
+	pendingExcluded := store.EmbedFailureExcludedPredicate
+	if cfg.EmbedBackfill.Interval > 0 {
+		pendingExcluded = store.EmbedFailureQueryPathExcludedPredicate
+	}
 	for attempts := 0; syncCap <= 0 || attempts < syncCap; attempts++ {
 		if !budgetDeadline.IsZero() && !time.Now().Before(budgetDeadline) {
 			slog.Info("query backfill: sync budget spent, rest left to the background arm",
@@ -1734,13 +1747,10 @@ func (h *QueryHandler) backfillPending(ctx context.Context, floor config.ScopeFl
 			break
 		}
 		var blockID, title, content, sens, scope string
-		// Pfad A's predicate: the shared backoff exclusion PLUS every block
-		// already memoized caller_timeout (store.EmbedFailureQueryPath
-		// ExcludedPredicate) — such a block is the background arm's job.
 		err := h.pool.QueryRow(ctx,
 			`SELECT id, title, content, sensitivity, scope FROM context_blocks
 			WHERE embedding IS NULL AND NOT is_archived`+
-				store.EmbedFailureQueryPathExcludedPredicate+store.RetrievalExcludedTypePredicate+`
+				pendingExcluded+store.RetrievalExcludedTypePredicate+`
 			LIMIT 1`).Scan(&blockID, &title, &content, &sens, &scope)
 		if err != nil {
 			break // No more pending blocks (or error).
@@ -1785,6 +1795,11 @@ func (h *QueryHandler) backfillPending(ctx context.Context, floor config.ScopeFl
 		// (today's semantics — the cache is for repeated query/keyword text).
 		// The wire call runs under the remaining sync budget; callerCut is
 		// read BEFORE cancelEmbed, which would make Err() non-nil by itself.
+		// Without a budget (sync_budget=0, the explicit opt-out) callerCut
+		// stays false: embedCtx is then the bare request context, and a
+		// client that goes away keeps the pre-budget classification below
+		// (wire, on the backoff curve) instead of a hand-off to the arm —
+		// caller_timeout is a statement about the budget (review finding M1).
 		embedCtx, cancelEmbed := ctx, func() {}
 		if !budgetDeadline.IsZero() {
 			embedCtx, cancelEmbed = context.WithDeadline(ctx, budgetDeadline)
@@ -1792,7 +1807,7 @@ func (h *QueryHandler) backfillPending(ctx context.Context, floor config.ScopeFl
 		vec, served, wireAttempts, wired, err := embedcache.EmbedChain(
 			embedCtx, nil, chain, backends.RoleEmbed, embedText, embed.PrefixDocument,
 			embedcache.ReportFunc(llm.PoolReporter(h.backendPool)), adm)
-		callerCut := err != nil && embedCtx.Err() != nil
+		callerCut := !budgetDeadline.IsZero() && err != nil && embedCtx.Err() != nil
 		cancelEmbed()
 		if wired {
 			// TENANT-DECISION(backfill-attribution): "" → NULL. backfillPending is
@@ -1815,10 +1830,12 @@ func (h *QueryHandler) backfillPending(ctx context.Context, floor config.ScopeFl
 			// failure most often means the backend itself is unavailable,
 			// and hammering it for the rest of the sync-cap budget within
 			// one request helps nobody.
-			// A budget or request deadline is a statement about THIS caller,
-			// not about the backend: class caller_timeout, which the query
-			// path never re-picks and the background arm picks at once.
-			// Everything else keeps the wire/oversize classification.
+			// Under an active budget, a budget or request deadline is a
+			// statement about THIS caller, not about the backend: class
+			// caller_timeout, which the query path leaves to the background
+			// arm while it runs and the arm picks at once. Everything else
+			// — and every failure with sync_budget=0 — keeps the
+			// wire/oversize classification.
 			var (
 				class      store.EmbedFailureClass
 				normalized string

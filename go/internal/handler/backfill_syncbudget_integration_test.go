@@ -138,8 +138,12 @@ func TestBackfillPending_SyncBudget_Integration(t *testing.T) {
 	t.Run("budget_cuts_the_slow_block_and_hands_it_to_the_arm", func(t *testing.T) {
 		seed(t)
 		h, hits, canceled := newHandler(t, 5*time.Second)
+		// Interval > 0: the background arm runs, so the query path hands
+		// the block off to it (with the arm off it would re-pick it — see
+		// arm_off_query_path_repicks_a_caller_timeout_block below).
 		cfg := &config.Config{EmbedBackfill: config.EmbedBackfillConfig{
-			SyncCap: 4, SyncBudget: 300 * time.Millisecond, MaxTokens: 1_000_000, BackoffBase: time.Minute, BackoffCap: time.Hour,
+			SyncCap: 4, SyncBudget: 300 * time.Millisecond, Interval: 15 * time.Second,
+			MaxTokens: 1_000_000, BackoffBase: time.Minute, BackoffCap: time.Hour,
 		}}
 		reqCtx, cancelReq := context.WithCancel(ctx)
 		defer cancelReq()
@@ -225,6 +229,66 @@ func TestBackfillPending_SyncBudget_Integration(t *testing.T) {
 		}
 		if !dueNow {
 			t.Errorf("memo must be due at once for the background arm")
+		}
+	})
+
+	// Review finding M1 (a): sync_budget=0 is the explicit opt-out to the
+	// pre-budget shape, where the wire call runs under the bare request
+	// context. A client that goes away mid-embed must keep the pre-PR class
+	// wire (exponential backoff, re-picked once it lapses) — caller_timeout
+	// means "handed to the arm" and is a budget statement, so without a
+	// budget there is nothing to hand off.
+	t.Run("budget_zero_request_cancel_stays_wire", func(t *testing.T) {
+		seed(t)
+		h, _, _ := newHandler(t, 5*time.Second)
+		cfg := &config.Config{EmbedBackfill: config.EmbedBackfillConfig{
+			SyncCap: 4, SyncBudget: 0, Interval: 15 * time.Second,
+			MaxTokens: 1_000_000, BackoffBase: time.Minute, BackoffCap: time.Hour,
+		}}
+		reqCtx, cancelReq := context.WithCancel(ctx)
+		go func() {
+			time.Sleep(200 * time.Millisecond)
+			cancelReq()
+		}()
+		if got := h.backfillPending(reqCtx, nil, "private", h.embedAdmission(), cfg); got != 0 {
+			t.Fatalf("backfilled = %d, want 0", got)
+		}
+		class, dueNow, _ := readMemo(t)
+		if class != string(store.EmbedFailureWire) {
+			t.Errorf("memo class = %q, want %q (sync_budget=0 is the pre-budget behavior)", class, store.EmbedFailureWire)
+		}
+		if dueNow {
+			t.Errorf("memo is due at once; a wire memo sits on the backoff curve (backoff_base = 1 min here)")
+		}
+	})
+
+	// Review finding M1 (b): the query path leaves a caller_timeout block to
+	// the background arm only while that arm runs. With
+	// embed_backfill.interval=0 (arm off) and Dream off nothing else would
+	// ever embed it, so the query path keeps the plain predicate and picks it
+	// up again (the memo is due at once).
+	t.Run("arm_off_query_path_repicks_a_caller_timeout_block", func(t *testing.T) {
+		seed(t)
+		var blockID string
+		if err := pool.QueryRow(ctx, `SELECT id FROM context_blocks WHERE title = $1`, title).Scan(&blockID); err != nil {
+			t.Fatalf("read block id: %v", err)
+		}
+		if err := store.RecordEmbedFailure(ctx, pool, blockID, store.EmbedFailureCallerTimeout,
+			store.NormalizeEmbedError(store.EmbedFailureCallerTimeout, "context deadline exceeded"),
+			time.Minute, time.Hour); err != nil {
+			t.Fatalf("record caller_timeout memo: %v", err)
+		}
+
+		h, hits, _ := newHandler(t, 0)
+		cfg := &config.Config{EmbedBackfill: config.EmbedBackfillConfig{
+			SyncCap: 4, SyncBudget: 10 * time.Second, Interval: 0,
+			MaxTokens: 1_000_000, BackoffBase: time.Minute, BackoffCap: time.Hour,
+		}}
+		if got := h.backfillPending(ctx, nil, "private", h.embedAdmission(), cfg); got != 1 {
+			t.Fatalf("backfilled = %d, want 1 (arm off: the query path must not leave the block to nobody)", got)
+		}
+		if hits.Load() != 1 {
+			t.Errorf("wire hits = %d, want 1", hits.Load())
 		}
 	})
 }
