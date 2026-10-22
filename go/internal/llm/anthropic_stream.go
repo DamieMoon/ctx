@@ -70,8 +70,10 @@ type anthropicToolUseBlock struct {
 type anthropicToolResultBlock struct {
 	Type      string `json:"type"` // "tool_result"
 	ToolUseID string `json:"tool_use_id"`
-	Content   string `json:"content"`
-	IsError   bool   `json:"is_error,omitempty"`
+	// Content is omitted when blank: content is optional on a tool_result,
+	// a blank string is not (blankText).
+	Content string `json:"content,omitempty"`
+	IsError bool   `json:"is_error,omitempty"`
 }
 
 // anthropicThinkingBlock / anthropicRedactedThinkingBlock are the reasoning
@@ -104,8 +106,9 @@ type anthropicRedactedThinkingBlock struct {
 const orphanToolResult = "no result recorded: the turn was interrupted before this tool ran"
 
 // anthropicMessages converts the multi-turn history: the joined system text
-// and the alternating message list. Empty assistant turns without tool
-// calls are dropped (the API rejects empty content), and an assistant turn
+// and the alternating message list. Blank text (empty or whitespace-only,
+// blankText) never becomes a text block, so a blank assistant turn without
+// tool calls is dropped (the API rejects empty content), and an assistant turn
 // that would end the list is kept — the harness never ends on one (it
 // appends tool results), and a trailing assistant turn is a prefill the
 // Claude 5 models reject with a clear 400 rather than something to mask.
@@ -146,12 +149,14 @@ func anthropicMessages(msgs []ChatMsg, toolBlocks bool) (system string, out []an
 	for _, m := range msgs {
 		switch m.Role {
 		case "system":
-			if m.Content != "" {
+			if !blankText(m.Content) {
 				sys = append(sys, m.Content)
 			}
 		case "user":
 			flushOrphans()
-			appendBlocks("user", anthropicTextBlock{Type: "text", Text: m.Content})
+			if !blankText(m.Content) {
+				appendBlocks("user", anthropicTextBlock{Type: "text", Text: m.Content})
+			}
 		case "assistant":
 			flushOrphans()
 			var blocks []any
@@ -160,7 +165,7 @@ func anthropicMessages(msgs []ChatMsg, toolBlocks bool) (system string, out []an
 			for _, raw := range m.ProviderBlocks {
 				blocks = append(blocks, raw)
 			}
-			if m.Content != "" {
+			if !blankText(m.Content) {
 				blocks = append(blocks, anthropicTextBlock{Type: "text", Text: m.Content})
 			}
 			pendingIDs = pendingIDs[:0]
@@ -192,12 +197,25 @@ func anthropicMessages(msgs []ChatMsg, toolBlocks bool) (system string, out []an
 					break
 				}
 			}
-			appendBlocks("user", anthropicToolResultBlock{Type: "tool_result", ToolUseID: id, Content: m.Content})
+			content := m.Content
+			if blankText(content) {
+				content = ""
+			}
+			appendBlocks("user", anthropicToolResultBlock{Type: "tool_result", ToolUseID: id, Content: content})
 		}
 	}
 	flushOrphans()
 	return strings.Join(sys, "\n\n"), out
 }
+
+// blankText reports text that must not become a text block: empty or only
+// whitespace. The API rejects an empty text block, and a whitespace-only one
+// fails the same way in practice — the case shows up when an earlier turn of
+// the session was served by an openai-wire row that streamed a bare newline
+// ahead of its tool call. Every place that builds a text block on this wire
+// checks it (system rows, user and assistant turns, the text rendering, the
+// system prompt split in anthropic.go).
+func blankText(s string) bool { return strings.TrimSpace(s) == "" }
 
 // appendAnthropicBlocks appends blocks to the last turn when it has the same
 // role (the API requires user/assistant alternation), else opens a new turn.
@@ -229,14 +247,16 @@ func anthropicTextMessages(msgs []ChatMsg) (system string, out []anthropicMessag
 	for _, m := range msgs {
 		switch m.Role {
 		case "system":
-			if m.Content != "" {
+			if !blankText(m.Content) {
 				sys = append(sys, m.Content)
 			}
 		case "user":
-			out = appendAnthropicBlocks(out, "user", anthropicTextBlock{Type: "text", Text: m.Content})
+			if !blankText(m.Content) {
+				out = appendAnthropicBlocks(out, "user", anthropicTextBlock{Type: "text", Text: m.Content})
+			}
 		case "assistant":
 			parts := make([]string, 0, 1+len(m.ToolCalls))
-			if m.Content != "" {
+			if !blankText(m.Content) {
 				parts = append(parts, m.Content)
 			}
 			nameless = nameless[:0]

@@ -277,8 +277,8 @@ func errOutputLimitNoText(maxTokens int, effort string, outputTokens int) error 
 var promptguardRuleMarker = "Everything between <" + promptguard.GuardTag + " id="
 
 // anthropicSystem renders the system prompt as the cached top-level block.
-// An empty prompt yields no system field (the API rejects an empty text
-// block).
+// An empty or whitespace-only prompt yields no system field (the API rejects
+// a blank text block — blankText).
 //
 // The cache is a byte-exact prefix match, and the pipelines end their
 // system prompt with promptguard.Rule(nonce) — a fresh nonce per call. One
@@ -287,10 +287,15 @@ var promptguardRuleMarker = "Everything between <" + promptguard.GuardTag + " id
 // cache_read == 0 on every row). So the rule is split off into a second,
 // unmarked text block: the stable prefix before it is the breakpoint.
 func anthropicSystem(systemPrompt string) []anthropicTextBlock {
-	if systemPrompt == "" {
+	if blankText(systemPrompt) {
 		return nil
 	}
 	if i := strings.LastIndex(systemPrompt, promptguardRuleMarker); i > 0 {
+		if blankText(systemPrompt[:i]) {
+			// Nothing stable ahead of the rule: no cacheable prefix, and a
+			// blank block would be rejected.
+			return []anthropicTextBlock{{Type: "text", Text: systemPrompt[i:]}}
+		}
 		return []anthropicTextBlock{
 			{Type: "text", Text: systemPrompt[:i], CacheControl: &anthropicCacheControl{Type: "ephemeral"}},
 			{Type: "text", Text: systemPrompt[i:]},

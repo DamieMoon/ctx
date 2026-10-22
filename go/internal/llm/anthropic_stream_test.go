@@ -729,3 +729,70 @@ func TestAnthropicStreamMaxTokensWithoutTextIsAnError(t *testing.T) {
 		t.Fatalf("err = %v, want ErrOutputLimitNoText", err)
 	}
 }
+
+// --- whitespace-only text blocks (review finding 4) ---.
+
+// assertNoBlankText fails on any text block whose text is empty or only
+// whitespace, and on a tool_result whose content is whitespace only.
+func assertNoBlankText(t *testing.T, label string, msgs []anthropicMessage) {
+	t.Helper()
+	raw, _ := json.Marshal(msgs)
+	var turns []struct {
+		Role    string           `json:"role"`
+		Content []map[string]any `json:"content"`
+	}
+	if err := json.Unmarshal(raw, &turns); err != nil {
+		t.Fatalf("%s: %v\n%s", label, err, raw)
+	}
+	for i, turn := range turns {
+		if len(turn.Content) == 0 {
+			t.Errorf("%s: turn %d (%s) has no content", label, i, turn.Role)
+		}
+		for j, blk := range turn.Content {
+			switch blk["type"] {
+			case "text":
+				if s, _ := blk["text"].(string); strings.TrimSpace(s) == "" {
+					t.Errorf("%s: turn %d block %d is a blank text block %q", label, i, j, s)
+				}
+			case "tool_result":
+				if s, isStr := blk["content"].(string); isStr && s != "" && strings.TrimSpace(s) == "" {
+					t.Errorf("%s: turn %d block %d is a tool_result with blank content %q", label, i, j, s)
+				}
+			}
+		}
+	}
+}
+
+// TestAnthropicMessagesDropWhitespaceText: assistant content that is only
+// whitespace (typical of an openai-wire turn earlier in the session — a
+// newline ahead of the tool call), a whitespace system row and a blank user
+// row never become text blocks; the API rejects blank text blocks.
+func TestAnthropicMessagesDropWhitespaceText(t *testing.T) {
+	history := []ChatMsg{
+		{Role: "system", Content: " \n"},
+		{Role: "user", Content: "q"},
+		{Role: "assistant", Content: "\n\n", ToolCalls: []ToolCall{{ID: "A", Function: ToolCallFunction{Name: "a", Arguments: json.RawMessage(`{}`)}}}},
+		{Role: "tool", Content: "  ", ToolCallID: "A"},
+		{Role: "assistant", Content: " \t "},
+		{Role: "user", Content: "   "},
+		{Role: "user", Content: "next"},
+	}
+	for _, toolBlocks := range []bool{true, false} {
+		system, msgs := anthropicMessages(history, toolBlocks)
+		if system != "" {
+			t.Errorf("toolBlocks=%v: system = %q, want the blank row dropped", toolBlocks, system)
+		}
+		assertNoBlankText(t, fmt.Sprintf("toolBlocks=%v", toolBlocks), msgs)
+	}
+	if blocks := anthropicSystem(" \n\t"); blocks != nil {
+		t.Errorf("anthropicSystem(blank) = %+v, want no system field", blocks)
+	}
+	// A blank stable prefix ahead of the promptguard rule yields the rule
+	// alone, not a blank cached block.
+	rule := promptguardRuleMarker + "abc> ..."
+	for _, blk := range anthropicSystem("  \n" + rule) {
+		if strings.TrimSpace(blk.Text) == "" {
+			t.Errorf("anthropicSystem: blank block %+v", blk)
+		}
+	}
+}
