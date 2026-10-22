@@ -5,7 +5,7 @@
     "": {
       "name": "ctx-web",
       "dependencies": {
-        "@atlaskit/pragmatic-drag-and-drop": "3.1.0",
+        "@atlaskit/pragmatic-drag-and-drop": "4.0.0",
         "@cosmos.gl/graph": "3.5.1",
         "@deck.gl/core": "9.3.11",
         "@deck.gl/layers": "9.3.11",
@@ -53,7 +53,7 @@
 
     "@asamuzakjp/dom-selector": ["@asamuzakjp/dom-selector@10.0.4", "", { "dependencies": { "bidi-js": "^1.1.0", "css-tree": "^3.2.1", "is-potential-custom-element-name": "^1.0.1", "lru-cache": "^11.5.3" } }, "sha512-A6f1nKy99I6tyoK82U6kBHvQQZmdHmTmPzJYPY/0eaOW0r8/qPmEOwjGHs+hL/vCgOwQTupu4LT1XtXNUuDruA=="],
 
-    "@atlaskit/pragmatic-drag-and-drop": ["@atlaskit/pragmatic-drag-and-drop@3.1.0", "", { "dependencies": { "@babel/runtime": "^7.0.0", "bind-event-listener": "^3.0.0", "raf-schd": "^4.0.3" } }, "sha512-VU+2Oh6OgvC6D1xiX3lfm1gZJsaSPD+ZKjAHodOQ9IO6RfOvAyReLlK5ut9gIUpPmbD8d09wlCs7y4A6/I8c5Q=="],
+    "@atlaskit/pragmatic-drag-and-drop": ["@atlaskit/pragmatic-drag-and-drop@4.0.0", "", { "dependencies": { "@babel/runtime": "^7.0.0", "bind-event-listener": "^3.0.0", "raf-schd": "^4.0.3" } }, "sha512-pyDo2B5NiaExoKGmgeXKGNUL4aR4UzzSZm8QWWjYTEyBLVqSqKyKUwtVxMw2YEkakagOGFONUdHM32LAH2nPug=="],
 
     "@axe-core/playwright": ["@axe-core/playwright@4.14.0", "", { "dependencies": { "axe-core": "~4.14.0" }, "peerDependencies": { "playwright-core": ">= 1.0.0" } }, "sha512-SGUhG5PIHd2eMdpgBF2PyQLOhX+qyDR2PT4cmoS4Qk2ak+jX/rrSvst9l0PGv5WTHolKpUMvVmoHpr4cZgf1RQ=="],
 
