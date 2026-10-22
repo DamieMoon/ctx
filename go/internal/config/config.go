@@ -1601,19 +1601,25 @@ type EmbedBackfillConfig struct {
 	// is 120 s — the question's own embed was never admitted and the query
 	// answered 500 instead of degrading). A block that overruns the budget
 	// is memoized as caller_timeout (store.EmbedFailureCallerTimeout) and
-	// left to the background arm; the question embed keeps the rest of the
-	// deadline. Default 30 s (a quarter of the CLI deadline). 0 = unbounded,
-	// the pre-budget behavior (explicit opt-out, SyncCap convention).
+	// left to the background arm while that arm runs (Interval > 0; with
+	// the arm off the query path retries it within its budget); the
+	// question embed keeps the rest of the deadline. Default 30 s (a quarter
+	// of the CLI deadline). 0 = unbounded, the pre-budget behavior (explicit
+	// opt-out, SyncCap convention): no deadline on the wire call, and a
+	// request cancel keeps the class wire.
 	SyncBudget time.Duration `key:"embed_backfill.sync_budget" env:"CTX_EMBED_BACKFILL_SYNC_BUDGET" default:"30" mut:"hot" tenancy:"global-only"`
 	// Interval is the idle wait in seconds of the dedicated background
 	// backfill arm (runEmbedBackfillLoop) between two empty picks. Until
 	// this key the only background backfill was the call at the top of the
 	// dream loop, so with dream.enabled=false (the default) NOTHING embedded
 	// pending blocks in the background and Pfad A was the only path (issue
-	// force-push.me/damienmoon/ctx/issues/1). The arm runs regardless of Dream; a successful
-	// pick loops at once, an empty pick waits this long. 0 = arm off
-	// (polled every 15 s for a hot re-enable, contract.recheck_interval
-	// convention).
+	// force-push.me/damienmoon/ctx/issues/1). The arm runs regardless of Dream; a pick
+	// that embedded or parked (oversize) a block loops at once, an empty
+	// pick or a wire-class memo waits this long — in 15 s slices that
+	// re-read the key, so a hot change applies within one slice. 0 = arm
+	// off (polled every 15 s for a hot re-enable, contract.recheck_interval
+	// convention); the query path then keeps caller_timeout blocks in its
+	// own pick instead of handing them off.
 	Interval time.Duration `key:"embed_backfill.interval" env:"CTX_EMBED_BACKFILL_INTERVAL" default:"15" mut:"hot" tenancy:"global-only"`
 	// MaxTokens is the pre-wire Oversize-Gate estimate threshold
 	// (design/04 §4.4): len(embedText)/4 above this skips the block WITHOUT

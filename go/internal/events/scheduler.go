@@ -793,8 +793,10 @@ func (s *Scheduler) Run(ctx context.Context) {
 
 	// Dream runs in its own goroutine(s) as continuous loop(s).
 	// DreamParallelism workers all share the same DB; PickBlock's FOR UPDATE
-	// SKIP LOCKED ensures distinct blocks per worker. Backfill stays single-
-	// threaded (one worker handles it before its own dream cycle).
+	// SKIP LOCKED ensures distinct blocks per worker. Pending embeddings have
+	// more than one picker now: the dedicated arm above, plus each dream
+	// worker's inline backfillOneEmbedding before its own dream cycle. The
+	// tx-wrapped FOR UPDATE SKIP LOCKED pick keeps them on distinct blocks.
 	if s.startup.DreamEnabled {
 		workers := s.startup.DreamParallelism
 		if workers < 1 {
