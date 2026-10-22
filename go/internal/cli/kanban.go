@@ -37,9 +37,8 @@ import (
 	"net/url"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
-	"github.com/muesli/termenv"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/spf13/cobra"
 )
 
@@ -145,8 +144,7 @@ func runKanban(getClient func() (*Client, error), project string, limit int) err
 		if err != nil {
 			return err
 		}
-		m := newBoardModel(board, lipgloss.DefaultRenderer())
-		p := tea.NewProgram(m, tea.WithAltScreen())
+		p := tea.NewProgram(newBoardModel(board))
 		_, err = p.Run()
 		return err
 	})
@@ -155,10 +153,14 @@ func runKanban(getClient func() (*Client, error), project string, limit int) err
 // ── bubbletea model (View() is golden-tested non-pty; §7-W10) ──────────────────.
 
 const (
-	// colContentWidth is the lipgloss content-box width of a column (text +
-	// horizontal padding), fixed so View() is deterministic (golden) regardless
-	// of the terminal size. The rounded border adds one column on each side.
+	// colContentWidth is the content-box width of a column (text + horizontal
+	// padding), fixed so View() is deterministic (golden) regardless of the
+	// terminal size. The rounded border adds one column on each side.
 	colContentWidth = 30
+	// colBoxWidth is what lipgloss v2's Width() takes: the whole block before
+	// margins, border included (v1 measured the content box and drew the border
+	// outside it). Same geometry as v1, byte-identical golden.
+	colBoxWidth = colContentWidth + 2
 	// colTextWidth is the text area after the 1-column horizontal padding on each
 	// side — the width the separator rule and card lines are sized/truncated to,
 	// so nothing wraps inside the box.
@@ -166,34 +168,24 @@ const (
 )
 
 // boardModel is the read-only kanban TUI state: the decoded board, the focused
-// column, and a per-column selected-card index. A lipgloss renderer is injected
-// so the View() golden test can pin an Ascii (color-free) profile while the
-// interactive program uses the auto-detected terminal profile.
+// column, and a per-column selected-card index. The board sets no colors, only
+// borders and padding, so View() is a deterministic box-drawing string with NO
+// SGR escapes — which is exactly why a pty probe would be blind (it elides
+// box-drawing chars) and the View() golden is not (§7-W10). lipgloss v2 has no
+// renderer/color profile to pin any more; downsampling lives in the output layer.
 type boardModel struct {
-	board    kanbanBoard
-	renderer *lipgloss.Renderer
-	focused  int   // focused column index
-	sel      []int // selected card index, per column
+	board   kanbanBoard
+	focused int   // focused column index
+	sel     []int // selected card index, per column
 }
 
-// newBoardModel builds the model from a decoded board and a renderer. The
-// per-column selection starts at the first card of each column.
-func newBoardModel(board kanbanBoard, r *lipgloss.Renderer) boardModel {
+// newBoardModel builds the model from a decoded board. The per-column selection
+// starts at the first card of each column.
+func newBoardModel(board kanbanBoard) boardModel {
 	return boardModel{
-		board:    board,
-		renderer: r,
-		sel:      make([]int, len(board.Columns)),
+		board: board,
+		sel:   make([]int, len(board.Columns)),
 	}
-}
-
-// newAsciiBoardModel is the test constructor: it forces the color-free (Ascii)
-// profile so View() is a deterministic box-drawing string with NO SGR escapes —
-// which is exactly why a pty probe would be blind (it elides box-drawing chars)
-// and the View() golden is not (§7-W10).
-func newAsciiBoardModel(board kanbanBoard) boardModel {
-	r := lipgloss.NewRenderer(nil)
-	r.SetColorProfile(termenv.Ascii)
-	return newBoardModel(board, r)
 }
 
 func (m boardModel) Init() tea.Cmd { return nil }
@@ -202,7 +194,7 @@ func (m boardModel) Init() tea.Cmd { return nil }
 // mutations). Left/right (h/l) move between columns; up/down (j/k) move the
 // selection within the focused column; q / esc / ctrl+c quit.
 func (m boardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	key, ok := msg.(tea.KeyMsg)
+	key, ok := msg.(tea.KeyPressMsg)
 	if !ok {
 		return m, nil
 	}
@@ -229,12 +221,20 @@ func (m boardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// View renders every column as a bordered lipgloss box joined horizontally. Card
+// View hands the rendered board to bubbletea on the alternate screen (v2: the
+// alt screen is a View field, no longer a program option).
+func (m boardModel) View() tea.View {
+	v := tea.NewView(m.render())
+	v.AltScreen = true
+	return v
+}
+
+// render draws every column as a bordered lipgloss box joined horizontally. Card
 // titles and status strings are sanitized (allowlist) before they enter a cell,
 // so an attacker-controlled title cannot inject escape sequences. The focused
 // column's selected card carries a "▸" caret (a text marker, not color, so focus
-// is legible even under the Ascii profile).
-func (m boardModel) View() string {
+// is legible without any color support).
+func (m boardModel) render() string {
 	if len(m.board.Columns) == 0 {
 		return "No board columns.\n"
 	}
@@ -267,10 +267,10 @@ func (m boardModel) renderColumn(ci int, col kanbanColumn) string {
 	if more := col.Count - len(col.Issues); more > 0 {
 		lines = append(lines, fmt.Sprintf("+%d more", more))
 	}
-	style := m.renderer.NewStyle().
+	style := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		Padding(0, 1).
-		Width(colContentWidth)
+		Width(colBoxWidth)
 	return style.Render(strings.Join(lines, "\n"))
 }
 

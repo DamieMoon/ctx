@@ -36,7 +36,6 @@
 # im selben Commit mit.
 cmd/ctxd/overviewworker_priority_linux.go	ioprioGet	# Prod setzt nur (IOPRIO_SET); die Rücklese-Hälfte der Prioritätsprobe, priority_linux_test.go:164/167
 internal/armsweep/report.go	ReadReportBody	# Schreib-Hälfte WriteReport ist prod; den Leser braucht nur das Determinismus-Gate, 7x in 4 *_test.go
-internal/cli/kanban.go	newAsciiBoardModel	# Test-Konstruktor: erzwingt termenv.Ascii für das SGR-freie View()-Golden, kanban_test.go 4 Aufrufe
 internal/config/envonly.go	EnvOnlyServerNames	# Zubringer des Env-only-Gates envonly_test.go:94/170/192; die Map ist Daten, Prod liest sie nie
 internal/config/envscan.go	EnvNameRef.String	# Stringer nur implizit über %s in envonly_test.go:138 und cmd/envnames_test.go:181 (Gate-Fehlertexte)
 internal/config/envscan.go	ScanEnvNames	# AST-Scanner beider Env-Zäune; 5 Aufrufe in envonly_test.go + cmd/envnames_test.go, kein Prod-Leser

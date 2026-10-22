@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/cobra"
 )
 
@@ -43,11 +43,10 @@ func fixtureBoardModel() kanbanBoard {
 
 // TestKanbanViewGolden pins the bubbletea model's View() byte-for-byte against a
 // testdata golden. This is THE W10-critical gate: the render is verified through
-// the View() string in a non-pty Go test, NOT through a pty capture — a pty
+// the View() content in a non-pty Go test, NOT through a pty capture — a pty
 // elides the Unicode box-drawing chars (│ ─ ╭╮╰╯) that make up the whole board,
-// so a pty render probe would be structurally blind. The model is built with the
-// Ascii (color-free) lipgloss profile so the golden is a deterministic
-// box-drawing string with NO SGR escapes.
+// so a pty render probe would be structurally blind. The board sets no colors,
+// so the golden is a deterministic box-drawing string with NO SGR escapes.
 //
 // RED PROOF: change any glyph/width/marker in renderColumn or View (e.g. the "▸"
 // caret, the column width, the "+N more" tail) and the golden mismatches.
@@ -56,7 +55,7 @@ func TestKanbanViewGolden(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read golden: %v", err)
 	}
-	got := newAsciiBoardModel(fixtureBoardModel()).View()
+	got := newBoardModel(fixtureBoardModel()).View().Content
 	if got != string(want) {
 		t.Errorf("View() golden mismatch:\n--- got ---\n%s\n--- want ---\n%s", got, want)
 	}
@@ -160,7 +159,7 @@ func TestKanbanBoardParity(t *testing.T) {
 	if len(board.Columns) != len(wire.Columns) {
 		t.Fatalf("column count: model %d, wire %d", len(board.Columns), len(wire.Columns))
 	}
-	view := newAsciiBoardModel(board).View()
+	view := newBoardModel(board).View().Content
 	for i, col := range board.Columns {
 		if len(col.Issues) != len(wire.Columns[i].Issues) {
 			t.Errorf("column %q card count: model %d, wire %d",
@@ -190,7 +189,7 @@ func TestKanbanViewEscapeSafety(t *testing.T) {
 			{ID: "33333333-3333-3333-3333-333333333333", Title: "safe\x1b]0;pwned\x07x\x9by\rz"},
 		},
 	}}}
-	view := newAsciiBoardModel(board).View()
+	view := newBoardModel(board).View().Content
 	for _, bad := range []string{"\x1b", "\x9b", "\x07", "\r", "\x90", "\x9d", "\x7f"} {
 		if strings.Contains(view, bad) {
 			t.Errorf("View() leaked control byte %q from an attacker title", bad)
@@ -257,16 +256,16 @@ func TestKanbanExitOnFailure(t *testing.T) {
 
 // ── model navigation (read-only; no mutation path exists) ───────────────────────.
 
-// runeKey / namedKey build the tea.KeyMsg values Update matches on via String().
-func runeKey(r rune) tea.KeyMsg         { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}} }
-func namedKey(t tea.KeyType) tea.KeyMsg { return tea.KeyMsg{Type: t} }
+// runeKey / namedKey build the tea.KeyPressMsg values Update matches on via String().
+func runeKey(r rune) tea.KeyPressMsg     { return tea.KeyPressMsg{Code: r, Text: string(r)} }
+func namedKey(code rune) tea.KeyPressMsg { return tea.KeyPressMsg{Code: code} }
 
 // TestKanbanNavigation drives the Update loop: right moves the focus, down clamps
 // in a single-card column, and the caret follows the selection in the focused
 // column. It also confirms the ONLY non-navigation effect Update has is quit —
 // there is no mutation path in v1.
 func TestKanbanNavigation(t *testing.T) {
-	start := newAsciiBoardModel(kanbanBoard{Columns: []kanbanColumn{
+	start := newBoardModel(kanbanBoard{Columns: []kanbanColumn{
 		{Status: "open", Count: 2, Issues: []kanbanCard{
 			{ID: "aaaaaaaa-0000-0000-0000-000000000000", Title: "a"},
 			{ID: "bbbbbbbb-0000-0000-0000-000000000000", Title: "b"},
@@ -276,7 +275,7 @@ func TestKanbanNavigation(t *testing.T) {
 		}},
 	}})
 	m := start
-	step := func(msg tea.KeyMsg) {
+	step := func(msg tea.KeyPressMsg) {
 		nm, _ := m.Update(msg)
 		m = nm.(boardModel)
 	}
@@ -293,7 +292,7 @@ func TestKanbanNavigation(t *testing.T) {
 	if m.sel[0] != 1 {
 		t.Fatalf("after down in open: sel = %d, want 1", m.sel[0])
 	}
-	if !strings.Contains(m.View(), "▸ bbbbbbbb") {
+	if !strings.Contains(m.View().Content, "▸ bbbbbbbb") {
 		t.Errorf("caret did not follow to the second card of the focused column")
 	}
 	if _, cmd := m.Update(runeKey('q')); cmd == nil {
