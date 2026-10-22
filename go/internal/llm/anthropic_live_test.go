@@ -112,17 +112,20 @@ func TestAnthropicLiveEffortAndProbe(t *testing.T) {
 	}
 	// The backend-test chat probe shape (handler chatProbe): max_tokens 1,
 	// exact, on a model that thinks.
+	// backend-test reports the row as reachable only on success, so an error
+	// here — a rejected probe shape above all (HTTP 4xx) — fails the smoke
+	// instead of being logged past.
 	p, err := Chat(ctx, b, "You are a connectivity probe.", "Reply with: ok", ProbeOptions(), 30*time.Second)
 	if err != nil {
 		var se *httpx.StatusError
 		if errors.As(err, &se) {
-			t.Logf("probe max_tokens=1: HTTP %d %s (the probe would report %s)", se.Code, se.Body, backends.Classify(err, backends.ProviderGeneric))
+			t.Errorf("probe max_tokens=1: HTTP %d %s — backend-test would report %s for a working row", se.Code, se.Body, backends.Classify(err, backends.ProviderGeneric))
 		} else {
-			t.Fatalf("probe: %v", err)
+			t.Errorf("probe max_tokens=1: %v — backend-test would report %s", err, backends.Classify(err, backends.ProviderGeneric))
 		}
-	} else {
-		t.Logf("probe max_tokens=1: finish=%q out=%d content=%q", p.FinishReason, p.EvalCount, p.Message.Content)
+		return
 	}
+	t.Logf("probe max_tokens=1: finish=%q out=%d content=%q", p.FinishReason, p.EvalCount, p.Message.Content)
 }
 
 func TestAnthropicLiveStreamToolRoundTrip(t *testing.T) {
