@@ -50,7 +50,17 @@ else's environment — that led to a fix landing in the repository.
   no idle wait after a parked block, hot interval changes, and a test
   that pins the arm's wiring into `Run`. The review of this PR also
   surfaced a cross-tenant egress path in the existing dream-loop backfill,
-  fixed separately in v5.23.1.
+  fixed separately in v5.23.1. Also PR
+  [#47](https://github.com/GottZ/ctx/pull/47): a third wire protocol,
+  `anthropic` — the native Messages API with prompt caching on the stable
+  system prefix, effort control, SSE streaming with tool use for the web
+  chat, Migration 155, probe, seed and wizard support — so a hosted-Claude
+  install no longer needs a sampling-stripping sidecar in front of the
+  OpenAI-compatible layer. Hardened with a closing call that keeps the tool
+  definitions under `tool_choice: none`, a per-effort thinking reserve on
+  `max_tokens`, validation of keys the Messages API rejects, no
+  whitespace-only text blocks, and a tool-loop replay in the API's block
+  order.
 - **TurgutKural** ([@TurgutKural](https://github.com/TurgutKural)) — PR
   [#9](https://github.com/GottZ/ctx/pull/9): `/health` reported every cloud
   inference backend as down. The probe demanded HTTP 200 on `GET /`, which only
