@@ -105,9 +105,8 @@ through Hermes' own MCP dispatch, so any ctx reachable as an MCP server works
 ## Fail-closed host (stock Hermes, no patches)
 
 Any Hermes carrying the merge already has the contract: any release cut after
-2026-08-25, or `main` at/after `1ee524f77d`. Since the last tag before the
-merge is `v2026.8.19`, that currently means running from `main` until the next
-release is cut.
+2026-08-25 (`v2026.9.7` onward; verified on `v0.22.4`, 2026-10-22), or `main`
+at/after `1ee524f77d`. The last tag *without* it is `v2026.8.19`.
 
 Probe the host you are about to enable the gate on:
 
@@ -194,7 +193,7 @@ plugin logs one warning per provider instance — no error, no blocked
 compaction.
 
 Contract tests ship on both sides: host-side upstream in
-`tests/agent/test_pre_compress_checkpoint_contract.py` (22 tests on `main`, 2026-09)
+`tests/agent/test_pre_compress_checkpoint_contract.py` (26 tests on `v0.22.4`, 2026-10)
 and provider-side here in `plugin/ctx_checkpoint/tests/` (32 tests, mocked
 MCP dispatch — no live ctx needed): `test_provider_contract.py` (9) covers
 the checkpoint chain, `test_contract_negotiation.py` (23) the runtime
