@@ -80,6 +80,15 @@ type Options struct {
 	// (ChatResponse.TopLogprobs stays nil there, which DecideChoice surfaces
 	// as ErrNoLogprobs so a caller can fall back to a generation prompt).
 	TopLogprobs int `json:"-"`
+	// ToolChoiceNone marks a call that must not produce a tool call although
+	// the conversation carries tool use — the chat harness's closing call
+	// (chat/engine.go finalCall). Only the anthropic wire reads it: it keeps
+	// the tools array the loop sent and adds tool_choice {"type":"none"}, so
+	// the conversation prefix a replayed thinking block is bound to (system,
+	// tools, earlier messages) stays unchanged. The openai wire never sees it
+	// — its closing call sends no tools array at all (E4). JSON-tagged off:
+	// never an Ollama option.
+	ToolChoiceNone bool `json:"-"`
 }
 
 // ChatResponse is the unified response from any provider.

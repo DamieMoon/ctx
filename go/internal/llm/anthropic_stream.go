@@ -28,8 +28,16 @@
 // (the API requires user/assistant alternation — the harness appends one
 // tool row per call, so a parallel-call turn yields several tool rows in
 // a row). ToolDef (OpenAI function envelope) becomes {name, description,
-// input_schema}. tool_choice is never sent (forced choice is a 400 on
-// Claude Opus 5.5; auto is also what buildStreamBody sends).
+// input_schema}. tool_choice is sent only as {"type":"none"} on the
+// harness's closing call (Options.ToolChoiceNone) — forced choice is a 400
+// on Claude Opus 5.5, and auto is the default buildStreamBody also relies on.
+//
+// A request WITHOUT tool definitions (a row below full trust, a turn with
+// tools switched off) carries no tool blocks and no thinking blocks at all:
+// the tool history is rendered as text (anthropicTextMessages). A replayed
+// thinking block is bound to the system prompt, the tools and the earlier
+// messages it was produced under, and dropping every thinking block is the
+// shape the reference keeps valid (platform.claude.com/docs/en/build-with-claude/preserved-thinking).
 package llm
 
 import (
@@ -106,15 +114,16 @@ const orphanToolResult = "no result recorded: the turn was interrupted before th
 // puts exactly one, first. A mid-history system row would be moved ahead of
 // the conversation (and invalidate the cached prefix); if the harness ever
 // injects such rows they belong in messages as role:system turns instead.
-func anthropicMessages(msgs []ChatMsg) (system string, out []anthropicMessage) {
+//
+// toolBlocks is false when the request carries no tool definitions: the
+// history then goes out as text only (anthropicTextMessages).
+func anthropicMessages(msgs []ChatMsg, toolBlocks bool) (system string, out []anthropicMessage) {
+	if !toolBlocks {
+		return anthropicTextMessages(msgs)
+	}
 	var sys []string
 	appendBlocks := func(role string, blocks ...any) {
-		if n := len(out); n > 0 && out[n-1].Role == role {
-			existing, _ := out[n-1].Content.([]any)
-			out[n-1].Content = append(existing, blocks...)
-			return
-		}
-		out = append(out, anthropicMessage{Role: role, Content: blocks})
+		out = appendAnthropicBlocks(out, role, blocks...)
 	}
 	// Tool-call ids are mandatory on this wire (tool_use.id and the
 	// matching tool_result.tool_use_id). A history served earlier by an
@@ -190,6 +199,73 @@ func anthropicMessages(msgs []ChatMsg) (system string, out []anthropicMessage) {
 	return strings.Join(sys, "\n\n"), out
 }
 
+// appendAnthropicBlocks appends blocks to the last turn when it has the same
+// role (the API requires user/assistant alternation), else opens a new turn.
+func appendAnthropicBlocks(out []anthropicMessage, role string, blocks ...any) []anthropicMessage {
+	if n := len(out); n > 0 && out[n-1].Role == role {
+		existing, _ := out[n-1].Content.([]any)
+		out[n-1].Content = append(existing, blocks...)
+		return out
+	}
+	return append(out, anthropicMessage{Role: role, Content: blocks})
+}
+
+// anthropicTextMessages is the history of a request WITHOUT tool
+// definitions: the chat harness offers ctx's tools only to a full-trust row,
+// so a row below full trust (and a turn with tools switched off) must still
+// be able to read a history that holds tool use. It gets that history as
+// text — each assistant call as a "[called tool NAME with ARGS]" line after
+// the turn's own text, each result as a "[result of NAME]" user text — and
+// none of the in-memory thinking blocks (ProviderBlocks): they are bound to
+// the prefix the tools array was part of, and a request that drops all of
+// them stays valid. No orphan repair and no synthetic ids are needed here:
+// without tool blocks there is no tool_use that must be answered. The tool
+// results were neutralized field-wise by the executor (chat/tools.go) before
+// they ever reached the history, exactly as on the tool_result path.
+func anthropicTextMessages(msgs []ChatMsg) (system string, out []anthropicMessage) {
+	var sys []string
+	names := map[string]string{} // tool-call id → tool name
+	var nameless []string        // names of id-less calls, answered in order
+	for _, m := range msgs {
+		switch m.Role {
+		case "system":
+			if m.Content != "" {
+				sys = append(sys, m.Content)
+			}
+		case "user":
+			out = appendAnthropicBlocks(out, "user", anthropicTextBlock{Type: "text", Text: m.Content})
+		case "assistant":
+			parts := make([]string, 0, 1+len(m.ToolCalls))
+			if m.Content != "" {
+				parts = append(parts, m.Content)
+			}
+			nameless = nameless[:0]
+			for _, tc := range m.ToolCalls {
+				if tc.ID != "" {
+					names[tc.ID] = tc.Function.Name
+				} else {
+					nameless = append(nameless, tc.Function.Name)
+				}
+				parts = append(parts, fmt.Sprintf("[called tool %s with %s]", tc.Function.Name, anthropicToolInput(tc.Function.Arguments)))
+			}
+			if len(parts) == 0 {
+				continue
+			}
+			out = appendAnthropicBlocks(out, "assistant", anthropicTextBlock{Type: "text", Text: strings.Join(parts, "\n\n")})
+		case "tool":
+			name := names[m.ToolCallID]
+			if m.ToolCallID == "" && len(nameless) > 0 {
+				name, nameless = nameless[0], nameless[1:]
+			}
+			if name == "" {
+				name = "a tool"
+			}
+			out = appendAnthropicBlocks(out, "user", anthropicTextBlock{Type: "text", Text: fmt.Sprintf("[result of %s]\n%s", name, m.Content)})
+		}
+	}
+	return strings.Join(sys, "\n\n"), out
+}
+
 // anthropicToolInput renders assembled tool-call arguments as the tool_use
 // input object. ToolCall carries the object form already (normalizeArgs);
 // anything that is not a valid JSON object becomes {} — the executor has
@@ -226,7 +302,11 @@ func anthropicTools(tools []ToolDef) []anthropicTool {
 func chatStreamAnthropic(ctx context.Context, b backends.Backend, model string,
 	msgs []ChatMsg, tools []ToolDef, opts Options, timeout time.Duration,
 	onEvent func(StreamEvent) error) (*StreamResult, error) {
-	system, messages := anthropicMessages(msgs)
+	system, messages := anthropicMessages(msgs, len(tools) > 0)
+	var toolChoice *anthropicToolChoice
+	if opts.ToolChoiceNone && len(tools) > 0 {
+		toolChoice = &anthropicToolChoice{Type: "none"}
+	}
 	req := anthropicRequest{
 		Model:        model,
 		MaxTokens:    anthropicMaxTokens(opts),
@@ -235,6 +315,7 @@ func chatStreamAnthropic(ctx context.Context, b backends.Backend, model string,
 		Stream:       true,
 		OutputConfig: anthropicOutputConfig{Effort: resolveAnthropicEffort(opts, &b)},
 		Tools:        anthropicTools(tools),
+		ToolChoice:   toolChoice,
 		// Top-level automatic caching: the API places a breakpoint on the
 		// last cacheable block, so each iteration of the tool loop (and
 		// each turn of the session) reads the growing history from cache

@@ -193,7 +193,7 @@ func (e *Engine) RunTurn(ctx context.Context, ar *auth.AuthResult, sess *store.C
 			return emitNoEligible(sink)
 		}
 
-		so := e.runStream(ctx, chain, msgs, toolsEnabled, budgetLeft, iter, sess.ID, apiKeyID, required, adm, sink)
+		so := e.runStream(ctx, chain, msgs, toolsEnabled, false, budgetLeft, iter, sess.ID, apiKeyID, required, adm, sink)
 		if !so.served {
 			return e.finishUnserved(ctx, sess, so, turnMax, start, iter, sink)
 		}
@@ -278,9 +278,11 @@ func (e *Engine) RunTurn(ctx context.Context, ar *auth.AuthResult, sess *store.C
 		}
 	}
 
-	// Iteration cap or budget reached: ONE closing call WITHOUT a tools array
-	// (E4: never tool_choice:"none" — it emits tool syntax as plain text).
-	return e.finalCall(ctx, sess, msgs, reqSens, sessHWM, turnMax, start, apiKeyID, finalReason, adm, sink)
+	// Iteration cap or budget reached: ONE closing call that runs no tool —
+	// WITHOUT a tools array on the openai/ollama wire (E4: never
+	// tool_choice:"none" there — it emits tool syntax as plain text), with the
+	// loop's tools array plus tool_choice none on the anthropic wire (toolsFor).
+	return e.finalCall(ctx, sess, msgs, toolsEnabled, reqSens, sessHWM, turnMax, start, apiKeyID, finalReason, adm, sink)
 }
 
 // ownerActive resolves the session owner's tenant status fresh (the E6 per-turn
@@ -374,7 +376,12 @@ func (e *Engine) acquireQueued(ctx context.Context, adm llm.Admission, b *backen
 // stream without a result stays uncharged. A failed acquire is TERMINAL
 // (doctrine §4.3): no wire contact, no Classify, no health signal, no llmlog
 // row (recordLLM is skipped), no failover onto the next chain link.
-func (e *Engine) runStream(ctx context.Context, chain []backends.Backend, msgs []llm.ChatMsg, toolsEnabled bool, budgetLeft, iter int, sessID, apiKeyID string, required backends.Sensitivity, adm llm.Admission, sink Sink) streamOutcome {
+//
+// closing marks the turn's closing call (finalCall): no tool may run. On the
+// openai/ollama wire it sends no tools array (E4); on the anthropic wire a
+// full-trust row keeps the loop's tools array and adds tool_choice none
+// (toolsFor).
+func (e *Engine) runStream(ctx context.Context, chain []backends.Backend, msgs []llm.ChatMsg, toolsEnabled, closing bool, budgetLeft, iter int, sessID, apiKeyID string, required backends.Sensitivity, adm llm.Admission, sink Sink) streamOutcome {
 	var lastErr error
 	var lastBackend backends.Backend
 	for i := range chain {
@@ -385,11 +392,7 @@ func (e *Engine) runStream(ctx context.Context, chain []backends.Backend, msgs [
 			lastErr = fmt.Errorf("backend %q has no chat model", b.Name)
 			continue
 		}
-		toolsActive := toolsEnabled && b.Trust == backends.TrustFull
-		var tools []llm.ToolDef
-		if toolsActive {
-			tools = e.exec.Defs()
-		}
+		tools, toolsActive, choiceNone := e.toolsFor(&b, toolsEnabled, closing)
 		if serr := sink.Event("backend", map[string]any{
 			"backend": b.Name, "model": model, "trust": string(b.Trust),
 			"tools_active": toolsActive, "fallback": i > 0,
@@ -400,6 +403,7 @@ func (e *Engine) runStream(ctx context.Context, chain []backends.Backend, msgs [
 		var partial strings.Builder
 		started := false
 		opts := e.chatOptions(b, e.tokenClamp(b, budgetLeft))
+		opts.ToolChoiceNone = choiceNone
 
 		// Acquire immediately before the wire call; the resolved LLMTimeout
 		// doubles as the admission-anchored deadline hint (ChatStream applies
@@ -471,6 +475,33 @@ func (e *Engine) runStream(ctx context.Context, chain []backends.Backend, msgs [
 	return streamOutcome{backend: lastBackend, err: lastErr}
 }
 
+// toolsFor decides the tool definitions one attempt sends. Tools run only on
+// a full-trust backend (§2.3) and only while the turn's toggle is on
+// (active). The closing call runs none — but on the anthropic wire a
+// full-trust row still SENDS the loop's tools array, with tool_choice none
+// (choiceNone): a thinking block the loop carries in memory is accepted only
+// while the system prompt, the tools and the earlier messages it was
+// produced under are unchanged
+// (platform.claude.com/docs/en/api/errors#thinking-block-no-longer-matches-the-conversation,
+// a 400 for accounts created on or after 2026-08-31), tool_choice is outside
+// that check (build-with-claude/preserved-thinking), and {"type":"none"} is
+// accepted on Claude Opus 5.5 (errors#forced-tool-use-not-supported). The
+// openai/ollama closing call keeps sending NO tools array (E4: there
+// tool_choice:"none" made the model emit tool syntax as plain text). A row
+// below full trust never receives the definitions; the anthropic wire then
+// renders the tool history as text (llm.anthropicTextMessages).
+func (e *Engine) toolsFor(b *backends.Backend, toolsEnabled, closing bool) (tools []llm.ToolDef, active, choiceNone bool) {
+	active = toolsEnabled && b.Trust == backends.TrustFull
+	if closing {
+		choiceNone = active && b.Protocol == backends.ProtocolAnthropic
+		active = false
+	}
+	if active || choiceNone {
+		tools = e.exec.Defs()
+	}
+	return tools, active, choiceNone
+}
+
 // finishUnserved handles an iteration that produced no usable result: a client
 // cancel persists the partial answer with a canceled marker (over a cancel-immune
 // context) and ends with a canceled done; any other error is laundered into an
@@ -511,15 +542,18 @@ func (e *Engine) finishUnserved(ctx context.Context, sess *store.ChatSession, so
 }
 
 // finalCall is the closing answer after the tool budget/iteration cap: a single
-// model call with NO tools array, prompted to answer from the gathered material.
-func (e *Engine) finalCall(ctx context.Context, sess *store.ChatSession, msgs []llm.ChatMsg, reqSens, sessHWM, turnMax backends.Sensitivity, start time.Time, apiKeyID, reason string, adm llm.Admission, sink Sink) error {
+// model call that runs no tool, prompted to answer from the gathered material.
+// toolsEnabled is the turn's toggle: it decides, with the row's trust and
+// protocol, whether the anthropic wire keeps the loop's tools array next to
+// tool_choice none (toolsFor); the openai/ollama wire sends no tools array.
+func (e *Engine) finalCall(ctx context.Context, sess *store.ChatSession, msgs []llm.ChatMsg, toolsEnabled bool, reqSens, sessHWM, turnMax backends.Sensitivity, start time.Time, apiKeyID, reason string, adm llm.Admission, sink Sink) error {
 	msgs = append(msgs, llm.ChatMsg{Role: "user", Content: "Tool budget exhausted — answer now directly from the material gathered so far."})
 	required := backends.MaxSensitivity(reqSens, sessHWM)
 	chain, cerr := e.provider.ChatChain(ctx, required, sess.Scope)
 	if cerr != nil || len(chain) == 0 {
 		return emitNoEligible(sink)
 	}
-	so := e.runStream(ctx, chain, msgs, false, e.cfg.MaxTokens, e.cfg.MaxIterations+1, sess.ID, apiKeyID, required, adm, sink)
+	so := e.runStream(ctx, chain, msgs, toolsEnabled, true, e.cfg.MaxTokens, e.cfg.MaxIterations+1, sess.ID, apiKeyID, required, adm, sink)
 	if !so.served {
 		return e.finishUnserved(ctx, sess, so, turnMax, start, e.cfg.MaxIterations, sink)
 	}

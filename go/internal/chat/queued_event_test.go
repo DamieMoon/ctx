@@ -69,7 +69,7 @@ func TestRunStreamEmitsQueuedEventWhileWaiting(t *testing.T) {
 	outcome := make(chan streamOutcome, 1)
 	go func() {
 		outcome <- e.runStream(context.Background(), []backends.Backend{streamBackend("b", srv.URL)},
-			[]llm.ChatMsg{{Role: "user", Content: "hi"}}, false, 0, 1, "sess", "key-s", backends.SensPublic, adm, sink)
+			[]llm.ChatMsg{{Role: "user", Content: "hi"}}, false, false, 0, 1, "sess", "key-s", backends.SensPublic, adm, sink)
 	}()
 
 	// Wait until the stream acquire is queued, then let a couple keepalive

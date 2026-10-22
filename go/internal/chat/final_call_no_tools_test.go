@@ -3,9 +3,11 @@
 //
 // stream_tools_absent_test.go (internal/llm) pins the WIRE half: the struct
 // tag omits the key. This file pins the ENGINE half: finalCall — the single
-// call the turn loop makes after the iteration cap / tool budget (engine.go:280
-// → :519) — hands runStream toolsEnabled=false, so no tool definition ever
-// reaches the request body of the closing call.
+// call the turn loop makes after the iteration cap / tool budget — runs
+// runStream in closing mode, so on the openai/ollama wire no tool definition
+// ever reaches the request body of the closing call. (The anthropic wire
+// closes differently on purpose — same tools array plus tool_choice none —
+// pinned in final_call_anthropic_test.go.)
 //
 // The probe intercepts the real wire body of that closing call through an
 // httptest backend and asserts the key's absence, then runs the SAME engine
@@ -89,8 +91,11 @@ func TestFinalCallSendsNoToolsArray(t *testing.T) {
 
 	sess := &store.ChatSession{ID: "sess-h13a", Scope: "private"}
 	sink := newEventSink()
+	// toolsEnabled=true on a full-trust openai row: even the turn whose loop
+	// offered tools closes WITHOUT them on this wire (the anthropic wire's
+	// closing call keeps them — final_call_anthropic_test.go).
 	err := e.finalCall(context.Background(), sess,
-		[]llm.ChatMsg{{Role: "user", Content: "hi"}},
+		[]llm.ChatMsg{{Role: "user", Content: "hi"}}, true,
 		backends.SensPublic, backends.SensPublic, backends.SensPublic,
 		time.Now(), "key-h13a", "iterations",
 		interactiveStreamAdmission(t, newStreamRecAdmitter(t)), sink)
@@ -100,7 +105,7 @@ func TestFinalCallSendsNoToolsArray(t *testing.T) {
 
 	body := cap.only(t)
 	if v, has := body["tools"]; has {
-		t.Fatalf("closing call carried the key \"tools\" (= %v) — engine.go:519 must pass toolsEnabled=false and the wire must omit the key (E4)", v)
+		t.Fatalf("closing call carried the key \"tools\" (= %v) — the openai closing call must offer no tools and the wire must omit the key (E4)", v)
 	}
 	// The E5 sibling: the closing call must not reach for tool_choice either.
 	if v, has := body["tool_choice"]; has {
@@ -120,7 +125,7 @@ func TestRunStreamWithToolsCarriesToolsArray(t *testing.T) {
 	so := e.runStream(context.Background(),
 		[]backends.Backend{streamBackend("with-tools", srv.URL)},
 		[]llm.ChatMsg{{Role: "user", Content: "hi"}},
-		true, 0, 1, "sess-h13a", "key-h13a", backends.SensPublic,
+		true, false, 0, 1, "sess-h13a", "key-h13a", backends.SensPublic,
 		interactiveStreamAdmission(t, newStreamRecAdmitter(t)), newEventSink())
 	if so.served {
 		t.Fatal("fake backend answered 502 — the outcome must stay unserved")

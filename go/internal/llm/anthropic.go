@@ -20,7 +20,10 @@
 //     model_map `think` toggle is therefore ignored here, and depth is
 //     steered with output_config.effort instead (resolveAnthropicEffort).
 //   - forced tool_choice (any/tool) → 400: never sent (auto is the default,
-//     matching buildStreamBody's doctrine on the openai wire).
+//     matching buildStreamBody's doctrine on the openai wire). The one
+//     tool_choice this wire sends is {"type":"none"} on the chat harness's
+//     closing call (Options.ToolChoiceNone), which keeps the loop's tools
+//     array so a replayed thinking block's prefix stays unchanged.
 //   - output_config.format needs a JSON schema with additionalProperties:
 //     false on every object; ctx's "json" format carries no schema and the
 //     dream stages answer with arrays, so ChatJSON is a documented no-op on
@@ -114,6 +117,13 @@ type anthropicTool struct {
 	InputSchema json.RawMessage `json:"input_schema"`
 }
 
+// anthropicToolChoice is sent only as {"type":"none"} (the chat harness's
+// closing call, Options.ToolChoiceNone): auto is the API default and the
+// forced variants (any/tool) are a 400 on Claude Opus 5.5.
+type anthropicToolChoice struct {
+	Type string `json:"type"`
+}
+
 type anthropicRequest struct {
 	Model        string                `json:"model"`
 	MaxTokens    int                   `json:"max_tokens"`
@@ -122,6 +132,7 @@ type anthropicRequest struct {
 	Stream       bool                  `json:"stream,omitempty"`
 	OutputConfig anthropicOutputConfig `json:"output_config"`
 	Tools        []anthropicTool       `json:"tools,omitempty"`
+	ToolChoice   *anthropicToolChoice  `json:"tool_choice,omitempty"`
 	// CacheControl at the top level is the API's automatic breakpoint on the
 	// last cacheable block — set on the multi-turn stream path only.
 	CacheControl *anthropicCacheControl `json:"cache_control,omitempty"`

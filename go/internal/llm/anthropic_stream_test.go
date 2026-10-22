@@ -128,7 +128,7 @@ func TestAnthropicStreamToolUseFixture(t *testing.T) {
 		{Role: "assistant", Content: res.Content, ToolCalls: res.ToolCalls},
 		{Role: "tool", Content: "21C", ToolCallID: "toolu_01weather"},
 		{Role: "tool", Content: "12:00", ToolCallID: "toolu_02time"},
-	})
+	}, true)
 	if system != "sys" || len(msgs) != 3 {
 		t.Fatalf("system=%q msgs=%d, want 3 turns (user, assistant, merged tool results)", system, len(msgs))
 	}
@@ -403,7 +403,7 @@ func TestAnthropicMessagesEdgeCases(t *testing.T) {
 		{Role: "user", Content: "two"},
 		{Role: "assistant", Content: ""},
 		{Role: "user", Content: "three"},
-	})
+	}, true)
 	if system != "a\n\nb" {
 		t.Errorf("system = %q", system)
 	}
@@ -484,7 +484,7 @@ func TestAnthropicMessagesRepairsEmptyToolIDs(t *testing.T) {
 		{Role: "tool", Content: "ra"},
 		{Role: "tool", Content: "rb", ToolCallID: "real"},
 		{Role: "tool", Content: "rc"},
-	})
+	}, true)
 	raw, _ := json.Marshal(msgs)
 	s := string(raw)
 	for _, want := range []string{
@@ -528,7 +528,7 @@ func TestAnthropicStreamThinkingBlocksReplayFirst(t *testing.T) {
 		{Role: "assistant", Content: res.Content, ToolCalls: res.ToolCalls, ProviderBlocks: res.ProviderBlocks},
 		{Role: "tool", Content: "21C", ToolCallID: "toolu_01weather"},
 		{Role: "tool", Content: "12:00", ToolCallID: "toolu_02time"},
-	})
+	}, true)
 	blocks, _ := msgs[1].Content.([]any)
 	if len(blocks) != 4 {
 		t.Fatalf("assistant turn = %d blocks, want thinking + text + 2 tool_use", len(blocks))
@@ -581,7 +581,7 @@ func TestAnthropicMessagesRepairsOrphanToolUse(t *testing.T) {
 		{Role: "tool", Content: "ra", ToolCallID: "A"},
 		{Role: "user", Content: "q2"},
 		{Role: "assistant", ToolCalls: []ToolCall{{ID: "C", Function: ToolCallFunction{Name: "c", Arguments: json.RawMessage(`{}`)}}}},
-	})
+	}, true)
 	if len(msgs) != 5 {
 		t.Fatalf("turns = %d, want user / assistant / user[ra, B-orphan, q2] / assistant / user[C-orphan]", len(msgs))
 	}
@@ -630,6 +630,82 @@ func TestStreamErrorClassifiesLikeItsStatus(t *testing.T) {
 		err := fmt.Errorf("wrapped: %w", &StreamError{Code: code, Message: "m"})
 		if got := backends.Classify(err, backends.ProviderGeneric); got != want {
 			t.Errorf("Classify(StreamError %q) = %v, want %v", code, got, want)
+		}
+	}
+}
+
+// --- closing call and tool-less requests (review finding 1) ---.
+
+// TestAnthropicStreamToolChoiceNone: Options.ToolChoiceNone keeps the tools
+// array and adds tool_choice {"type":"none"} (accepted on Claude Opus 5.5 —
+// platform.claude.com/docs/en/api/errors#forced-tool-use-not-supported); it
+// is a no-op on a request without tools (there is nothing to choose from).
+func TestAnthropicStreamToolChoiceNone(t *testing.T) {
+	tools := []ToolDef{{Type: "function", Function: ToolDefFunction{Name: "get_time"}}}
+	msgs := []ChatMsg{{Role: "user", Content: "hi"}}
+	for _, tc := range []struct {
+		tools      []ToolDef
+		wantChoice bool
+	}{{tools, true}, {nil, false}} {
+		srv, body, _ := captureRequestBody(t, "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n\ndata: {\"type\":\"message_stop\"}\n\n")
+		if _, err := ChatStreamBackend(context.Background(), anthropicStreamBackend(srv.URL), "m",
+			msgs, tc.tools, Options{NumPredict: 8, ToolChoiceNone: true}, 5*time.Second, nil); err != nil {
+			t.Fatal(err)
+		}
+		srv.Close()
+		var req map[string]any
+		_ = json.Unmarshal(*body, &req)
+		choice, has := req["tool_choice"].(map[string]any)
+		if tc.wantChoice && (!has || choice["type"] != "none") {
+			t.Errorf("tool_choice = %v, want {type: none} next to the tools array", req["tool_choice"])
+		}
+		if !tc.wantChoice && req["tool_choice"] != nil {
+			t.Errorf("tool_choice = %v on a request without tools", req["tool_choice"])
+		}
+		if tc.wantChoice && req["tools"] == nil {
+			t.Error("tools array dropped although tool_choice none was asked for")
+		}
+	}
+}
+
+// TestAnthropicMessagesWithoutToolsRendersText: a request that carries no
+// tool definitions carries no tool_use / tool_result blocks and no thinking
+// blocks either — the calls and results are rendered as text in their turns,
+// empty-id calls included, and the turns still alternate.
+func TestAnthropicMessagesWithoutToolsRendersText(t *testing.T) {
+	system, msgs := anthropicMessages([]ChatMsg{
+		{Role: "system", Content: "sys"},
+		{Role: "user", Content: "q"},
+		{Role: "assistant", Content: "Checking.", ToolCalls: []ToolCall{
+			{ID: "A", Function: ToolCallFunction{Name: "get_weather", Arguments: json.RawMessage(`{"city":"Berlin"}`)}},
+			{Function: ToolCallFunction{Name: "get_time", Arguments: json.RawMessage(`{}`)}},
+		}, ProviderBlocks: []json.RawMessage{json.RawMessage(`{"type":"thinking","thinking":"","signature":"sigX"}`)}},
+		{Role: "tool", Content: "21C", ToolCallID: "A"},
+		{Role: "tool", Content: "12:00"},
+		{Role: "assistant", Content: "Berlin: 21C at noon."},
+		{Role: "user", Content: "thanks"},
+	}, false)
+	if system != "sys" {
+		t.Errorf("system = %q", system)
+	}
+	raw, _ := json.Marshal(msgs)
+	s := string(raw)
+	for _, banned := range []string{`"tool_use"`, `"tool_result"`, `"thinking"`, `sigX`} {
+		if strings.Contains(s, banned) {
+			t.Errorf("tool-less request carries %s:\n%s", banned, s)
+		}
+	}
+	if len(msgs) != 5 {
+		t.Fatalf("turns = %d, want user / assistant / user[both results] / assistant / user:\n%s", len(msgs), s)
+	}
+	for i := 1; i < len(msgs); i++ {
+		if msgs[i].Role == msgs[i-1].Role {
+			t.Errorf("turns %d/%d share role %q", i-1, i, msgs[i].Role)
+		}
+	}
+	for _, want := range []string{"Checking.", "get_weather", `{\"city\":\"Berlin\"}`, "get_time", "21C", "12:00", "thanks"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("rendered history lacks %s:\n%s", want, s)
 		}
 	}
 }

@@ -145,7 +145,7 @@ func TestRunStreamLeaseSpansStreamAndChargesEndUsage(t *testing.T) {
 	outcome := make(chan streamOutcome, 1)
 	go func() {
 		outcome <- e.runStream(context.Background(), []backends.Backend{streamBackend("b", srv.URL)},
-			[]llm.ChatMsg{{Role: "user", Content: "hi"}}, false, 0, 1, "sess", "key-s", backends.SensPublic, adm, sink)
+			[]llm.ChatMsg{{Role: "user", Content: "hi"}}, false, false, 0, 1, "sess", "key-s", backends.SensPublic, adm, sink)
 	}()
 
 	<-sink.delta // first byte reached the client
@@ -206,7 +206,7 @@ func TestRunStreamAbortMidStreamReleasesUncharged(t *testing.T) {
 	e := streamEngine()
 
 	so := e.runStream(context.Background(), []backends.Backend{streamBackend("b", srv.URL)},
-		[]llm.ChatMsg{{Role: "user", Content: "hi"}}, false, 0, 1, "sess", "key-s", backends.SensPublic,
+		[]llm.ChatMsg{{Role: "user", Content: "hi"}}, false, false, 0, 1, "sess", "key-s", backends.SensPublic,
 		interactiveStreamAdmission(t, d), newEventSink())
 	if so.served || so.err == nil {
 		t.Fatalf("outcome = served %v err %v, want unserved error", so.served, so.err)
@@ -252,7 +252,7 @@ func TestRunStreamAcquireEqualsWireCalls(t *testing.T) {
 	e := streamEngine()
 	so := e.runStream(context.Background(),
 		[]backends.Backend{streamBackend("down", down.URL), streamBackend("up", up.URL)},
-		[]llm.ChatMsg{{Role: "user", Content: "hi"}}, false, 0, 1, "sess", "key-s", backends.SensPublic,
+		[]llm.ChatMsg{{Role: "user", Content: "hi"}}, false, false, 0, 1, "sess", "key-s", backends.SensPublic,
 		interactiveStreamAdmission(t, rec), newEventSink())
 	if !so.served || so.backend.Name != "up" {
 		t.Fatalf("outcome = served %v backend %s", so.served, so.backend.Name)
@@ -284,7 +284,7 @@ func TestRunStreamRejectionIsTerminal(t *testing.T) {
 	sink := newEventSink()
 	so := e.runStream(context.Background(),
 		[]backends.Backend{streamBackend("b1", srv.URL), streamBackend("b2", srv.URL)},
-		[]llm.ChatMsg{{Role: "user", Content: "hi"}}, false, 0, 1, "sess", "key-s", backends.SensPublic,
+		[]llm.ChatMsg{{Role: "user", Content: "hi"}}, false, false, 0, 1, "sess", "key-s", backends.SensPublic,
 		interactiveStreamAdmission(t, rec), sink)
 	if so.served || !llm.IsAdmissionError(so.err) || !errors.Is(so.err, dispatch.ErrPrincipalSaturated) {
 		t.Fatalf("outcome = served %v err %v, want terminal admission error", so.served, so.err)
@@ -352,7 +352,7 @@ func TestRunStreamWaitFreeTelemetrySplit(t *testing.T) {
 	outcome := make(chan streamOutcome, 1)
 	go func() {
 		outcome <- e.runStream(context.Background(), []backends.Backend{streamBackend("b", srv.URL)},
-			[]llm.ChatMsg{{Role: "user", Content: "hi"}}, false, 0, 1, "sess", "key-s", backends.SensPublic, adm, newEventSink())
+			[]llm.ChatMsg{{Role: "user", Content: "hi"}}, false, false, 0, 1, "sess", "key-s", backends.SensPublic, adm, newEventSink())
 	}()
 
 	waiting := func() bool {
@@ -423,7 +423,7 @@ func TestRunStreamZeroWaitIsARealValue(t *testing.T) {
 	adm := interactiveStreamAdmission(t, d)
 	e := streamEngine()
 	so := e.runStream(context.Background(), []backends.Backend{streamBackend("b", srv.URL)},
-		[]llm.ChatMsg{{Role: "user", Content: "hi"}}, false, 0, 1, "sess", "key-s", backends.SensPublic, adm, newEventSink())
+		[]llm.ChatMsg{{Role: "user", Content: "hi"}}, false, false, 0, 1, "sess", "key-s", backends.SensPublic, adm, newEventSink())
 	if !so.served || so.err != nil {
 		t.Fatalf("outcome = served %v err %v", so.served, so.err)
 	}

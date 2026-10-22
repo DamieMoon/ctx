@@ -126,7 +126,7 @@ func toolMessageOnWire(t *testing.T, blocks []QueryBlock) (raw []byte, toolConte
 			{Role: "assistant", ToolCalls: []llm.ToolCall{{ID: "call-h7"}}},
 			{Role: "tool", Content: out.Content, ToolCallID: "call-h7"},
 		},
-		false, 0, 1, "sess-h7", "key-h7", backends.SensPublic,
+		false, false, 0, 1, "sess-h7", "key-h7", backends.SensPublic,
 		interactiveStreamAdmission(t, newStreamRecAdmitter(t)), newEventSink())
 	if so.served {
 		t.Fatal("fake backend answered 502 — the outcome must stay unserved")

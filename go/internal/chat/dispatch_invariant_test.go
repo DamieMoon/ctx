@@ -198,7 +198,7 @@ func TestDispatchAcquireEqualsWireAllSites(t *testing.T) {
 	// --- Site 3: stream.go:288 ---
 	e := &Engine{cfg: Config{}.withDefaults(), now: time.Now}
 	so := e.runStream(ctx, []backends.Backend{invariantBackend(srv.URL, backends.ProtocolOpenAI)},
-		[]llm.ChatMsg{{Role: "user", Content: "hi"}}, false, 0, 1, "sess", "key", backends.SensPublic, llmAdm, noopSink{})
+		[]llm.ChatMsg{{Role: "user", Content: "hi"}}, false, false, 0, 1, "sess", "key", backends.SensPublic, llmAdm, noopSink{})
 	if !so.served || so.err != nil {
 		t.Fatalf("stream: served=%v err=%v", so.served, so.err)
 	}
@@ -232,7 +232,7 @@ func TestDispatchAcquireEqualsWireAllSites(t *testing.T) {
 	// --- Site 8: anthropic_stream.go — the ChatStreamBackend dispatch under
 	// the same stream lease as site 3. ---
 	so = e.runStream(ctx, []backends.Backend{invariantBackend(srv.URL, backends.ProtocolAnthropic)},
-		[]llm.ChatMsg{{Role: "user", Content: "hi"}}, false, 0, 1, "sess", "key", backends.SensPublic, llmAdm, noopSink{})
+		[]llm.ChatMsg{{Role: "user", Content: "hi"}}, false, false, 0, 1, "sess", "key", backends.SensPublic, llmAdm, noopSink{})
 	if !so.served || so.err != nil {
 		t.Fatalf("anthropic stream: served=%v err=%v", so.served, so.err)
 	}
