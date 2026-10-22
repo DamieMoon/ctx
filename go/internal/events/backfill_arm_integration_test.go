@@ -19,8 +19,10 @@ package events
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -190,6 +192,113 @@ func TestEmbedBackfillArm_RunsWithoutDream_Integration(t *testing.T) {
 		time.Sleep(600 * time.Millisecond)
 		if got := pendingCount(t, pool); got != 1 {
 			t.Fatalf("pending = %d, want 1 (Interval=0 is the explicit off switch)", got)
+		}
+	})
+}
+
+// TestEmbedBackfillArm_Pacing_Integration is the Rot-Gate for review finding
+// m3: after a block-specific memo (oversize — pre-wire estimate or HTTP 400
+// exceed_context_size) backfillOneEmbedding reported "nothing backfilled"
+// and the arm waited a full embed_backfill.interval before the next pick,
+// although the memo had moved the block out of the way and said nothing
+// about the backend. 1000 oversize blocks at the 15 s default ≈ 4 h before
+// the first embeddable block behind them. Grün: a parked block lets the
+// arm go on at once; a wire-class memo (backend suspect) keeps the
+// interval wait, so a failing backend is not walked through the backlog.
+func TestEmbedBackfillArm_Pacing_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test")
+	}
+	pool := testdb.SetupTestDB(t)
+	ctx := context.Background()
+	d := dispatch.New(nil, dispatch.DefaultSettings())
+	t.Cleanup(d.Close)
+
+	seedContent := func(t *testing.T, title, content string, age time.Duration) string {
+		t.Helper()
+		var id string
+		if err := pool.QueryRow(ctx,
+			`INSERT INTO context_blocks (category, title, content, scope, created_at, updated_at)
+			 VALUES ('learnings', $1, $2, 'shared', now() - $3::interval, now()) RETURNING id`,
+			title, content, age.String()).Scan(&id); err != nil {
+			t.Fatalf("seed %s: %v", title, err)
+		}
+		return id
+	}
+	embedded := func(t *testing.T, id string) bool {
+		t.Helper()
+		var has bool
+		if err := pool.QueryRow(ctx, `SELECT embedding IS NOT NULL FROM context_blocks WHERE id = $1`, id).Scan(&has); err != nil {
+			t.Fatalf("read %s: %v", id, err)
+		}
+		return has
+	}
+	// Interval = 1 h: any wait of the arm outlasts the test by far, so a
+	// block reached within seconds was reached WITHOUT an interval wait.
+	newArm := func(t *testing.T, url string, maxTokens int) *Scheduler {
+		t.Helper()
+		bpool := backends.NewPool(nil, nil)
+		bpool.SeedSnapshotForTest([]backends.Backend{embedPoolRow("embed-pacing", url, 100)})
+		cfg := &config.Config{EmbedBackfill: config.EmbedBackfillConfig{
+			Interval: time.Hour, MaxTokens: maxTokens, BackoffBase: time.Hour, BackoffCap: 24 * time.Hour,
+		}}
+		s := NewScheduler(pool, config.NewStore(cfg), bpool, StartupConfig{DreamEnabled: false})
+		s.SetDispatcher(d)
+		return s
+	}
+
+	t.Run("parked_blocks_let_the_arm_go_on_at_once", func(t *testing.T) {
+		defer clearBlocks(t, pool)
+		long := strings.Repeat("x", 400) // ≈ 100 estimated tokens > MaxTokens 50
+		for i := range 3 {
+			seedContent(t, fmt.Sprintf("pacing-precheck-oversize-%d", i), long, time.Duration(5-i)*time.Hour)
+		}
+		// Passes the estimate, comes back HTTP 400 exceed_context_size.
+		seedContent(t, "pacing-wire-oversize "+oversizeMarker, "short", 2*time.Hour)
+		youngID := seedContent(t, "pacing-young", "short", time.Hour)
+
+		s := newArm(t, headOfLineEmbedServer(t).URL, 50)
+		armCtx, stop := context.WithCancel(ctx)
+		defer stop()
+		go s.runEmbedBackfillLoop(armCtx)
+
+		deadline := time.Now().Add(5 * time.Second)
+		for !embedded(t, youngID) && time.Now().Before(deadline) {
+			time.Sleep(25 * time.Millisecond)
+		}
+		if !embedded(t, youngID) {
+			t.Fatalf("young block still pending after 5 s behind four oversize blocks: the arm waited out the interval after a memo")
+		}
+		var parked int
+		if err := pool.QueryRow(ctx,
+			`SELECT count(*) FROM context_embed_failures WHERE last_class = 'oversize' AND next_attempt_at = 'infinity'`).
+			Scan(&parked); err != nil {
+			t.Fatalf("count memos: %v", err)
+		}
+		if parked != 4 {
+			t.Errorf("oversize memos = %d, want 4", parked)
+		}
+	})
+
+	t.Run("wire_memo_keeps_the_interval_wait", func(t *testing.T) {
+		defer clearBlocks(t, pool)
+		var hits atomic.Int64
+		down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			hits.Add(1)
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		t.Cleanup(down.Close)
+		seedContent(t, "pacing-down-a", "short", 2*time.Hour)
+		seedContent(t, "pacing-down-b", "short", time.Hour)
+
+		s := newArm(t, down.URL, 0)
+		armCtx, stop := context.WithCancel(ctx)
+		defer stop()
+		go s.runEmbedBackfillLoop(armCtx)
+
+		time.Sleep(1500 * time.Millisecond)
+		if got := hits.Load(); got != 1 {
+			t.Fatalf("failing backend saw %d embed calls in 1.5 s, want 1 (a wire memo must keep the interval wait)", got)
 		}
 	})
 }

@@ -2117,8 +2117,9 @@ const backfillArmPoll = 15 * time.Second
 // runEmbedBackfillLoop is the dedicated background arm for pending
 // embeddings (tracking issue: force-push.me/damienmoon/ctx/issues/1). It is the same work as the call at the
 // top of runDreamLoop — backfillOneEmbedding under the iterated tenant's
-// snapshot and router — on its own cadence: a successful pick loops at once,
-// an empty pick waits embed_backfill.interval, an error waits 10 s. Under
+// snapshot and router — on its own cadence: a pick that embedded a block or
+// parked one (oversize memo) loops at once, an empty pick or a wire-class
+// memo waits embed_backfill.interval, an error waits 10 s. Under
 // !enforcing() it yields to interactive demand exactly like the dream loop
 // (P-Fallback); under Enforcing the wire call waits at its target in its
 // background lease. Interval <= 0 turns the arm off; it then polls the
@@ -2156,16 +2157,20 @@ func (s *Scheduler) runEmbedBackfillLoop(ctx context.Context) {
 			}
 		}
 
-		backfilled, err := s.backfillArmOnce(ctx, cfg, bt)
+		outcome, err := s.backfillArmOnce(ctx, cfg, bt)
 		switch {
 		case err != nil:
 			slog.Error("scheduler: embed backfill arm error", "error", err)
 			if !wait(10 * time.Second) {
 				return
 			}
-		case backfilled:
-			continue // Loop at once: more may be pending.
-		default:
+		case outcome == backfillEmbedded, outcome == backfillParked:
+			// Loop at once: more may be pending. A parked block is progress
+			// too — it is out of the pick and says nothing about the backend
+			// (review finding m3: waiting the interval after each oversize
+			// memo cost 1000 such blocks ≈ 4 h at the 15 s default).
+			continue
+		default: // backfillIdle, backfillFailed
 			if !wait(interval) {
 				return
 			}
@@ -2179,13 +2184,46 @@ func (s *Scheduler) runEmbedBackfillLoop(ctx context.Context) {
 // iterated tenant's scope window — the router resolves its chain with that
 // tenant's backend visibility, so a block outside the window must not be
 // picked on this turn (cross-tenant egress, same conjunct as the dream loop).
-func (s *Scheduler) backfillArmOnce(ctx context.Context, cfg *config.Config, bt backgroundTenant) (bool, error) {
+func (s *Scheduler) backfillArmOnce(ctx context.Context, cfg *config.Config, bt backgroundTenant) (backfillOutcome, error) {
 	defer guardPanic("embed backfill arm")
-	return s.backfillOneEmbedding(ctx, s.newRouter(cfg, bt.scope), cfg, bt.owned)
+	return s.backfillStep(ctx, s.newRouter(cfg, bt.scope), cfg, bt.owned)
 }
 
-// backfillOneEmbedding finds one block with missing embedding, generates it, and stores it.
-// Returns true if a block was backfilled, false if none needed.
+// backfillOutcome is what one backfill pick did — the pacing signal of the
+// dedicated arm (review finding m3). The zero value is backfillIdle, which
+// is also what a recovered panic in backfillArmOnce returns.
+type backfillOutcome int
+
+const (
+	// backfillIdle: nothing picked, the pick released (another worker took
+	// the block, Q-I3 defer, chain mismatch) or no eligible chain — wait
+	// before the next pick.
+	backfillIdle backfillOutcome = iota
+	// backfillEmbedded: one block embedded and committed.
+	backfillEmbedded
+	// backfillParked: a block-specific memo committed (oversize, by the
+	// pre-wire estimate or an HTTP 400 exceed_context_size). Nothing was
+	// embedded, but the block is out of the pick and the memo says nothing
+	// about the backend — the next pick can go at once.
+	backfillParked
+	// backfillFailed: a wire-class memo committed — the backend itself is
+	// suspect (down, timeout, 5xx). Paced like an empty pick, so a failing
+	// backend is probed once per interval instead of the whole backlog being
+	// walked into memos against it (the rule Pfad A follows with its break
+	// after a wire failure).
+	backfillFailed
+)
+
+// backfillOneEmbedding is backfillStep for callers that only need to know
+// whether a block was embedded — the dream loop, which keeps its pre-m3
+// pacing (a memo falls through to the dream cycle), and the pick tests.
+func (s *Scheduler) backfillOneEmbedding(ctx context.Context, router *dream.Router, cfg *config.Config, owned []string) (bool, error) {
+	outcome, err := s.backfillStep(ctx, router, cfg, owned)
+	return outcome == backfillEmbedded, err
+}
+
+// backfillStep finds one block with missing embedding, generates it, and stores it.
+// Returns what the pick did (backfillOutcome); backfillIdle if none needed.
 // The embed chains over the pool (G28): role dream-embed when configured,
 // embed otherwise — backfill has no latency SLA and should not compete with
 // Dream's chat model for shared GPU VRAM. The chain resolves with THE block's
@@ -2236,7 +2274,7 @@ func (s *Scheduler) backfillArmOnce(ctx context.Context, cfg *config.Config, bt 
 // chain on every pick, so a trust change or a lowered sensitivity makes the
 // block embeddable on the next one. Shared by the dream loop and the
 // dedicated arm.
-func (s *Scheduler) backfillOneEmbedding(ctx context.Context, router *dream.Router, cfg *config.Config, owned []string) (bool, error) {
+func (s *Scheduler) backfillStep(ctx context.Context, router *dream.Router, cfg *config.Config, owned []string) (backfillOutcome, error) {
 	pickConjunct := ""
 	var pickArgs []any
 	if len(owned) > 0 {
@@ -2256,10 +2294,10 @@ func (s *Scheduler) backfillOneEmbedding(ctx context.Context, router *dream.Rout
 	}
 	peekID, peekSens, peekScope, err := peek()
 	if errors.Is(err, pgx.ErrNoRows) {
-		return false, nil
+		return backfillIdle, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("backfill: peek: %w", err)
+		return backfillIdle, fmt.Errorf("backfill: peek: %w", err)
 	}
 
 	peekRequired := router.FloorSens(backends.Sensitivity(peekSens), peekScope)
@@ -2272,7 +2310,7 @@ func (s *Scheduler) backfillOneEmbedding(ctx context.Context, router *dream.Rout
 			// skip to, and nothing is memoized.
 			slog.Warn("scheduler: backfill has no eligible embed backend — block stays unembedded",
 				"block_id", peekID, "error", err)
-			return false, nil
+			return backfillIdle, nil
 		}
 		slog.Debug("scheduler: backfill skips blocks no eligible embed backend can serve",
 			"block_id", peekID, "required", peekRequired)
@@ -2280,29 +2318,29 @@ func (s *Scheduler) backfillOneEmbedding(ctx context.Context, router *dream.Rout
 		pickArgs = append(pickArgs, args...)
 		peekID, peekSens, peekScope, err = peek()
 		if errors.Is(err, pgx.ErrNoRows) {
-			return false, nil // only unservable blocks are pending
+			return backfillIdle, nil // only unservable blocks are pending
 		}
 		if err != nil {
-			return false, fmt.Errorf("backfill: peek: %w", err)
+			return backfillIdle, fmt.Errorf("backfill: peek: %w", err)
 		}
 		peekChain, peekRole, err = router.EmbedChain(router.FloorSens(backends.Sensitivity(peekSens), peekScope))
 		if err != nil {
 			slog.Warn("scheduler: backfill has no eligible embed backend — block stays unembedded",
 				"block_id", peekID, "error", err)
-			return false, nil
+			return backfillIdle, nil
 		}
 	}
 	guarded, releaseLease, err := acquireBackfillLease(ctx, router.EmbedAdmit(), peekChain, peekRole)
 	if err != nil {
-		return false, fmt.Errorf("backfill: admission: %w", err)
+		return backfillIdle, fmt.Errorf("backfill: admission: %w", err)
 	}
 	// Idempotent (B1): settles the pre-lease on every path where EmbedChain
 	// never claims it (empty pick, chain mismatch, pre-wire error).
 	defer releaseLease()
 
 	var (
-		tail       txTail
-		backfilled bool
+		tail    txTail
+		outcome backfillOutcome
 	)
 	err = pgxdb.Write(ctx, s.pool, pgxdb.Stages{Begin: "backfill: begin tx"}, func(tx pgx.Tx) error {
 		var blockID, title, content, sens, scope string
@@ -2353,6 +2391,7 @@ func (s *Scheduler) backfillOneEmbedding(ctx context.Context, router *dream.Rout
 					cfg.EmbedBackfill.BackoffBase, cfg.EmbedBackfill.BackoffCap); ferr != nil {
 					return fmt.Errorf("backfill: oversize memo: %w", ferr)
 				}
+				outcome = backfillParked
 				return tail.end("backfill: commit oversize memo", nil)
 			}
 		}
@@ -2406,6 +2445,12 @@ func (s *Scheduler) backfillOneEmbedding(ctx context.Context, router *dream.Rout
 				cfg.EmbedBackfill.BackoffBase, cfg.EmbedBackfill.BackoffCap); ferr != nil {
 				return fmt.Errorf("backfill: embed: %w (memo write also failed: %w)", err, ferr)
 			}
+			// An HTTP 400 exceed_context_size is block-specific (parked, the
+			// arm goes on); every other class is a backend suspect (m3).
+			outcome = backfillFailed
+			if class == store.EmbedFailureOversize {
+				outcome = backfillParked
+			}
 			return tail.end("backfill: commit failure memo", func() {
 				slog.Warn("scheduler: backfill embed failed — memoized",
 					"block_id", blockID, "class", class, "error", err)
@@ -2420,17 +2465,17 @@ func (s *Scheduler) backfillOneEmbedding(ctx context.Context, router *dream.Rout
 			return fmt.Errorf("backfill: store: %w", err)
 		}
 
-		backfilled = true
+		outcome = backfillEmbedded
 		return tail.end("backfill: commit", func() {
 			slog.Info("scheduler: embedding backfilled", "block_id", blockID, "title", title)
 		})
 	})
 	if errors.Is(err, errPickReleased) {
-		return false, nil
+		return backfillIdle, nil
 	}
 	if err != nil {
-		return false, tail.wrap(err)
+		return backfillIdle, tail.wrap(err)
 	}
 	tail.done()
-	return backfilled, nil
+	return outcome, nil
 }
