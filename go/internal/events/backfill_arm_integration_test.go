@@ -19,6 +19,9 @@ package events
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -100,6 +103,74 @@ func TestEmbedBackfillArm_RunsWithoutDream_Integration(t *testing.T) {
 
 		if !waitEmbedded(t, 5*time.Second) {
 			t.Fatalf("caller_timeout block still pending after 5 s: the arm must pick it at once, not after a backoff")
+		}
+	})
+
+	// Rebase onto 4d14549a (backfillOneEmbedding's tenant scope window): the
+	// arm passes the ITERATED tenant's owned scopes, so while it iterates
+	// tenant T a pending block of tenant U is neither picked nor sent to T's
+	// private embed backend; once U's turn comes the block is embedded over
+	// the global backend. Fixture as in TestBackfillTenantScope_Integration:
+	// global backend (priority 10) plus a private backend of T (priority 100,
+	// preferred whenever visible), one pending block in scope U.
+	t.Run("arm_stays_inside_the_iterated_tenants_scope_window", func(t *testing.T) {
+		const scopeT, scopeU = "armscope-tenant-t", "armscope-tenant-u"
+		if _, err := pool.Exec(ctx,
+			`INSERT INTO context_blocks (category, title, content, scope, type_name, type_source, created_at, updated_at)
+			 VALUES ('learnings', 'armscope-block-of-u', 'content that belongs to tenant U only', $1, 'knowledge', 'manual', now(), now())`,
+			scopeU); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+		defer clearBlocks(t, pool)
+
+		counting := func(hits *atomic.Int64) *httptest.Server {
+			inner := headOfLineEmbedServer(t).Config.Handler
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				hits.Add(1)
+				inner.ServeHTTP(w, r)
+			}))
+			t.Cleanup(srv.Close)
+			return srv
+		}
+		var globalHits, privateHits atomic.Int64
+		private := embedPoolRow("embed-private-t", counting(&privateHits).URL, 100)
+		private.Scope = scopeT
+		bpoolMT := backends.NewPool(nil, nil)
+		bpoolMT.SeedSnapshotForTest([]backends.Backend{
+			embedPoolRow("embed-global", counting(&globalHits).URL, 10),
+			private,
+		})
+
+		sMT := NewScheduler(pool, config.NewStore(cfg), bpoolMT, StartupConfig{DreamEnabled: false})
+		sMT.SetDispatcher(d)
+		var includeU atomic.Bool
+		sMT.backgroundTenantsFn = func(context.Context) []backgroundTenant {
+			tenants := []backgroundTenant{{scope: scopeT, owned: []string{scopeT}}}
+			if includeU.Load() {
+				tenants = append(tenants, backgroundTenant{scope: scopeU, owned: []string{scopeU}})
+			}
+			return tenants
+		}
+
+		armCtx, stop := context.WithCancel(ctx)
+		defer stop()
+		go sMT.runEmbedBackfillLoop(armCtx)
+
+		// Six intervals of T-only iteration: the U block must stay untouched.
+		time.Sleep(600 * time.Millisecond)
+		if got := pendingCount(t, pool); got != 1 {
+			t.Fatalf("pending = %d while only tenant T is iterated, want 1 (U's block is outside T's window)", got)
+		}
+		if g, p := globalHits.Load(), privateHits.Load(); g != 0 || p != 0 {
+			t.Fatalf("wire hits global=%d private=%d while iterating T, want 0/0 (U's content must not leave via T's chain)", g, p)
+		}
+
+		includeU.Store(true)
+		if !waitEmbedded(t, 5*time.Second) {
+			t.Fatalf("U's block still pending 5 s after U joined the rotation")
+		}
+		if g, p := globalHits.Load(), privateHits.Load(); g != 1 || p != 0 {
+			t.Errorf("wire hits global=%d private=%d, want 1/0 (T's private backend is invisible to U)", g, p)
 		}
 	})
 

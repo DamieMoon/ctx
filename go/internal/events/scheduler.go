@@ -2098,7 +2098,7 @@ func (s *Scheduler) runEmbedBackfillLoop(ctx context.Context) {
 			}
 		}
 
-		backfilled, err := s.backfillArmOnce(ctx, cfg, bt.scope)
+		backfilled, err := s.backfillArmOnce(ctx, cfg, bt)
 		switch {
 		case err != nil:
 			slog.Error("scheduler: embed backfill arm error", "error", err)
@@ -2117,10 +2117,13 @@ func (s *Scheduler) runEmbedBackfillLoop(ctx context.Context) {
 
 // backfillArmOnce is one pick of the dedicated arm with its own panic guard,
 // so a panic in one cycle is logged and the arm goes on (the dream loop's
-// runDreamCycle has the same shape).
-func (s *Scheduler) backfillArmOnce(ctx context.Context, cfg *config.Config, tenant string) (bool, error) {
+// runDreamCycle has the same shape). The pick stays inside bt.owned, the
+// iterated tenant's scope window — the router resolves its chain with that
+// tenant's backend visibility, so a block outside the window must not be
+// picked on this turn (cross-tenant egress, same conjunct as the dream loop).
+func (s *Scheduler) backfillArmOnce(ctx context.Context, cfg *config.Config, bt backgroundTenant) (bool, error) {
 	defer guardPanic("embed backfill arm")
-	return s.backfillOneEmbedding(ctx, s.newRouter(cfg, tenant), cfg)
+	return s.backfillOneEmbedding(ctx, s.newRouter(cfg, bt.scope), cfg, bt.owned)
 }
 
 // backfillOneEmbedding finds one block with missing embedding, generates it, and stores it.
