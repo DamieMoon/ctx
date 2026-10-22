@@ -165,13 +165,16 @@ type ChatMsg struct {
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string     `json:"tool_call_id,omitempty"`
 	// ProviderBlocks are opaque content blocks the provider wants back
-	// unchanged ahead of the turn's text — the anthropic wire's thinking /
-	// redacted_thinking blocks, which the API requires on the final
-	// assistant turn of a tool loop. Carried IN MEMORY across the
-	// iterations of one turn only (the harness does not persist them; a
-	// later turn's history replays without them, which the API accepts for
-	// non-final assistant turns). json:"-": never a field of the OpenAI
-	// wire's message object.
+	// unchanged — on the anthropic wire the assistant turn's content as the
+	// API produced it (text, thinking / redacted_thinking, tool_use, in
+	// block order; StreamResult.ProviderBlocks), replayed verbatim because
+	// the API rejects thinking blocks in the latest assistant turn that
+	// were reordered or rebuilt. A list holding only reasoning blocks is
+	// replayed ahead of the turn's text and calls instead. Carried IN
+	// MEMORY across the iterations of one turn only (the harness does not
+	// persist them; a later turn's history replays without them, and
+	// dropping every thinking block keeps a request valid). json:"-": never
+	// a field of the OpenAI wire's message object.
 	ProviderBlocks []json.RawMessage `json:"-"`
 }
 
@@ -202,8 +205,9 @@ type StreamResult struct {
 	CacheReadTokens     int
 	CacheCreationTokens int
 	ProviderRequestID   string
-	// ProviderBlocks are the reasoning blocks of the answer (anthropic wire),
-	// to be echoed back via ChatMsg.ProviderBlocks when the harness replays
+	// ProviderBlocks are the answer's content blocks in the API's order
+	// (anthropic wire, only when the answer carried a reasoning block), to
+	// be echoed back via ChatMsg.ProviderBlocks when the harness replays
 	// this assistant turn inside the same tool loop. nil on the openai wire.
 	ProviderBlocks []json.RawMessage
 }

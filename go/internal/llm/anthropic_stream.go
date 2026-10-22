@@ -9,7 +9,9 @@
 // the event field). Frames handled:
 //   - message_start      → usage (input + cache counters; the prompt total)
 //   - content_block_start→ tool_use: new pending call, ToolCallName event;
-//     text/thinking: nothing
+//     text / thinking / redacted_thinking: opened
+//     in stream order (the replay keeps the API's
+//     block order — contentInOrder)
 //   - content_block_delta→ text_delta: ContentDelta; input_json_delta:
 //     arguments fragment; thinking_delta /
 //     signature_delta: accumulated into the replay
@@ -159,9 +161,17 @@ func anthropicMessages(msgs []ChatMsg, toolBlocks bool) (system string, out []an
 			}
 		case "assistant":
 			flushOrphans()
+			if verbatim, ids := anthropicProviderContent(m.ProviderBlocks); verbatim != nil {
+				// The turn as the API produced it, block order kept; its
+				// tool_use blocks carry the API's (never empty) ids.
+				pendingIDs = pendingIDs[:0]
+				open = append(open, ids...)
+				appendBlocks("assistant", verbatim...)
+				continue
+			}
 			var blocks []any
-			// Reasoning blocks first, verbatim — the order the API produced
-			// them in (thinking precedes the tool_use it introduced).
+			// Reasoning-only ProviderBlocks lead the turn, verbatim, ahead of
+			// the reconstructed text and calls.
 			for _, raw := range m.ProviderBlocks {
 				blocks = append(blocks, raw)
 			}
@@ -216,6 +226,41 @@ func anthropicMessages(msgs []ChatMsg, toolBlocks bool) (system string, out []an
 // checks it (system rows, user and assistant turns, the text rendering, the
 // system prompt split in anthropic.go).
 func blankText(s string) bool { return strings.TrimSpace(s) == "" }
+
+// anthropicProviderContent returns ProviderBlocks as the turn's content when
+// they ARE the whole turn (the stream parser's contentInOrder: at least one
+// text or tool_use block among them), with the tool_use ids for the orphan
+// bookkeeping; nil when they hold reasoning blocks only (the caller then
+// reconstructs text and calls around them). Blank text blocks are dropped
+// here too.
+func anthropicProviderContent(raw []json.RawMessage) (blocks []any, toolUseIDs []string) {
+	whole := false
+	for _, r := range raw {
+		var head struct {
+			Type string `json:"type"`
+			ID   string `json:"id"`
+			Text string `json:"text"`
+		}
+		if json.Unmarshal(r, &head) != nil {
+			continue
+		}
+		switch head.Type {
+		case "text":
+			whole = true
+			if blankText(head.Text) {
+				continue
+			}
+		case "tool_use":
+			whole = true
+			toolUseIDs = append(toolUseIDs, head.ID)
+		}
+		blocks = append(blocks, r)
+	}
+	if !whole {
+		return nil, nil
+	}
+	return blocks, toolUseIDs
+}
 
 // appendAnthropicBlocks appends blocks to the last turn when it has the same
 // role (the API requires user/assistant alternation), else opens a new turn.
@@ -338,10 +383,17 @@ func chatStreamAnthropic(ctx context.Context, b backends.Backend, model string,
 		Tools:        anthropicTools(tools),
 		ToolChoice:   toolChoice,
 		// Top-level automatic caching: the API places a breakpoint on the
-		// last cacheable block, so each iteration of the tool loop (and
-		// each turn of the session) reads the growing history from cache
-		// instead of paying full input price for it; the explicit system
-		// breakpoint stays the stable-prefix anchor.
+		// last cacheable block, and the explicit system breakpoint stays the
+		// stable-prefix anchor. What it buys is a prefix match, so it holds
+		// where the request is an append to the previous one: within one
+		// turn's tool loop, iteration N+1 re-sends iteration N's request
+		// plus the answer and the tool results. ACROSS turns the hit ends at
+		// the first byte that differs — an earlier turn replays without its
+		// thinking blocks (ProviderBlocks are in-memory only), the system
+		// prompt carries the date, buildHistory condenses and drops old
+		// turns past its budget — and the default 5-minute TTL usually
+		// lapses between two human turns anyway. Below the model's minimum
+		// cacheable length nothing is cached at all.
 		CacheControl: &anthropicCacheControl{Type: "ephemeral"},
 	}
 	body, err := buildAnthropicBody(req, opts, &b)
@@ -417,17 +469,29 @@ type pendingThinking struct {
 
 // anthropicStreamState carries the assembly across frames.
 type anthropicStreamState struct {
-	onEvent   func(StreamEvent) error
-	content   strings.Builder
-	calls     []*pendingToolCall
-	byIndex   map[int]*pendingToolCall
-	thinking  map[int]*pendingThinking
-	blocks    []json.RawMessage // reasoning blocks, stream order, replayed verbatim
+	onEvent  func(StreamEvent) error
+	content  strings.Builder
+	calls    []*pendingToolCall
+	byIndex  map[int]*pendingToolCall
+	thinking map[int]*pendingThinking
+	// reasoning holds each sealed thinking / redacted_thinking block by its
+	// content-block index; order lists every content block index in stream
+	// order with its type, and texts each text block's own text — together
+	// the turn's content as the API produced it (result → ProviderBlocks).
+	reasoning map[int]json.RawMessage
+	order     []anthropicBlockRef
+	texts     map[int]*strings.Builder
 	finish    string
 	usage     anthropicUsage
 	stopSeen  bool
 	done      bool
 	messageID string
+}
+
+// anthropicBlockRef is one content block of the answer, in stream order.
+type anthropicBlockRef struct {
+	index int
+	kind  string // text | thinking | redacted_thinking | tool_use
 }
 
 func (st *anthropicStreamState) emit(ev StreamEvent) error {
@@ -445,7 +509,10 @@ func (st *anthropicStreamState) emit(ev StreamEvent) error {
 // complete turn; EOF before it is a hard error — a mid-stream connection
 // death must not look like a finished answer.
 func parseAnthropicSSE(r io.Reader, onEvent func(StreamEvent) error) (*StreamResult, error) {
-	st := &anthropicStreamState{onEvent: onEvent, byIndex: map[int]*pendingToolCall{}, thinking: map[int]*pendingThinking{}}
+	st := &anthropicStreamState{
+		onEvent: onEvent, byIndex: map[int]*pendingToolCall{}, thinking: map[int]*pendingThinking{},
+		reasoning: map[int]json.RawMessage{}, texts: map[int]*strings.Builder{},
+	}
 	br := bufio.NewReader(r)
 	var data []string
 	for {
@@ -548,15 +615,33 @@ func (st *anthropicStreamState) onBlockStart(f *anthropicStreamFrame) error {
 		pc := &pendingToolCall{index: f.Index, id: f.ContentBlock.ID, typ: "function", name: f.ContentBlock.Name, nameEmitted: true}
 		st.byIndex[f.Index] = pc
 		st.calls = append(st.calls, pc)
+		st.order = append(st.order, anthropicBlockRef{f.Index, "tool_use"})
 		return st.emit(StreamEvent{ToolCallName: pc.name})
 	case "thinking":
 		st.thinking[f.Index] = &pendingThinking{}
+		st.order = append(st.order, anthropicBlockRef{f.Index, "thinking"})
 	case "redacted_thinking":
 		// Arrives complete on the block start; replayed as-is.
 		raw, _ := json.Marshal(anthropicRedactedThinkingBlock{Type: "redacted_thinking", Data: f.ContentBlock.Data})
-		st.blocks = append(st.blocks, raw)
+		st.reasoning[f.Index] = raw
+		st.order = append(st.order, anthropicBlockRef{f.Index, "redacted_thinking"})
+	case "text":
+		st.textBlock(f.Index)
 	}
 	return nil
+}
+
+// textBlock returns the text block at index, opening it (and placing it in
+// the stream order) on first sight — a text_delta can arrive without its
+// content_block_start through a proxy that drops frames.
+func (st *anthropicStreamState) textBlock(index int) *strings.Builder {
+	if tb := st.texts[index]; tb != nil {
+		return tb
+	}
+	tb := &strings.Builder{}
+	st.texts[index] = tb
+	st.order = append(st.order, anthropicBlockRef{index, "text"})
+	return tb
 }
 
 // onBlockDelta routes a delta by its own type: text to the sink, tool
@@ -571,6 +656,8 @@ func (st *anthropicStreamState) onBlockDelta(f *anthropicStreamFrame) error {
 	case "text_delta":
 		if f.Delta.Text != "" {
 			st.content.WriteString(f.Delta.Text)
+			tb := st.textBlock(f.Index)
+			tb.WriteString(f.Delta.Text)
 			return st.emit(StreamEvent{ContentDelta: f.Delta.Text})
 		}
 	case "input_json_delta":
@@ -596,7 +683,7 @@ func (st *anthropicStreamState) onBlockStop(index int) {
 		return
 	}
 	raw, _ := json.Marshal(anthropicThinkingBlock{Type: "thinking", Thinking: pt.text.String(), Signature: pt.signature})
-	st.blocks = append(st.blocks, raw)
+	st.reasoning[index] = raw
 	delete(st.thinking, index)
 }
 
@@ -625,6 +712,42 @@ func (st *anthropicStreamState) onMessageDelta(f *anthropicStreamFrame) error {
 	return nil
 }
 
+// contentInOrder is the answer's content as the API produced it — text,
+// thinking, redacted_thinking and tool_use blocks in stream order — for a
+// turn that carried at least one reasoning block (nil otherwise: without
+// reasoning the harness's reconstruction from Content and ToolCalls is all
+// the next request needs). The next iteration replays it verbatim
+// (anthropicMessages): the reference rejects thinking blocks in the latest
+// assistant message that were "edited, reordered, filtered out, or
+// reconstructed" (platform.claude.com/docs/en/api/errors), and on Claude
+// Opus 5.5 text between tool calls comes back as thinking blocks, so a turn
+// interleaves them with its calls. Blank text blocks are left out
+// (blankText); a thinking block the stream never sealed is too.
+func (st *anthropicStreamState) contentInOrder() []json.RawMessage {
+	if len(st.reasoning) == 0 {
+		return nil
+	}
+	out := make([]json.RawMessage, 0, len(st.order))
+	for _, ref := range st.order {
+		var raw json.RawMessage
+		switch ref.kind {
+		case "text":
+			if t := st.texts[ref.index].String(); !blankText(t) {
+				raw, _ = json.Marshal(anthropicTextBlock{Type: "text", Text: t})
+			}
+		case "thinking", "redacted_thinking":
+			raw = st.reasoning[ref.index]
+		case "tool_use":
+			pc := st.byIndex[ref.index]
+			raw, _ = json.Marshal(anthropicToolUseBlock{Type: "tool_use", ID: pc.id, Name: pc.name, Input: anthropicToolInput(pc.args.Bytes())})
+		}
+		if raw != nil {
+			out = append(out, raw)
+		}
+	}
+	return out
+}
+
 func (st *anthropicStreamState) result() *StreamResult {
 	prompt, output, cacheRead, cacheCreate := anthropicUsageTotals(st.usage)
 	res := &StreamResult{
@@ -635,7 +758,7 @@ func (st *anthropicStreamState) result() *StreamResult {
 		CacheReadTokens:     cacheRead,
 		CacheCreationTokens: cacheCreate,
 		ProviderRequestID:   st.messageID,
-		ProviderBlocks:      st.blocks,
+		ProviderBlocks:      st.contentInOrder(),
 	}
 	for _, pc := range st.calls {
 		args := bytes.TrimSpace(pc.args.Bytes())

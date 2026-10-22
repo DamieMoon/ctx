@@ -502,9 +502,10 @@ func TestAnthropicMessagesRepairsEmptyToolIDs(t *testing.T) {
 
 // TestAnthropicStreamThinkingBlocksReplayFirst: the fixture's thinking block
 // (empty text, signature — the default display) is re-assembled into
-// StreamResult.ProviderBlocks and placed FIRST in the replayed assistant
-// turn, ahead of text and tool_use — the order the API produced them in,
-// which the reference asks to be kept while a tool_use awaits its result.
+// StreamResult.ProviderBlocks together with the rest of the turn, in the
+// order the API produced it — here thinking first, then text and the two
+// tool_use blocks — and replayed that way, which the reference asks while a
+// tool_use awaits its result.
 func TestAnthropicStreamThinkingBlocksReplayFirst(t *testing.T) {
 	srv := serveFixture(t, "anthropic_tool_use.sse")
 	defer srv.Close()
@@ -513,8 +514,8 @@ func TestAnthropicStreamThinkingBlocksReplayFirst(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res.ProviderBlocks) != 1 {
-		t.Fatalf("ProviderBlocks = %d, want the one thinking block", len(res.ProviderBlocks))
+	if len(res.ProviderBlocks) != 4 {
+		t.Fatalf("ProviderBlocks = %d, want the whole turn: thinking, text, 2 tool_use", len(res.ProviderBlocks))
 	}
 	if got := string(res.ProviderBlocks[0]); got != `{"type":"thinking","thinking":"","signature":"sigABC"}` {
 		t.Errorf("thinking block = %s", got)
@@ -562,8 +563,9 @@ func TestAnthropicStreamRedactedThinkingCarried(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res.ProviderBlocks) != 1 || string(res.ProviderBlocks[0]) != `{"type":"redacted_thinking","data":"EmwKAhgB"}` {
-		t.Errorf("ProviderBlocks = %v", res.ProviderBlocks)
+	if len(res.ProviderBlocks) != 2 || string(res.ProviderBlocks[0]) != `{"type":"redacted_thinking","data":"EmwKAhgB"}` ||
+		string(res.ProviderBlocks[1]) != `{"type":"text","text":"ok"}` {
+		t.Errorf("ProviderBlocks = %s, want the redacted block as-is, then the text, in stream order", res.ProviderBlocks)
 	}
 }
 
@@ -794,5 +796,92 @@ func TestAnthropicMessagesDropWhitespaceText(t *testing.T) {
 		if strings.TrimSpace(blk.Text) == "" {
 			t.Errorf("anthropicSystem: blank block %+v", blk)
 		}
+	}
+}
+
+// --- replay in the API's block order (review finding 8) ---.
+
+// interleavedSSE is a Claude Opus 5.5-shaped tool turn: text, a thinking
+// block, a call, a progress-update thinking block between the two calls
+// (text between tool calls comes back as thinking on Opus 5.5), a second
+// call — plus a blank text block, which must not be replayed.
+const interleavedSSE = "data: {\"type\":\"message_start\",\"message\":{\"id\":\"m\",\"usage\":{\"input_tokens\":9}}}\n\n" +
+	"data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n" +
+	"data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Let me look.\"}}\n\n" +
+	"data: {\"type\":\"content_block_stop\",\"index\":0}\n\n" +
+	"data: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\n" +
+	"data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"signature_delta\",\"signature\":\"sig1\"}}\n\n" +
+	"data: {\"type\":\"content_block_stop\",\"index\":1}\n\n" +
+	"data: {\"type\":\"content_block_start\",\"index\":2,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_A\",\"name\":\"a\",\"input\":{}}}\n\n" +
+	"data: {\"type\":\"content_block_delta\",\"index\":2,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"q\\\": 1}\"}}\n\n" +
+	"data: {\"type\":\"content_block_stop\",\"index\":2}\n\n" +
+	"data: {\"type\":\"content_block_start\",\"index\":3,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\n" +
+	"data: {\"type\":\"content_block_delta\",\"index\":3,\"delta\":{\"type\":\"signature_delta\",\"signature\":\"sig2\"}}\n\n" +
+	"data: {\"type\":\"content_block_stop\",\"index\":3}\n\n" +
+	"data: {\"type\":\"content_block_start\",\"index\":4,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n" +
+	"data: {\"type\":\"content_block_delta\",\"index\":4,\"delta\":{\"type\":\"text_delta\",\"text\":\"\\n\\n\"}}\n\n" +
+	"data: {\"type\":\"content_block_stop\",\"index\":4}\n\n" +
+	"data: {\"type\":\"content_block_start\",\"index\":5,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_B\",\"name\":\"b\",\"input\":{}}}\n\n" +
+	"data: {\"type\":\"content_block_stop\",\"index\":5}\n\n" +
+	"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":30}}\n\n" +
+	"data: {\"type\":\"message_stop\"}\n\n"
+
+// TestAnthropicStreamReplaysContentInAPIOrder: the next iteration replays
+// the assistant turn in the order the API produced its blocks — the
+// reference rejects reordered thinking blocks in the latest assistant
+// message (platform.claude.com/docs/en/api/errors, "Thinking blocks cannot be
+// modified": "edited, reordered, filtered out, or reconstructed") — not all
+// reasoning blocks hoisted ahead of the text and the calls.
+func TestAnthropicStreamReplaysContentInAPIOrder(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(interleavedSSE))
+	}))
+	defer srv.Close()
+	res, err := ChatStreamBackend(context.Background(), anthropicStreamBackend(srv.URL), "m",
+		[]ChatMsg{{Role: "user", Content: "q"}}, nil, Options{NumPredict: 64}, 5*time.Second, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Content != "Let me look.\n\n" || len(res.ToolCalls) != 2 {
+		t.Fatalf("content/calls = %q / %d", res.Content, len(res.ToolCalls))
+	}
+	_, msgs := anthropicMessages([]ChatMsg{
+		{Role: "user", Content: "q"},
+		{Role: "assistant", Content: res.Content, ToolCalls: res.ToolCalls, ProviderBlocks: res.ProviderBlocks},
+		{Role: "tool", Content: "ra", ToolCallID: "toolu_A"},
+		{Role: "tool", Content: "rb", ToolCallID: "toolu_B"},
+	}, true)
+	blocks, _ := msgs[1].Content.([]any)
+	var got []string
+	for _, b := range blocks {
+		raw, _ := json.Marshal(b)
+		var head struct{ Type, Signature, ID, Text string }
+		_ = json.Unmarshal(raw, &head)
+		got = append(got, head.Type+":"+head.Signature+head.ID+head.Text)
+	}
+	want := []string{"text:Let me look.", "thinking:sig1", "tool_use:toolu_A", "thinking:sig2", "tool_use:toolu_B"}
+	if strings.Join(got, " | ") != strings.Join(want, " | ") {
+		t.Errorf("replayed assistant turn =\n  %s\nwant\n  %s", strings.Join(got, " | "), strings.Join(want, " | "))
+	}
+	if raw, _ := json.Marshal(blocks); !strings.Contains(string(raw), `"input":{"q": 1}`) && !strings.Contains(string(raw), `"input":{"q":1}`) {
+		t.Errorf("tool_use input not replayed: %s", raw)
+	}
+	assertNoBlankText(t, "api order", msgs)
+}
+
+// TestAnthropicMessagesReasoningOnlyProviderBlocksLeadTheTurn: a caller that
+// carries only reasoning blocks (no text/tool_use among them) still gets
+// them ahead of the reconstructed text and calls — the shape before the
+// stream parser carried the whole turn.
+func TestAnthropicMessagesReasoningOnlyProviderBlocksLeadTheTurn(t *testing.T) {
+	_, msgs := anthropicMessages([]ChatMsg{
+		{Role: "user", Content: "q"},
+		{Role: "assistant", Content: "Checking.", ToolCalls: []ToolCall{{ID: "A", Function: ToolCallFunction{Name: "a", Arguments: json.RawMessage(`{}`)}}},
+			ProviderBlocks: []json.RawMessage{json.RawMessage(`{"type":"thinking","thinking":"","signature":"s"}`)}},
+		{Role: "tool", Content: "r", ToolCallID: "A"},
+	}, true)
+	raw, _ := json.Marshal(msgs[1].Content)
+	if !strings.HasPrefix(string(raw), `[{"type":"thinking"`) || !strings.Contains(string(raw), `"type":"tool_use","id":"A"`) || !strings.Contains(string(raw), `"text":"Checking."`) {
+		t.Errorf("assistant turn = %s, want thinking, text, tool_use", raw)
 	}
 }

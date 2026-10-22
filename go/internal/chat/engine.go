@@ -232,8 +232,13 @@ func (e *Engine) RunTurn(ctx context.Context, ar *auth.AuthResult, sess *store.C
 			return fmt.Errorf("chat: persist assistant tool_calls: %w", perr)
 		}
 		// ProviderBlocks ride along in memory for the next iteration of THIS
-		// turn (the anthropic wire needs its thinking block back ahead of the
-		// tool_use it introduced); they are not persisted.
+		// turn: the anthropic wire replays the turn in the API's block order,
+		// thinking blocks included. They are not persisted — a replayed
+		// thinking block is accepted only while the system prompt, the tools
+		// and every earlier message are unchanged, and the next turn's
+		// history is neither (the system prompt carries the date,
+		// buildHistory condenses and drops turns past its budget), so a
+		// persisted block would turn into a 400 on enforced accounts.
 		msgs = append(msgs, llm.ChatMsg{Role: "assistant", Content: res.Content, ToolCalls: res.ToolCalls, ProviderBlocks: res.ProviderBlocks})
 
 		for _, call := range res.ToolCalls {
