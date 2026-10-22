@@ -22,7 +22,7 @@ export interface GraphPalette {
   edgeStructuralColor: string
   nodeSat: number
   nodeLum: number
-  /** Hover-/Highlight-Kasten: opake Rückfläche (U02-W3, node-hover.ts). */
+  /** Hover-/Highlight-Kasten: opake Rückfläche (U02-W3, sigma-styles.ts). */
   hoverBg: string
   /** Hover-/Highlight-Kasten: 1px-Rahmen (Abhebung gegen den Canvas). */
   hoverStroke: string

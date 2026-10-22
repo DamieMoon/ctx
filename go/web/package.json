@@ -37,7 +37,7 @@
     "markdown-it": "15.0.3",
     "postcss": "8.5.31",
     "postcss-html": "2.0.0",
-    "sigma": "3.0.3",
+    "sigma": "4.0.3",
     "stylelint": "17.16.0",
     "stylelint-config-html": "2.0.0",
     "stylelint-declaration-strict-value": "1.12.1",
@@ -54,7 +54,6 @@
     "@cosmos.gl/graph": "3.5.1",
     "@deck.gl/core": "9.3.11",
     "@deck.gl/layers": "9.3.11",
-    "@sigma/edge-curve": "3.1.0",
     "three": "0.186.1"
   },
   "overrides": {

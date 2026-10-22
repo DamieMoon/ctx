@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte'
-  // GC1 §4.2: edge-curve-Import nur in Svelte-Komponenten (vitest-node-frei).
-  import { DEFAULT_EDGE_CURVATURE, indexParallelEdgesIndex } from '@sigma/edge-curve'
+  // GC1 §4.2: Parallel-Index + Default-Krümmung (aus @sigma/edge-curve übernommen,
+  // sigma 4 hat das Paket gestrichen — parallel-edges.ts).
+  import { DEFAULT_EDGE_CURVATURE, indexParallelEdgesIndex } from '../../lib/graph/parallel-edges'
   import { toApiError, type ApiError } from '../../lib/api'
   import { fetchCategoryHues, fetchEgo, fetchGraphAll } from '../../lib/graph/api'
   import { LayoutRunner } from '../../lib/graph/fa2'

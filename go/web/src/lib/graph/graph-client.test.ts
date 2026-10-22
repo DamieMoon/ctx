@@ -162,9 +162,8 @@ describe('mergeEgo', () => {
   })
 
   it('bakes structural edges as curvedArrow in the structural color, width 1.5 (GC1)', () => {
-    // `type` selects the sigma edge program — registered in GraphView in the
-    // SAME commit (sigma 3.0.3 throws hard on unregistered types). Dream edges
-    // stay type-less (defaultEdgeType 'line') in the dream color.
+    // `type` selects the curved path + arrow head (sigma-styles.ts). Dream
+    // edges stay type-less (straight line) in the dream color.
     const graph = createGraph()
     mergeEgo(
       graph,

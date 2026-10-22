@@ -7,9 +7,9 @@ import { gotoArea, seedSession, trackPageErrors } from './fixtures'
 // Structural edges in the ego graph (plan graph-structural 2026-07-14).
 // GA2 (FE-W2) pins the two wave-cut invariants of the INTERIM consumption:
 //   (a) mounting /graph with a structural_edges fixture must NOT throw —
-//       the merge loop writes NO `type` attribute until the render program
-//       is registered (GC1); sigma 3.0.3 throws hard on unregistered types,
-//       even on hidden edges (sigma.esm.js:2006/:2736).
+//       historically sigma 3.0.3 threw hard on an unregistered edge `type`,
+//       even on hidden edges; since sigma 4 the `type` attribute only selects
+//       path/head styles (sigma-styles.ts) and the invariant stays pinned.
 //   (b) structural edges are DEFAULT-VISIBLE (user directive: no extra click)
 //       — the interim kind-branch in edgeVisible keeps them out of the dream
 //       allowlist. GC2 replaces the branch with the blocklist model; GC5 syncs
@@ -19,7 +19,8 @@ import { gotoArea, seedSession, trackPageErrors } from './fixtures'
 const FOCUS = '550e8400-e29b-41d4-a716-446655440001' // egoFixture focus node
 
 interface CtxGraph {
-  renderer: { getEdgeDisplayData(id: string): { hidden?: boolean } | undefined }
+  // sigma 4: visibility replaces v3's `hidden` flag on the display data.
+  renderer: { getEdgeDisplayData(id: string): { visibility?: 'visible' | 'hidden' } | undefined }
   graph: {
     edges(): string[]
     getEdgeAttribute(e: string, k: string): unknown
@@ -75,9 +76,9 @@ test.describe('structural edges (GA2 consumption + GC1 rendering + GC2 filter)',
   })
 
   // GC1 (FE-W3): structural edges render as curved arrows in the structural
-  // color — `type` selects the EdgeCurvedArrowProgram registered in GraphView,
+  // color — `type` selects the curved path + arrow head (sigma-styles.ts),
   // the color is the Teal token, distinct from BOTH dream edge colors. Dream
-  // edges stay type-less (defaultEdgeType 'line'). Red before the wave: the
+  // edges stay type-less (straight line). Red before the wave: the
   // GA2 interim loop wrote no `type` and the dream edgeColor.
   test('structural edges carry type=curvedArrow and the structural color (GC1)', async ({ page }) => {
     const errors = trackPageErrors(page)
@@ -150,7 +151,7 @@ test.describe('structural edges (GA2 consumption + GC1 rendering + GC2 filter)',
           if (g.graph.getEdgeAttribute(e, 'kind') !== 'structural') continue
           const cls = String(g.graph.getEdgeAttribute(e, 'rel'))
           const dd = g.renderer.getEdgeDisplayData(e)
-          ;(out[cls] ??= []).push(!!dd && dd.hidden !== true)
+          ;(out[cls] ??= []).push(!!dd && dd.visibility !== 'hidden')
         }
         return out
       })
@@ -245,7 +246,7 @@ test.describe('structural edges (GA2 consumption + GC1 rendering + GC2 filter)',
       const g = (window as unknown as { __ctxGraph?: CtxGraph }).__ctxGraph!
       return g.graph.edges().filter((e) => {
         const dd = g.renderer.getEdgeDisplayData(e)
-        return !dd || dd.hidden === true
+        return !dd || dd.visibility === 'hidden'
       })
     })
     expect(hidden).toEqual([])
@@ -409,7 +410,7 @@ test.describe('structural edges (GA2 consumption + GC1 rendering + GC2 filter)',
       const structural = g.graph.edges().filter((e) => g.graph.getEdgeAttribute(e, 'kind') === 'structural')
       return structural.map((e) => {
         const dd = g.renderer.getEdgeDisplayData(e)
-        return !!dd && dd.hidden !== true
+        return !!dd && dd.visibility !== 'hidden'
       })
     })
     expect(vis).toHaveLength(3)

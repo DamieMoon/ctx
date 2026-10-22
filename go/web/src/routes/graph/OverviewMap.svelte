@@ -6,7 +6,7 @@
   import { fetchOverview, type OverviewResponse } from '../../lib/graph/api'
   import { buildOverviewGraph, type MetaEdgeAttrs, type MetaNodeAttrs } from '../../lib/graph/overview-map'
   import { recolorOverviewGraph, type GraphPalette } from '../../lib/graph/graph-theme'
-  import { makeDrawNodeHover } from '../../lib/graph/node-hover'
+  import { graphStyles, type GraphLook } from '../../lib/graph/sigma-styles'
   import EmptyState from '../../lib/ui/EmptyState.svelte'
 
   // Single click on a cluster → drill into its representative's ego net.
@@ -22,6 +22,14 @@
 
   let container: HTMLDivElement
   let renderer: Sigma<MetaNodeAttrs, MetaEdgeAttrs> | null = null
+  // Live palette getter for the shared sigma-styles (theme switch = refresh(),
+  // see GraphView). The cluster map always labels.
+  const look: GraphLook = {
+    get palette() {
+      return palette
+    },
+    showLabels: true,
+  }
   // Retained for the G2 theme re-color: the meta-graph instance + the wire
   // response it was built from (the meta-nodes carry no category, so recolor
   // re-derives node colors from the response — see recolorOverviewGraph).
@@ -50,14 +58,13 @@
         metaGraph = graph
         overviewResp = resp
         const r = new Sigma(graph, container, {
-          labelRenderedSizeThreshold: 4, // meta-nodes are few — label generously
-          labelColor: { color: palette.labelColor },
-          labelFont: 'ui-monospace, monospace',
-          labelSize: 11,
-          defaultEdgeColor: palette.edgeColor,
-          // Theme-fester Hover-/Selektions-Renderer (U02-W3), s. GraphView.
-          defaultDrawNodeHover: makeDrawNodeHover(palette),
-          renderEdgeLabels: false,
+          // Theme-feste Label-/Hover-Optik (U02-W3), s. GraphView.
+          styles: graphStyles<MetaNodeAttrs, MetaEdgeAttrs>(() => look),
+          settings: {
+            labelRenderedSizeThreshold: 4, // meta-nodes are few — label generously
+            renderEdgeLabels: false,
+            itemSizesReference: 'screen', // v3 pixel sizes, see GraphView
+          },
         })
         r.on('clickNode', ({ node }) => {
           const reprId = graph.getNodeAttribute(node, 'reprId')
@@ -107,10 +114,7 @@
     const resp = overviewResp
     if (!r || !g || !resp) return
     recolorOverviewGraph(g, resp, p, ov)
-    r.setSetting('labelColor', { color: p.labelColor })
-    r.setSetting('defaultEdgeColor', p.edgeColor)
-    // Hover-Drawer beim Theme-Wechsel neu setzen (Closure über alte Palette, M5).
-    r.setSetting('defaultDrawNodeHover', makeDrawNodeHover(p))
+    // Label-/Kanten-/Hover-Farben lesen die Palette live über `look` (M5).
     r.refresh()
   })
 

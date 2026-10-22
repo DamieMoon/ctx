@@ -175,17 +175,31 @@ test.describe('theme toggle', () => {
 
 // ---------------------------------------------------------------------------
 // Graph palette wiring (G1/G2) — the test-hook (window.__ctxGraph) lets us
-//    read Sigma settings mechanically (WebGL colours aren't in the DOM). Asserts
+//    read Sigma's resolved display data mechanically (WebGL colours aren't in
+//    the DOM). Asserts
 //    the live label/edge colours actually came from the CSS --graph-* tokens
 //    and re-bake on a dark→light toggle (no remount).
 // ---------------------------------------------------------------------------
 test.describe('graph theme palette', () => {
   // The colours live in the WebGL canvas (not the DOM); the __ctxGraph hook
-  // exposes Sigma's renderer so we can read its settings mechanically.
+  // exposes Sigma's renderer so we can read what its styles resolved to (sigma 4:
+  // label/edge colours are style rules, sigma-styles.ts — no settings any more).
+  type DisplayHook = {
+    renderer: {
+      getNodeDisplayData(n: string): { labelColor?: string } | undefined
+      getEdgeDisplayData(e: string): { color?: string } | undefined
+    }
+    graph: { nodes(): string[]; edges(): string[] }
+  }
   const readPalette = (page: Page) =>
     page.evaluate(() => {
-      const g = (window as unknown as { __ctxGraph?: { renderer: { getSetting(k: string): unknown } } }).__ctxGraph
-      return JSON.stringify({ label: g?.renderer.getSetting('labelColor'), edge: g?.renderer.getSetting('defaultEdgeColor') })
+      const g = (window as unknown as { __ctxGraph?: DisplayHook }).__ctxGraph
+      const n = g?.graph.nodes()[0]
+      const e = g?.graph.edges()[0]
+      return JSON.stringify({
+        label: n ? g!.renderer.getNodeDisplayData(n)?.labelColor : undefined,
+        edge: e ? g!.renderer.getEdgeDisplayData(e)?.color : undefined,
+      })
     })
 
   const readNodeColor = (page: Page) =>
@@ -222,30 +236,48 @@ test.describe('graph theme palette', () => {
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
 
     // The re-color flows through the THEME_CHANGE_EVENT → palette $state → the
-    // OverviewMap $effect (setSetting + refresh); poll past Svelte/Sigma flush.
+    // OverviewMap $effect (recolor + refresh); poll past Svelte/Sigma flush.
     await expect.poll(() => readPalette(page), { timeout: 5000 }).not.toBe(dark)
     expect(await readPalette(page), 'light edge token after toggle').toContain('#767b91')
   })
 
-  // G4c (U02-W3, design 02-graph-darkmode §4.6): Boot-Smoke des theme-festen
-  // Hover-Renderers. Nach dem Mount ist `defaultDrawNodeHover` die eigene
-  // Factory-Closure (makeDrawNodeHover) — eine Funktion, KEIN undefined. Bewusst
-  // KEINE Function.prototype.toString().includes('#FFF')-Quelltext-Inspektion:
-  // die wäre gegen sigma-/Minifier-Drift brittle. Die Regressions-Garantie
-  // (Fill=hoverBg + Stroke=hoverStroke) trägt allein der Unit-Gate G4b
-  // (node-hover.test.ts, Recording-Context). Erreicht wird hier der OverviewMap-
-  // Mount (der __ctxGraph exponiert); GraphView verdrahtet identisch (Konstruktor
-  // + Theme-$effect, makeDrawNodeHover(palette)).
-  test('defaultDrawNodeHover ist die eigene Factory-Closure (nicht sigmas #FFF-Default)', async ({ page }) => {
+  // G4c (U02-W3, design 02-graph-darkmode §4.6): Boot-Smoke der theme-festen
+  // Hover-Optik am echten Renderer. Seit sigma 4 ist der Hover-Kasten ein
+  // Style-Backdrop (sigma-styles.ts) statt eines Canvas-Drawers: ein Node im
+  // Hover-State muss nach dem Mount auf --graph-hover-bg/-stroke auflösen, NICHT
+  // auf sigmas weißen Default-Backdrop. Die volle Regressions-Garantie (Fläche,
+  // Rahmen, Schatten, Label, Highlight) trägt der Unit-Gate G4b
+  // (sigma-styles.test.ts, sigmas evaluateNodeStyle). Erreicht wird hier der
+  // OverviewMap-Mount (der __ctxGraph exponiert); GraphView nutzt dieselben Styles.
+  test('Hover-Backdrop löst auf die Palette auf (nicht sigmas weißen Default)', async ({ page }) => {
     await seedSession(page, { role: 'server-admin', theme: 'dark' })
     await gotoArea(page, '/graph')
     await waitForShell(page)
     await page.waitForFunction(() => '__ctxGraph' in window, null, { timeout: 10_000 })
-    const hoverType = await page.evaluate(() => {
-      const g = (window as unknown as { __ctxGraph?: { renderer: { getSetting(k: string): unknown } } }).__ctxGraph
-      return typeof g?.renderer.getSetting('defaultDrawNodeHover')
+    const probe = await page.evaluate(() => {
+      type Hook = {
+        renderer: {
+          setNodeState(n: string, s: { isHovered: boolean }): unknown
+          refresh(): unknown
+          getNodeDisplayData(n: string): { backdropColor?: string; backdropBorderColor?: string; backdropVisibility?: string } | undefined
+        }
+        graph: { nodes(): string[] }
+      }
+      const g = (window as unknown as { __ctxGraph: Hook }).__ctxGraph
+      const n = g.graph.nodes()[0]
+      g.renderer.setNodeState(n, { isHovered: true })
+      g.renderer.refresh()
+      const css = getComputedStyle(document.documentElement)
+      return {
+        dd: g.renderer.getNodeDisplayData(n),
+        bg: css.getPropertyValue('--graph-hover-bg').trim(),
+        stroke: css.getPropertyValue('--graph-hover-stroke').trim(),
+      }
     })
-    expect(hoverType, 'defaultDrawNodeHover ist eine Funktion (theme-fester Drawer gesetzt)').toBe('function')
+    expect(probe.dd?.backdropVisibility, 'Hover zeigt den Backdrop').toBe('visible')
+    expect(probe.dd?.backdropColor, 'Backdrop-Fläche = --graph-hover-bg').toBe(probe.bg)
+    expect(probe.dd?.backdropBorderColor, 'Backdrop-Rahmen = --graph-hover-stroke').toBe(probe.stroke)
+    expect(probe.dd?.backdropColor, 'nicht sigmas weißer Default').not.toBe('#ffffff')
   })
 
   // G5 (U02-W4, design 02-graph-darkmode §7 + §4.6): der Ego-Canvas-Host bezieht
@@ -279,12 +311,13 @@ test.describe('graph theme palette', () => {
     expect(bg, 'Host folgt --graph-bg (Kontrast-Gate-Quelle), nicht --surface-0').toBe('rgb(1, 2, 3)')
   })
 
-  // Labels-Toggle (Meta-Row, Display-Option): flippt sigmas renderLabels-
-  // Setting am Ego-Renderer. Bewusst KEIN GraphFilters-Feld — isDefault()/
-  // reset bleiben filter-pur (der Toggle überlebt einen Filter-Reset).
-  // Hover-/Highlight-Labels laufen über drawHover (eigene Layer) und bleiben
-  // vom Setting unberührt — hier ungetestet, sigma-intern.
-  test('labels-Toggle flippt renderLabels am Ego-Renderer (aria-pressed synchron)', async ({ page }) => {
+  // Labels-Toggle (Meta-Row, Display-Option): blendet am Ego-Renderer die
+  // ungeleuchteten Labels aus (labelVisibility 'hidden', sigma-styles.ts) —
+  // seit sigma 4 NICHT mehr über renderLabels, das dort auch Hover-/Highlight-
+  // Labels abschalten würde. Bewusst KEIN GraphFilters-Feld — isDefault()/reset
+  // bleiben filter-pur (der Toggle überlebt einen Filter-Reset). Dass Hover-/
+  // Highlight-Labels sichtbar bleiben, prüft der Unit-Gate (sigma-styles.test.ts).
+  test('labels-Toggle blendet die ungeleuchteten Labels am Ego-Renderer aus (aria-pressed synchron)', async ({ page }) => {
     await seedSession(page, { role: 'server-admin', theme: 'dark' })
     await gotoArea(page, '/graph?focus=550e8400-e29b-41d4-a716-446655440001')
     await waitForShell(page)
@@ -298,24 +331,41 @@ test.describe('graph theme palette', () => {
       null,
       { timeout: 10_000 },
     )
-    const readRenderLabels = () =>
+    // labelVisibility aller NICHT geleuchteten Nodes (kein Hover, kein Fenster):
+    // 'auto' = Labels nach Dichte, 'hidden' = Toggle aus.
+    const readUnlitLabels = () =>
       page.evaluate(() => {
-        const g = (window as unknown as { __ctxGraph?: { renderer: { getSetting(k: string): unknown } } }).__ctxGraph
-        return g?.renderer.getSetting('renderLabels')
+        type Hook = {
+          renderer: {
+            getNodeState(n: string): { isHovered: boolean; isHighlighted: boolean }
+            getNodeDisplayData(n: string): { labelVisibility?: string } | undefined
+          }
+          graph: { nodes(): string[] }
+        }
+        const g = (window as unknown as { __ctxGraph?: Hook }).__ctxGraph
+        if (!g) return []
+        const out = new Set<string>()
+        for (const n of g.graph.nodes()) {
+          const s = g.renderer.getNodeState(n)
+          if (s.isHovered || s.isHighlighted) continue
+          out.add(String(g.renderer.getNodeDisplayData(n)?.labelVisibility))
+        }
+        return [...out]
       })
-    expect(await readRenderLabels(), 'Default: Labels an').toBe(true)
 
     // Das Deep-Link-Detailfenster kann die Meta-Row überlappen — schließen.
     const closeBtn = page.getByRole('button', { name: 'close' })
     if ((await closeBtn.count()) > 0) await closeBtn.first().click()
 
+    await expect.poll(readUnlitLabels, { message: 'Default: Labels nach Dichte' }).toEqual(['auto'])
+
     const toggle = page.getByRole('button', { name: 'labels' })
     await expect(toggle).toHaveAttribute('aria-pressed', 'true')
     await toggle.click()
     await expect(toggle).toHaveAttribute('aria-pressed', 'false')
-    expect(await readRenderLabels(), 'Toggle aus: renderLabels false').toBe(false)
+    await expect.poll(readUnlitLabels, { message: 'Toggle aus: ungeleuchtete Labels hidden' }).toEqual(['hidden'])
     await toggle.click()
     await expect(toggle).toHaveAttribute('aria-pressed', 'true')
-    expect(await readRenderLabels(), 'Toggle wieder an').toBe(true)
+    await expect.poll(readUnlitLabels, { message: 'Toggle wieder an' }).toEqual(['auto'])
   })
 })

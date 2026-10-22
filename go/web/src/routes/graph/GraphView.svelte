@@ -2,15 +2,11 @@
   import { onMount } from 'svelte'
   import Sigma from 'sigma'
   import type { MouseCoords, WheelCoords } from 'sigma/types'
-  import type { EdgeProgramType } from 'sigma/rendering'
-  // GC1: der einzige edge-curve-Import lebt HIER (design 03-§4.2) —
-  // graph-client.ts bleibt vitest-node-tauglich ohne WebGL-Shim-Erweiterung.
-  import { EdgeCurvedArrowProgram } from '@sigma/edge-curve'
   import type { MultiDirectedGraph } from 'graphology'
   import { edgeVisible, nodeVisible, type GraphFilters } from '../../lib/graph/filters'
   import { remainingDegree, type EdgeAttrs, type NodeAttrs } from '../../lib/graph/graph-client'
   import type { GraphPalette } from '../../lib/graph/graph-theme'
-  import { makeDrawNodeHover } from '../../lib/graph/node-hover'
+  import { GRAPH_PRIMITIVES, graphStyles, type GraphLook } from '../../lib/graph/sigma-styles'
 
   let {
     graph,
@@ -31,10 +27,10 @@
     highlightedIds?: Set<string>
     /** Top (focused) window's node — rendered stronger (size bump). */
     topId?: string | null
-    /** Display option (meta-row toggle): node labels on the canvas. OFF skips
-     *  only sigma's label layer (renderLabels) — hover boxes and highlighted
-     *  (open-window) nodes keep their labels, they render through drawHover,
-     *  a separate layer sigma draws regardless of this setting. */
+    /** Display option (meta-row toggle): node labels on the canvas. OFF hides
+     *  only the unlit labels — hover boxes and highlighted (open-window) nodes
+     *  keep theirs (labelVisibility in sigma-styles.ts; renderLabels stays on,
+     *  in sigma 4 it would switch off every label). */
     showLabels?: boolean
     /** Single click — opens a floating window for the node. */
     onnodeclick?: (id: string) => void
@@ -44,49 +40,51 @@
 
   let container: HTMLDivElement
   let renderer: Sigma<NodeAttrs, EdgeAttrs> | null = null
+  // Palette + label toggle as live getters over the props: sigma 4 has no
+  // setStyles, the style functions in sigma-styles.ts read these on every
+  // evaluation — the effect below only has to refresh() (M5).
+  const look: GraphLook = {
+    get palette() {
+      return palette
+    },
+    get showLabels() {
+      return showLabels
+    },
+  }
 
   // Mount/kill with the component (design 04/05: sigma renders the
   // graphology instance directly; data changes go through graph mutations,
   // sigma picks them up via graphology events — no Svelte reactivity here).
   onMount(() => {
-    // Generics explizit gepinnt (GC1): das Attributes-generische
-    // EdgeCurvedArrowProgram würde die Inferenz sonst auf Sigma<Attributes,…>
-    // kollabieren lassen und die Reducer-Signaturen (NodeAttrs/EdgeAttrs) brechen.
     const r = new Sigma<NodeAttrs, EdgeAttrs>(graph, container, {
-      labelRenderedSizeThreshold: 6,
-      labelDensity: 0.7,
-      hideEdgesOnMove: true, // LOD (W4): edges drop during pan/zoom
-      // GC1: structural edges select this program via edge-attr `type` —
-      // resolveSettings merged mit den Defaults, line/arrow bleiben registriert.
-      // Registrierung + type-Write (graph-client mergeEgo) = SELBER Commit
-      // (sigma 3.0.3 wirft hart bei unregistriertem Typ, auch hidden).
-      edgeProgramClasses: { curvedArrow: EdgeCurvedArrowProgram as EdgeProgramType<NodeAttrs, EdgeAttrs> },
-      labelColor: { color: palette.labelColor },
-      labelFont: 'ui-monospace, monospace',
-      labelSize: 11,
-      renderLabels: showLabels,
-      defaultEdgeColor: palette.edgeColor,
-      // Theme-fester Hover-/Selektions-Renderer (U02-W3): ersetzt sigmas
-      // hartkodierten '#FFF'-Kasten durch palette.hoverBg + hoverStroke-Rahmen.
-      defaultDrawNodeHover: makeDrawNodeHover(palette),
-      renderEdgeLabels: false,
-      // Filters hide, selection highlights, degree badge ("· +N" = visible
-      // incidences not loaded yet) decorates. Props are reactive getters —
-      // the reducers always read the current filter object.
-      nodeReducer: (node, data) => {
-        if (!nodeVisible(data, filters)) return { ...data, hidden: true }
-        const badge = remainingDegree(data)
-        const label = badge === null ? data.label : `${data.label} · +${badge}`
-        // Every open-window node is highlighted; the top (focused) window's node
-        // reads stronger with a size bump (design 07-§E). `highlighted` is a
-        // Sigma DISPLAY-DATA field (reducer-only) — never written to graphology.
-        const highlighted = highlightedIds?.has(node) ?? false
-        if (node === topId) return { ...data, label, highlighted: true, size: data.size * 1.15 }
-        return { ...data, label, highlighted }
+      // GC1: structural edges (edge-attr `type` 'curvedArrow') render as curved
+      // arrows — the path/head styles in sigma-styles.ts read that attribute.
+      primitives: GRAPH_PRIMITIVES,
+      styles: graphStyles<NodeAttrs, EdgeAttrs>(() => look),
+      settings: {
+        labelRenderedSizeThreshold: 6,
+        labelDensity: 0.7,
+        hideEdgesOnMove: true, // LOD (W4): edges drop during pan/zoom
+        renderEdgeLabels: false,
+        // sigma 4 defaults to "positions"; node/edge `size` attrs are pixel
+        // sizes at the default zoom (v3 semantics) — keep them that way.
+        itemSizesReference: 'screen',
+      },
+      // Filters hide, the top window's node grows, the degree badge ("· +N" =
+      // visible incidences not loaded yet) decorates. Props are reactive
+      // getters — the reducers always read the current filter object.
+      nodeReducer: (node, data, attrs) => {
+        if (!nodeVisible(attrs, filters)) return { visibility: 'hidden' }
+        const badge = remainingDegree(attrs)
+        const label = badge === null ? attrs.label : `${attrs.label} · +${badge}`
+        // The top (focused) window's node reads stronger (design 07-§E); the
+        // highlight itself is node STATE (effect below), never a graph attr.
+        if (node === topId) return { label, size: data.size * 1.15 }
+        return { label }
       },
       // sigma skips edges with hidden endpoints on its own — this only
       // applies the edge-level class/confidence gate.
-      edgeReducer: (_edge, data) => (edgeVisible(data, filters) ? data : { ...data, hidden: true }),
+      edgeReducer: (_edge, _data, attrs) => (edgeVisible(attrs, filters) ? {} : { visibility: 'hidden' }),
     })
     r.on('clickNode', ({ node }) => onnodeclick?.(node))
     r.on('doubleClickNode', ({ node, event }) => {
@@ -117,6 +115,9 @@
     }
     r.on('wheelStage', rotateOnShiftWheel)
     r.on('wheelNode', rotateOnShiftWheel)
+    // The highlight effect may have run before this mount (renderer null) —
+    // seed the state once here so already-open windows light up.
+    applyHighlight(r)
     renderer = r
     // Test-hook (design 03-§4/§6): the colors live in the WebGL canvas, not
     // the DOM — the Playwright gate reads them via getSetting/getNodeAttribute.
@@ -132,44 +133,41 @@
 
   // Filter/selection changes re-run the reducers (filters arrives as a NEW
   // object from the panel, so reading the references is enough tracking).
+  // Every open-window node is highlighted (backdrop + label, sigma-styles.ts),
+  // the top one included; isHighlighted is sigma node STATE, mirrored into
+  // getNodeDisplayData().highlighted.
+  function applyHighlight(r: Sigma<NodeAttrs, EdgeAttrs>): void {
+    const lit = new Set(highlightedIds ?? [])
+    if (topId) lit.add(topId)
+    graph.forEachNode((node) => {
+      if (r.getNodeState(node).isHighlighted !== lit.has(node)) r.setNodeState(node, { isHighlighted: lit.has(node) })
+    })
+  }
+
   $effect(() => {
     void filters
     void highlightedIds
     void topId
-    renderer?.refresh()
+    const r = renderer
+    if (!r) return
+    applyHighlight(r)
+    r.refresh()
   })
 
   // G2: a theme switch hands down a NEW palette object (GraphPage reassigns its
-  // $state on THEME_CHANGE_EVENT). labelColor/defaultEdgeColor are Sigma
-  // *settings*, not node/edge attrs — the reducers/refresh never touch them, so
-  // push them explicitly. The node/edge `color` attrs are re-baked on the
-  // shared instance by GraphPage's recolorGraph; refresh() repaints them.
-  // Guarded on renderer (the constructor already seeds these from the initial
-  // palette, so the first run before onMount is a safe no-op).
+  // $state on THEME_CHANGE_EVENT). Label/edge/hover colors read it through
+  // `look`; the node/edge `color` attrs are re-baked on the shared instance by
+  // GraphPage's recolorGraph; refresh() repaints both. The label toggle rides
+  // the same getter. The first run before onMount is a safe no-op.
   $effect(() => {
-    const r = renderer
-    if (!r) return
-    r.setSetting('labelColor', { color: palette.labelColor })
-    r.setSetting('defaultEdgeColor', palette.edgeColor)
-    // Der Hover-Drawer ist eine Closure über die ALTE Palette — beim Theme-
-    // Wechsel neu setzen (Settings-Funktionen lesen nicht reaktiv, M5).
-    r.setSetting('defaultDrawNodeHover', makeDrawNodeHover(palette))
-    r.refresh()
-  })
-
-  // Label toggle (display option): same guarded-settings pattern as the
-  // palette effect above — the constructor seeds the initial value, the
-  // pre-mount run is a no-op, every toggle pushes the setting + repaints.
-  $effect(() => {
-    const r = renderer
-    if (!r) return
-    r.setSetting('renderLabels', showLabels)
-    r.refresh()
+    void palette
+    void showLabels
+    renderer?.refresh()
   })
 
   /** Re-center the camera (page calls this after a focus jump). */
   export function resetCamera(): void {
-    renderer?.getCamera().animatedReset({ duration: 300 })
+    renderer?.getCamera().reset({ duration: 300 })
   }
 
   /** Repaint after the page re-bakes node color attrs off-band (AM-2 hues

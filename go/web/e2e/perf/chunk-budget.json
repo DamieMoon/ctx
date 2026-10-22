@@ -48,7 +48,16 @@
     "und ein nicht verletztes Budget wird nicht ohne Anlass gelockert.",
     "total_transfer_bytes bleibt 769000, obwohl die Formel sum x1.25 = 780617",
     "ergaebe: die gemessene Summe ist GESUNKEN, und eine Decke hebt man nicht,",
-    "wenn der Verbrauch faellt."
+    "wenn der Verbrauch faellt.",
+    "",
+    "RE-KALIBRIERT 2026-10-22 (sigma 3.0.3 -> 4.0.3, sichtbare Gate-Entscheidung):",
+    "GraphPage.js 35220 -> 88722 B br (+53502 B) - die sigma-4-Engine (WebGL2-",
+    "Primitives, SDF-Label-Renderer, Backdrops) lebt wie zuvor sigma 3 in diesem",
+    "Chunk, weil OverviewMap sie statisch importiert; alle anderen Chunks bewegen",
+    "sich um <= 186 B. Override nach Formel 88722 x1.4 = 124200. Trifft nur die",
+    "/graph-Route (lazy), kein Erst-Load einer anderen Seite. total_transfer_bytes",
+    "bleibt 769000: die gemessene Summe 687309 B liegt darunter, und eine nicht",
+    "verletzte Decke wird nicht ohne Anlass gehoben (Regel vom 2026-09-19)."
   ],
   "calibrated": true,
   "calibrated_at": "2026-09-19",
@@ -61,7 +70,7 @@
     "css_br_bytes": 3072
   },
   "overrides": {
-    "GraphPage.js": 49300,
+    "GraphPage.js": 124200,
     "camo.js": 53000,
     "disclose-version.js": 25600,
     "index.js": 17600,

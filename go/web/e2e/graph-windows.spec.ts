@@ -13,7 +13,8 @@ import { seedSession, gotoArea } from './fixtures'
 // via a Sigma event re-dispatch: emit('clickNode',{node}) → onnodeclick →
 // store.open(id, null). Highlight is read from Sigma DISPLAY-DATA
 // (renderer.getNodeDisplayData(id).highlighted), NOT a graphology attribute
-// (highlighted is reducer-only → graph.getNodeAttribute would be undefined).
+// (sigma 4 mirrors the isHighlighted node STATE into it → graph.getNodeAttribute
+// would be undefined).
 
 const FOCUS = '550e8400-e29b-41d4-a716-446655440001' // egoFixture focus node
 const NODE2 = '550e8400-e29b-41d4-a716-446655440002' // ego neighbour → window
@@ -187,7 +188,7 @@ test.describe('graph floating windows (G5b)', () => {
     await seedSession(page, { role: 'server-admin', theme: 'dark' })
     await enterFocusStage(page)
     await openWindow(page, NODE2)
-    // Let setFocus's animatedReset (300ms) settle so the baseline is stable.
+    // Let setFocus's camera reset (300ms) settle so the baseline is stable.
     await page.waitForTimeout(500)
 
     const camState = (): Promise<string> =>
@@ -203,7 +204,8 @@ test.describe('graph floating windows (G5b)', () => {
     expect(after).toBe(before)
 
     // Click-through proof: a point in a gap (pointer-events:none on .wm-root)
-    // resolves to the Sigma <canvas> below, NOT the overlay root.
+    // resolves to Sigma's mouse layer below (`.sigma-mouse` — a <canvas> up to
+    // sigma 3, a <div> since sigma 4), NOT the overlay root.
     // Sample the bottom-right gap (0.9/0.9): after U04-W4 the default window is
     // 600×570 (was 420×330), so the dragged card now reaches ~(1185,675) on the
     // 1440×900 viewport and the former 0.72/0.75 sample sits INSIDE it. The point
@@ -218,7 +220,7 @@ test.describe('graph floating windows (G5b)', () => {
       [vp!.x + vp!.width * 0.9, vp!.y + vp!.height * 0.9],
     )
     expect(hit.cls).not.toContain('wm-root')
-    expect(hit.tag).toBe('CANVAS')
+    expect(hit.cls).toContain('sigma-mouse')
   })
 
   test('a11y: role=dialog/aria-modal=false, open-focus in window, Tab→close, Esc closes + focus return', async ({ page }) => {
@@ -943,7 +945,7 @@ test.describe('graph floating windows — W5 drag region (U04-W5)', () => {
 
     await enterFocusStage(page)
     await openWindow(page, NODE2)
-    // setFocus animatedReset (300ms) abklingen lassen → stabile Kamera-Baseline.
+    // setFocus-Kamera-Reset (300ms) abklingen lassen → stabile Kamera-Baseline.
     await page.waitForTimeout(500)
 
     const win = page.getByRole('dialog').first()

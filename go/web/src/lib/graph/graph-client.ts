@@ -48,11 +48,11 @@ export interface EdgeAttrs {
   conf: number
   size: number
   color: string
-  /** Sigma edge-program selector: structural = 'curvedArrow' (registered in
-   *  GraphView); absent on dream → defaultEdgeType 'line' (GC1). */
+  /** Edge-form selector: structural = 'curvedArrow' (curved path + arrow head,
+   *  sigma-styles.ts); absent on dream → straight line (GC1). */
   type?: 'curvedArrow'
   /** Parallel-edge separation (GC1 §4.2): curvature written in GraphPage.settle
-   *  from the indexParallelEdgesIndex pass; only curved programs read it. */
+   *  from the indexParallelEdgesIndex pass; only the curved path reads it. */
   curvature?: number
   parallelIndex?: number | null
   parallelMaxIndex?: number | null
@@ -197,10 +197,8 @@ export function mergeEgo(
     })
   }
   // Structural facts render as curved arrows in the structural color (GC1):
-  // `type` selects the EdgeCurvedArrowProgram registered in GraphView — the
-  // registration and this write land in the SAME commit (sigma 3.0.3 throws
-  // hard on an unregistered edge type, even hidden). Width fix 1.5: mid of the
-  // dream band (1.0–2.0), no fake-conf derivation.
+  // `type` selects the curved path + arrow head (sigma-styles.ts). Width fix
+  // 1.5: mid of the dream band (1.0–2.0), no fake-conf derivation.
   // Missing fields = old server → the loop runs empty (tolerance invariant).
   for (const [src, dst, cls, org] of resp.structural_edges ?? []) {
     const source = resp.nodes[src]?.id
