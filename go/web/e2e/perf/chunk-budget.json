@@ -52,7 +52,7 @@
   ],
   "calibrated": true,
   "calibrated_at": "2026-09-19",
-  "toolchain_lock_sha256_12": "e5167d693c55",
+  "toolchain_lock_sha256_12": "c7e39bf6a70e",
   "brotli_quality": 11,
   "raw_threshold_bytes": 1024,
   "total_transfer_bytes": 769000,

@@ -6,7 +6,7 @@
 # Die e2e-Toolchain pinnt nach demselben Muster in web/e2e/toolchain.lock.
 
 # Stage 0: Frontend (Svelte 5 + TS + Vite, bun) — produces web/dist for go:embed.
-FROM oven/bun:1.3-alpine@sha256:5acc90a93e91ff07bf72aa90a7c9f0fa189765aec90b47bdbf2152d2196383c0 AS frontend
+FROM oven/bun:1.4-alpine@sha256:4cf82f5686b196504fe119db3fcd9185b191f82ece82c40680e597228ec6070a AS frontend
 WORKDIR /web
 # Dependency layer (cache cut like go.mod/go.sum below):
 COPY web/package.json web/bun.lock ./
