@@ -34,6 +34,23 @@ else's environment — that led to a fix landing in the repository.
   hardcoded `~/.claude/settings.json` that ignored `CLAUDE_CONFIG_DIR`. A/B/A
   probe-script reproduction isolating schema-vs-path, root-cause to the exact
   functions, and a verified fix delivered as a pull request.
+- **Damien Moon** ([@DamieMoon](https://github.com/DamieMoon)) — PR
+  [#46](https://github.com/GottZ/ctx/pull/46): on a CPU embed backend one
+  large block turned every following `ctx query` into a 500 after the
+  client's 120 s deadline — the background backfill only ran inside the
+  dream loop (off by default), and the query path's inline backfill had a
+  count cap but no time budget, so the slow block ate the caller's whole
+  deadline and was memoized as a backend outage. Server and llama.cpp logs,
+  a live before/after on the affected host, and the shipped fix: a
+  dedicated embed-backfill arm that runs regardless of Dream, a wall-clock
+  `sync_budget` for the query path, and a `caller_timeout` memo class that
+  hands an overrunning block to the arm. Hardened with the arm staying
+  inside the iterated tenant's scope window, opt-outs that restore the
+  pre-PR paths, a pick that skips blocks no trusted backend can serve,
+  no idle wait after a parked block, hot interval changes, and a test
+  that pins the arm's wiring into `Run`. The review of this PR also
+  surfaced a cross-tenant egress path in the existing dream-loop backfill,
+  fixed separately in v5.23.1.
 - **TurgutKural** ([@TurgutKural](https://github.com/TurgutKural)) — PR
   [#9](https://github.com/GottZ/ctx/pull/9): `/health` reported every cloud
   inference backend as down. The probe demanded HTTP 200 on `GET /`, which only
